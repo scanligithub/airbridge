@@ -11,7 +11,7 @@ import queue
 import sys
 import threading
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from eda_engine import CadenceVersionManager, EDAExecutor
 from fs_engine import FSEngine
@@ -116,6 +116,9 @@ class SerialWorker(threading.Thread):
     self.rx_total_chunks = 0
     self.rx_recv_chunks = 0
     self.rx_received_set = set()
+    self.rx_expected_chunk = 0
+    self.rx_nak_sent_time: Dict[int, float] = {}
+    self.pending_dup_acks: List[Tuple[bytes, float]] = []
     self.default_recv_dir = os.path.abspath("./received_files")
     os.makedirs(self.default_recv_dir, exist_ok=True)
 
@@ -127,6 +130,12 @@ class SerialWorker(threading.Thread):
       try:
         self.parser = FrameParser()
         self.ser = serial.Serial(port, baudrate=baud, timeout=0.1)
+        # Windows 驱动层缓冲区扩容至 64KB，防止 CH592/BLE 蓝牙或高速串口硬件 FIFO 溢出丢包
+        if sys.platform == "win32":
+          try:
+            self.ser.set_buffer_size(rx_size=65536, tx_size=65536)
+          except Exception:
+            pass
         self.sig.sig_connected.emit(True, f"已连接 {port} @ {baud}")
       except Exception as e:
         self.ser = None
@@ -216,6 +225,24 @@ class SerialWorker(threading.Thread):
         if self.tx_total_chunks > 0:
           self.sig.sig_file_progress.emit(len(self.acked_chunks), self.tx_total_chunks)
         self.window_cv.notify_all()
+
+  def _on_chunk_nack_received(self, chunk_idx: int):
+    """收到对端 NAK 快速负确认：无需等待 2.5s 超时，毫秒级就地重传缺失分片"""
+    with self.window_cv:
+      if chunk_idx in self.unacked_chunks:
+        info = self.unacked_chunks[chunk_idx]
+        if info["retries"] < 5:
+          info["retries"] += 1
+          info["tx_time"] = 0.0  # 重新入队，等待物理硬件真正写出时刷新时间戳
+          payload_to_resend = info["payload"]
+          retries = info["retries"]
+          self.sig.sig_rx_log.emit(
+              "WARN", f"[BLE快速重传] 收到对端 NAK，立刻重传分片 #{chunk_idx} ({retries}/5)..."
+          )
+          self.send_frame(FrameType.FILE_CHUNK, payload_to_resend)
+          # 发生丢包时动态收敛窗口，保护弱网/蓝牙信道
+          if self.sliding_window_size > 4:
+            self.sliding_window_size = 4
 
   def pull_file_async(self, remote_file_path: str):
     """向对端发起反向拉取文件请求"""
@@ -406,6 +433,15 @@ class SerialWorker(threading.Thread):
           self.disconnect_serial()
           continue
 
+      # BLE 增强：处理延时冗余 ACK（抵御蓝牙透传信道逆向丢包）
+      if is_open and self.pending_dup_acks:
+        now_t = time.time()
+        ready_acks = [ack for ack, due in self.pending_dup_acks if now_t >= due]
+        self.pending_dup_acks = [(ack, due) for ack, due in self.pending_dup_acks if now_t < due]
+        for ack_tag in ready_acks:
+          self.send_frame(FrameType.ACK, ack_tag)
+          had_activity = True
+
       if is_open:
         # 优先级流控调度：控制帧（ACK/NACK/ABORT）优先出队，避免大文件数据帧队头阻塞
         frame = None
@@ -450,6 +486,12 @@ class SerialWorker(threading.Thread):
         ack_idx = int.from_bytes(frame.payload[6:8], byteorder="big")
         self._on_chunk_ack_received(ack_idx)
 
+    elif frame.frame_type == FrameType.NACK:
+      # BLE 增强：处理对端快速 NAK 负确认
+      if len(frame.payload) >= 2:
+        nak_idx = int.from_bytes(frame.payload[:2], byteorder="big")
+        self._on_chunk_nack_received(nak_idx)
+
     elif frame.frame_type == FrameType.TEXT_MSG:
       msg = frame.payload.decode("utf-8", errors="ignore")
       self.sig.sig_rx_log.emit("MSG", f"[对端消息] {msg}")
@@ -483,6 +525,8 @@ class SerialWorker(threading.Thread):
       os.makedirs(self.rx_target_dir, exist_ok=True)
       self.rx_recv_chunks = 0
       self.rx_received_set = set()
+      self.rx_expected_chunk = 0
+      self.rx_nak_sent_time.clear()
       temp_path = os.path.join(self.rx_target_dir, f"_temp_{self.rx_file_name}")
       self.rx_file_handle = open(temp_path, "wb")
       self.sig.sig_rx_log.emit(
@@ -496,16 +540,31 @@ class SerialWorker(threading.Thread):
         chunk_header = frame.payload[:2]
         chunk_idx = int.from_bytes(chunk_header, byteorder="big")
         chunk_data = frame.payload[2:]
+
+        # BLE 增强：快速 NAK 探测。若检测到序号跳变（空洞），立即主动索取丢失的分片
+        if chunk_idx > self.rx_expected_chunk and self.rx_expected_chunk not in self.rx_received_set:
+          now_n = time.time()
+          if now_n - self.rx_nak_sent_time.get(self.rx_expected_chunk, 0) > 0.25:
+            self.rx_nak_sent_time[self.rx_expected_chunk] = now_n
+            self.send_frame(FrameType.NACK, self.rx_expected_chunk.to_bytes(2, byteorder="big"))
+
         # 基于分片索引随机寻址幂等写入，完全适应乱序或重传分片
         if chunk_idx not in self.rx_received_set:
           self.rx_file_handle.seek(chunk_idx * self.rx_chunk_size)
           self.rx_file_handle.write(chunk_data)
           self.rx_received_set.add(chunk_idx)
+          while self.rx_expected_chunk in self.rx_received_set:
+            self.rx_expected_chunk += 1
           self.rx_recv_chunks = len(self.rx_received_set)
           self.sig.sig_file_progress.emit(
               self.rx_recv_chunks, self.rx_total_chunks
           )
+
+        # 立即回送当前分片 ACK
         self.send_frame(FrameType.ACK, b"CHUNK_" + chunk_header)
+        # BLE 增强：延时 8ms 预约一次微冗余 ACK，抗击下行单向饱和导致的逆向 ACK 丢失
+        if len(self.pending_dup_acks) < 16:
+          self.pending_dup_acks.append((b"CHUNK_" + chunk_header, time.time() + 0.008))
 
     elif frame.frame_type == FrameType.FILE_END:
       if self.rx_file_handle:
