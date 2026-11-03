@@ -1,0 +1,410 @@
+{
+  "link_health": true,
+  "sch_inspection": true,
+  "pcb_inspection": true,
+  "sch_pages_total": 34,
+  "sch_pages_list": [
+    "SCHEMATIC1/P16-FIX-HOLES",
+    "SCHEMATIC1/P10-PWR",
+    "SCHEMATIC1/P07-CPLD",
+    "SCHEMATIC1/P06-CLOCK_GEN_IIC",
+    "SCHEMATIC1/P05-WX8128_PWR",
+    "SCHEMATIC1/P04-WX8128_Serdes_8GE",
+    "SCHEMATIC1/P03-WX8128_DDR",
+    "SCHEMATIC1/P02-WX8128_INT_CFG_NPI_CLK",
+    "SCHEMATIC1/P01-BLOCK",
+    "SCHEMATIC1/P08-GE0-7",
+    "SCHEMATIC1/P18-Note",
+    "SCHEMATIC1/P17-PWR IN",
+    "SCHEMATIC1/P15-RJ45",
+    "SCHEMATIC1/P09_SFP",
+    "SCHEMATIC1/P19-PORT3002",
+    "SCHEMATIC1/P11-WX5124_1",
+    "SCHEMATIC1/P12-WX5124_2",
+    "SCHEMATIC1/P13-GE8-11",
+    "SCHEMATIC1/P20_SOM CONNECTOR CON0A/C",
+    "SCHEMATIC1/P21_SOM CONNECTOR CON0B/D",
+    "SCHEMATIC1/P22_POWER",
+    "SCHEMATIC1/P23_KEY/LED",
+    "SCHEMATIC1/P24_DEBUG UART/RTC/WD",
+    "SCHEMATIC1/P25_MICRO SD/FAN",
+    "SCHEMATIC1/P26_USB2.0 HOST/USB3.0 OTG",
+    "SCHEMATIC1/P27_USB3.0 HOST",
+    "SCHEMATIC1/P29_WIFI/BD_GPS",
+    "SCHEMATIC1/P30_M.2 PCIE 4G/5G",
+    "SCHEMATIC1/P31_PCIE CLOCK",
+    "SCHEMATIC1/P32_M.2 PCIE NVME1&2",
+    "SCHEMATIC1/P33_M.2 PCIE NVME3&4",
+    "SCHEMATIC1/P35_HDMI OUT",
+    "SCHEMATIC1/P38_PWR PROTECT",
+    "SCHEMATIC1/P28_SATA"
+  ],
+  "pcb_layers_total": 6,
+  "pcb_layers_names": "(\"TOP\" \"GND02\" \"ART03\" \"ART04\" \"GND05\" \"BOTTOM\")",
+  "pcb_extents": "((-11441.0 -9950.0) (38559.0 40050.0))",
+  "pcb_total_symbols": 1936,
+  "sch_targets": [
+    {
+      "ref": "U2",
+      "value": "EF2L15LG100B",
+      "footprint": "tqfp100-05",
+      "page": "P07-CPLD"
+    },
+    {
+      "ref": "U7E",
+      "value": "WX8116",
+      "footprint": "WCBGA441",
+      "page": "P05-WX8128_PWR"
+    },
+    {
+      "ref": "U7G",
+      "value": "WX8116",
+      "footprint": "WCBGA441",
+      "page": "P05-WX8128_PWR"
+    },
+    {
+      "ref": "U7F",
+      "value": "WX8116",
+      "footprint": "WCBGA441",
+      "page": "P05-WX8128_PWR"
+    },
+    {
+      "ref": "U7D",
+      "value": "WX8116",
+      "footprint": "WCBGA441",
+      "page": "P04-WX8128_Serdes_8GE"
+    },
+    {
+      "ref": "U7C",
+      "value": "WX8116",
+      "footprint": "WCBGA441",
+      "page": "P04-WX8128_Serdes_8GE"
+    },
+    {
+      "ref": "U7B",
+      "value": "WX8116",
+      "footprint": "WCBGA441",
+      "page": "P03-WX8128_DDR"
+    },
+    {
+      "ref": "U64",
+      "value": "DDR3(L)",
+      "footprint": "FBGA96",
+      "page": "P03-WX8128_DDR"
+    },
+    {
+      "ref": "U5",
+      "value": "NL/eMMC",
+      "footprint": "WFBGA_153_BALL",
+      "page": "P02-WX8128_INT_CFG_NPI_CLK"
+    },
+    {
+      "ref": "U7A",
+      "value": "WX8116",
+      "footprint": "WCBGA441",
+      "page": "P02-WX8128_INT_CFG_NPI_CLK"
+    },
+    {
+      "ref": "U9C",
+      "value": "WX5021",
+      "footprint": "FCPBGA121_9MM_9MM",
+      "page": "P19-PORT3002"
+    },
+    {
+      "ref": "U9A",
+      "value": "WX5021",
+      "footprint": "FCPBGA121_9MM_9MM",
+      "page": "P19-PORT3002"
+    },
+    {
+      "ref": "U9B",
+      "value": "WX5021",
+      "footprint": "FCPBGA121_9MM_9MM",
+      "page": "P19-PORT3002"
+    },
+    {
+      "ref": "U12A",
+      "value": "WX5124",
+      "footprint": "BGA196-1_0-15x15-H1_293",
+      "page": "P11-WX5124_1"
+    },
+    {
+      "ref": "U12B",
+      "value": "WX5124",
+      "footprint": "BGA196-1_0-15x15-H1_293",
+      "page": "P11-WX5124_1"
+    },
+    {
+      "ref": "U12C",
+      "value": "WX5124",
+      "footprint": "BGA196-1_0-15x15-H1_293",
+      "page": "P11-WX5124_1"
+    },
+    {
+      "ref": "U11A",
+      "value": "WX5124",
+      "footprint": "BGA196-1_0-15x15-H1_293",
+      "page": "P12-WX5124_2"
+    },
+    {
+      "ref": "U11B",
+      "value": "WX5124",
+      "footprint": "BGA196-1_0-15x15-H1_293",
+      "page": "P12-WX5124_2"
+    },
+    {
+      "ref": "U69",
+      "value": "G2401CE",
+      "footprint": "STFM24-39-263",
+      "page": "P12-WX5124_2"
+    },
+    {
+      "ref": "U11C",
+      "value": "WX5124",
+      "footprint": "BGA196-1_0-15x15-H1_293",
+      "page": "P12-WX5124_2"
+    },
+    {
+      "ref": "CON1A",
+      "value": "SOM-RK3588",
+      "footprint": "SOM_RK3588",
+      "page": "P20_SOM CONNECTOR CON0A/C"
+    },
+    {
+      "ref": "CON1C",
+      "value": "SOM-RK3588",
+      "footprint": "SOM_RK3588",
+      "page": "P20_SOM CONNECTOR CON0A/C"
+    },
+    {
+      "ref": "CON1B",
+      "value": "SOM-RK3588",
+      "footprint": "SOM_RK3588",
+      "page": "P21_SOM CONNECTOR CON0B/D"
+    },
+    {
+      "ref": "CON1D",
+      "value": "SOM-RK3588",
+      "footprint": "SOM_RK3588",
+      "page": "P21_SOM CONNECTOR CON0B/D"
+    }
+  ],
+  "pcb_targets": [
+    {
+      "ref": "U5",
+      "package": "WFBGA_153_BALL",
+      "pins": 155,
+      "layer": "TOP",
+      "x": 4129.0,
+      "y": 4430.0,
+      "rot": 0.0
+    },
+    {
+      "ref": "U9",
+      "package": "FCPBGA121_9MM_9MM",
+      "pins": 121,
+      "layer": "TOP",
+      "x": 6493.0,
+      "y": 2162.0,
+      "rot": 90.0
+    },
+    {
+      "ref": "T3",
+      "package": "G4P109M_A",
+      "pins": 72,
+      "layer": "TOP",
+      "x": 4249.0,
+      "y": 2065.0,
+      "rot": 180.0
+    },
+    {
+      "ref": "T4",
+      "package": "G4P109M_A",
+      "pins": 72,
+      "layer": "TOP",
+      "x": 5679.0,
+      "y": 2065.0,
+      "rot": 180.0
+    },
+    {
+      "ref": "T1",
+      "package": "G4P109M_A",
+      "pins": 72,
+      "layer": "TOP",
+      "x": 2819.0,
+      "y": 2065.0,
+      "rot": 180.0
+    },
+    {
+      "ref": "U64",
+      "package": "FBGA96",
+      "pins": 96,
+      "layer": "TOP",
+      "x": 2279.0,
+      "y": 3545.0,
+      "rot": 90.0
+    },
+    {
+      "ref": "J8",
+      "package": "SFP-CAGE-20DP-CONNF",
+      "pins": 22,
+      "layer": "TOP",
+      "x": 614.55,
+      "y": 1384.93,
+      "rot": 0.0
+    },
+    {
+      "ref": "J6",
+      "package": "SFP-CAGE-20DP-CONNF",
+      "pins": 22,
+      "layer": "TOP",
+      "x": 1175.57,
+      "y": 1384.93,
+      "rot": 0.0
+    },
+    {
+      "ref": "U7",
+      "package": "WCBGA441",
+      "pins": 441,
+      "layer": "TOP",
+      "x": 3289.0,
+      "y": 3320.0,
+      "rot": 270.0
+    },
+    {
+      "ref": "U11",
+      "package": "BGA196-1_0-15X15-H1_293",
+      "pins": 196,
+      "layer": "TOP",
+      "x": 5934.04,
+      "y": 4011.97,
+      "rot": 180.0
+    },
+    {
+      "ref": "U12",
+      "package": "BGA196-1_0-15X15-H1_293",
+      "pins": 196,
+      "layer": "TOP",
+      "x": 5235.97,
+      "y": 3246.96,
+      "rot": 90.0
+    },
+    {
+      "ref": "CN7",
+      "package": "RJ45-65-LED-2X2-S",
+      "pins": 56,
+      "layer": "TOP",
+      "x": 2204.0,
+      "y": 324.8,
+      "rot": 0.0
+    },
+    {
+      "ref": "CN8",
+      "package": "RJ45-65-LED-2X2-S",
+      "pins": 56,
+      "layer": "TOP",
+      "x": 3644.0,
+      "y": 324.8,
+      "rot": 0.0
+    },
+    {
+      "ref": "CN9",
+      "package": "RJ45-65-LED-2X2-S",
+      "pins": 56,
+      "layer": "TOP",
+      "x": 5084.0,
+      "y": 324.8,
+      "rot": 0.0
+    },
+    {
+      "ref": "CON9",
+      "package": "CONN-SMD_APCI0103-P001A_4G5G",
+      "pins": 73,
+      "layer": "TOP",
+      "x": 10868.6,
+      "y": 6116.9,
+      "rot": 90.0
+    },
+    {
+      "ref": "CON11",
+      "package": "CON_SMD_APCI0113-P001A",
+      "pins": 74,
+      "layer": "TOP",
+      "x": 9798.8,
+      "y": 2010.0,
+      "rot": 90.0
+    },
+    {
+      "ref": "CON12",
+      "package": "CON_SMD_APCI0113-P001A",
+      "pins": 74,
+      "layer": "TOP",
+      "x": 9798.8,
+      "y": 2938.0,
+      "rot": 90.0
+    },
+    {
+      "ref": "CON13",
+      "package": "CON_SMD_APCI0113-P001A",
+      "pins": 74,
+      "layer": "TOP",
+      "x": 9798.8,
+      "y": 3867.0,
+      "rot": 90.0
+    },
+    {
+      "ref": "CON14",
+      "package": "CON_SMD_APCI0113-P001A",
+      "pins": 74,
+      "layer": "TOP",
+      "x": 9798.8,
+      "y": 4811.0,
+      "rot": 90.0
+    },
+    {
+      "ref": "CON1",
+      "package": "SOM_RK3588",
+      "pins": 404,
+      "layer": "TOP",
+      "x": 8192.04,
+      "y": 3090.96,
+      "rot": 180.0
+    },
+    {
+      "ref": "U69",
+      "package": "STFM24-39-263",
+      "pins": 24,
+      "layer": "TOP",
+      "x": 6694.0,
+      "y": 3425.0,
+      "rot": 270.0
+    },
+    {
+      "ref": "U2",
+      "package": "TQFP100-05",
+      "pins": 100,
+      "layer": "TOP",
+      "x": 1233.0,
+      "y": 4288.0,
+      "rot": 0.0
+    },
+    {
+      "ref": "U8300",
+      "package": "QFN64_9R00X9R00X0R90_T",
+      "pins": 65,
+      "layer": "TOP",
+      "x": 7807.0,
+      "y": 5452.0,
+      "rot": 0.0
+    },
+    {
+      "ref": "U1",
+      "package": "LQFP48",
+      "pins": 48,
+      "layer": "TOP",
+      "x": 8388.0,
+      "y": 4817.0,
+      "rot": 270.0
+    }
+  ]
+}
