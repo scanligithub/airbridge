@@ -957,7 +957,7 @@ class AirBridgeMainWindow(QMainWindow):
     f_select_layout.addWidget(self.btn_abort_file)
     file_layout.addLayout(f_select_layout)
 
-    file_layout.addWidget(QLabel("双端分片确认传输进度 (16KB 高速分片):"))
+    file_layout.addWidget(QLabel("双端分片确认传输进度 (4KB 流水线弹性分片):"))
     self.progress_file = QProgressBar()
     self.progress_file.setValue(0)
     file_layout.addWidget(self.progress_file)
