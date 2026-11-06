@@ -794,10 +794,10 @@ class EDAExecutor:
     # Keep Allegro alive until the runner sees this marker and requests WM_CLOSE.
     norm_done = done_flag.replace("\\", "/")
     script_content += (
-        '\\n\\n;; AirBridge task completion marker\\n'
+        "\\n\\n;; AirBridge task completion marker\\n"
         'let((ab_fp) '
         'ab_fp = outfile("' + norm_done + '") '
-        'when(ab_fp fprintf(ab_fp "OK\\\\n") close(ab_fp)) '
+        'when(ab_fp fprintf(ab_fp "OK") close(ab_fp)) '
         ')\\n'
     )
 
