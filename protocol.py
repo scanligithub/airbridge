@@ -1,7 +1,8 @@
 # protocol.py
 # -*- coding: utf-8 -*-
 """
-AirBridge Binary Framing Protocol (ABFP) v2.0 (全双工大文件拉取与极限吞吐版)
+AirBridge Binary Framing Protocol (ABFP) v2.1
+全双工大文件拉取 + EDA 任务 + 远程 Shell
 """
 import struct
 import zlib
@@ -22,13 +23,20 @@ class FrameType:
     FILE_END        = 0x07
     RAW_STREAM      = 0x08
     FILE_ABORT      = 0x09
-    FILE_PULL_REQ   = 0x0A  # 【新增】远程反向文件拉取指令
+    FILE_PULL_REQ   = 0x0A  # 远程反向文件拉取指令
     EDA_TASK_SUBMIT = 0x10
     EDA_LOG_STREAM  = 0x11
     EDA_TASK_FIN    = 0x12
     EDA_FORCE_KILL  = 0x13
     FS_REQUEST      = 0x20
     FS_RESPONSE     = 0x21
+    # ---- Remote Shell (v2.1) ----
+    SHELL_EXEC      = 0x30   # 提交命令 (同步/异步)
+    SHELL_OUTPUT    = 0x31   # 实时 stdout/stderr/system 流
+    SHELL_RESULT    = 0x32   # 任务结束通知
+    SHELL_KILL      = 0x33   # 强制结束任务
+    SHELL_LIST      = 0x34   # 列出当前任务
+    SHELL_LIST_RESP = 0x35   # 列表响应
 
 class ABFPFrame:
     def __init__(self, frame_type: int, seq_id: int, payload: bytes = b''):

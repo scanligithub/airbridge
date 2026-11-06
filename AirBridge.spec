@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 # AirBridge.spec
-# 完整集成 protocol, eda_engine, fs_engine 单文件打包清单
+# 完整集成 protocol, eda_engine, fs_engine, shell_engine 单文件打包清单
 
 block_cipher = None
 
@@ -12,6 +12,7 @@ a = Analysis(
         ('protocol.py', '.'),
         ('eda_engine.py', '.'),
         ('fs_engine.py', '.'),
+        ('shell_engine.py', '.'),
     ],
     hiddenimports=[
         'serial',
