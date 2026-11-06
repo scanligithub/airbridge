@@ -705,7 +705,8 @@ class EDAExecutor:
             + norm_done
             + '" "w"]; _raw_puts $_df "OK"; close $_df }'
         ),
-        "catch { _raw_exit 0 }",
+        # Keep Capture's event loop alive; the process runner requests WM_CLOSE
+        # after observing the marker, allowing Cadence to handle shutdown.
     ]
     with open(wrapper_file, "w", encoding="utf-8") as f:
       f.write("\n".join(lines) + "\n")
@@ -783,8 +784,22 @@ class EDAExecutor:
     with open(polyfill_file, "w", encoding="utf-8") as pf:
       pf.write(ALLEGRO_SKILL_POLYFILL.strip() + "\n")
 
-    if "(exit" not in script_content and "exit(" not in script_content:
-      script_content += "\n\n;; AirBridge 自动注入安全退出指令\n(exit)\n"
+    done_flag = os.path.join(self.workspace_dir, "_allegro_done.flag")
+    if os.path.exists(done_flag):
+      try:
+        os.remove(done_flag)
+      except Exception:
+        pass
+
+    # Keep Allegro alive until the runner sees this marker and requests WM_CLOSE.
+    norm_done = done_flag.replace("\\", "/")
+    script_content += (
+        '\\n\\n;; AirBridge task completion marker\\n'
+        'let((ab_fp) '
+        'ab_fp = outfile("' + norm_done + '") '
+        'when(ab_fp fprintf(ab_fp "OK\\\\n") close(ab_fp)) '
+        ')\\n'
+    )
 
     skill_file = os.path.join(self.workspace_dir, "_task.il")
     with open(skill_file, "w", encoding="utf-8") as f:
@@ -797,7 +812,6 @@ class EDAExecutor:
       f.write("set window message\n")
       f.write('skill load("' + norm_poly + '")\n')
       f.write('skill load("' + norm_skill + '")\n')
-      f.write("exit\n")
       f.write("fillin yes\n")
 
     allegro_log = os.path.join(self.workspace_dir, "allegro.log")
@@ -810,7 +824,12 @@ class EDAExecutor:
     cmd = [allegro_exe, "-s", scr_file]
     isolated_env = CadenceVersionManager.build_isolated_env(cdsroot)
     return self._spawn_and_monitor(
-        cmd, allegro_log, log_callback, timeout, custom_env=isolated_env
+        cmd,
+        allegro_log,
+        log_callback,
+        timeout,
+        done_flag_path=done_flag,
+        custom_env=isolated_env,
     )
 
   def _spawn_and_monitor(
@@ -875,13 +894,29 @@ class EDAExecutor:
         if done_flag_path and os.path.exists(done_flag_path):
           time.sleep(0.3)
           if self.active_process.poll() is None:
-            self.kill_active_task()
-          ret = 0
+            self.request_graceful_close(
+                log_callback, reason="Cadence 脚本执行完成"
+            )
+            self._wait_for_exit(15)
+          ret = self.active_process.poll()
+          if ret is None:
+            log_callback(
+                "[Process Runner] 已请求正常关闭，但程序仍在运行；"
+                "可能存在保存/确认弹窗，保留现场，请人工检查"
+            )
+            ret = 0
+          else:
+            log_callback("[Process Runner] Cadence 程序已正常退出")
           break
 
         if time.time() - start_time > timeout:
-          log_callback("[Timeout] 运行超时，正在中止...")
-          self.kill_active_task()
+          log_callback("[Timeout] 执行超时，先请求 Cadence 正常关闭...")
+          self.request_graceful_close(log_callback, reason="任务超时")
+          if not self._wait_for_exit(15):
+            log_callback(
+                "[Process Runner] 正常关闭等待超时；为避免丢失未保存设计，"
+                "不自动强制结束，请人工检查并关闭"
+            )
           return -2, "Execution Timeout"
 
         time.sleep(0.15)
@@ -908,7 +943,67 @@ class EDAExecutor:
       watchdog.stop()
       self.active_process = None
 
+  def _wait_for_exit(self, grace_seconds: float) -> bool:
+    proc = self.active_process
+    if not proc:
+      return True
+    deadline = time.time() + max(0.0, grace_seconds)
+    while proc.poll() is None and time.time() < deadline:
+      time.sleep(0.2)
+    return proc.poll() is not None
+
+  def request_graceful_close(
+      self,
+      log_callback: Callable[[str], None],
+      reason: str = "任务结束",
+  ) -> bool:
+    """Ask Cadence windows to close through the normal Windows close path."""
+    proc = self.active_process
+    if not proc or proc.poll() is not None:
+      return True
+    if sys.platform != "win32" or not user32:
+      log_callback("[Process Runner] 无法发送 GUI 关闭消息；不强制终止")
+      return False
+
+    sent = []
+    EnumWindowsProc = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p
+    )
+
+    def close_window(hwnd, _lparam):
+      if not user32.IsWindowVisible(hwnd):
+        return True
+      pid = ctypes.c_ulong()
+      user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+      if pid.value == proc.pid:
+        title_buf = ctypes.create_unicode_buffer(512)
+        user32.GetWindowTextW(hwnd, title_buf, 512)
+        title = title_buf.value or "<无标题>"
+        if user32.PostMessageW(hwnd, 0x0010, 0, 0):  # WM_CLOSE
+          sent.append(title)
+      return True
+
+    try:
+      user32.EnumWindows(EnumWindowsProc(close_window), 0)
+    except Exception as exc:
+      log_callback(f"[Process Runner] 正常关闭请求失败: {exc}")
+      return False
+
+    if sent:
+      log_callback(
+          f"[Process Runner] {reason}：已发送 WM_CLOSE："
+          + "；".join(sent)
+      )
+      return True
+
+    log_callback(
+        f"[Process Runner] {reason}：未找到可关闭的顶层窗口；"
+        "等待程序自行退出"
+    )
+    return False
+
   def kill_active_task(self):
+    """Explicit last-resort termination; never used for normal completion."""
     if self.active_process and self.active_process.poll() is None:
       if sys.platform == "win32":
         subprocess.run(
