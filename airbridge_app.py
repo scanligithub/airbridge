@@ -1,7 +1,8 @@
 # airbridge_app.py
 # -*- coding: utf-8 -*-
 """
-AirBridge - 物理网闸通用中继器 & EDA 自动化中枢 v2.3 (多版本 Cadence 自适应与大文件吞吐版)
+AirBridge - 物理网闸通用中继器 & EDA 自动化中枢 v2.4
+多版本 Cadence 自适应 + 大文件吞吐 + 远程 Shell (PowerShell/CMD)
 """
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
@@ -16,6 +17,7 @@ from typing import Any, Dict, List, Tuple
 from eda_engine import CadenceVersionManager, EDAExecutor
 from fs_engine import FSEngine
 from protocol import ABFPFrame, FrameParser, FrameType
+from shell_engine import shell_engine, ShellEngine
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
@@ -92,6 +94,16 @@ class SerialWorker(threading.Thread):
     self.parser = FrameParser()
     self.seq_counter = 0
     self.eda_executor = EDAExecutor()
+    self.shell_engine = shell_engine
+    # 远程 Shell 输出回调：把 stdout/stderr 实时推回对端
+    def _shell_output_cb(task_id: str, stream: str, line: str):
+      payload = json.dumps({
+          "task_id": task_id,
+          "stream": stream,
+          "line": line,
+      }, ensure_ascii=False).encode("utf-8")
+      self.send_frame(FrameType.SHELL_OUTPUT, payload)
+    self.shell_engine.set_output_callback(_shell_output_cb)
     self.lock = threading.Lock()
 
     # 滑动窗口流控（Sliding Window Pipeline）状态管理
@@ -638,6 +650,67 @@ class SerialWorker(threading.Thread):
       self.sig.sig_rx_log.emit("WARN", "[任务调度] 收到强杀指令，正在终止进程...")
       self.eda_executor.kill_active_task()
 
+    # ---------- Remote Shell ----------
+    elif frame.frame_type == FrameType.SHELL_EXEC:
+      try:
+        req = json.loads(frame.payload.decode("utf-8", errors="replace"))
+      except Exception:
+        req = {}
+      threading.Thread(target=self._handle_shell_exec, args=(req,), daemon=True).start()
+
+    elif frame.frame_type == FrameType.SHELL_KILL:
+      try:
+        req = json.loads(frame.payload.decode("utf-8", errors="replace"))
+      except Exception:
+        req = {}
+      res = self.shell_engine.kill_task(
+          task_id=req.get("task_id", ""),
+          pid=int(req.get("pid", 0) or 0),
+      )
+      self.send_frame(
+          FrameType.SHELL_RESULT,
+          json.dumps(res, ensure_ascii=False).encode("utf-8"),
+      )
+
+    elif frame.frame_type == FrameType.SHELL_LIST:
+      tasks = self.shell_engine.list_tasks()
+      self.send_frame(
+          FrameType.SHELL_LIST_RESP,
+          json.dumps({"success": True, "tasks": tasks}, ensure_ascii=False).encode("utf-8"),
+      )
+
+    elif frame.frame_type == FrameType.SHELL_OUTPUT:
+      # 对端推来的实时输出，转成日志显示
+      try:
+        obj = json.loads(frame.payload.decode("utf-8", errors="replace"))
+        tid = obj.get("task_id", "")
+        stream = obj.get("stream", "stdout")
+        line = obj.get("line", "")
+        self.sig.sig_rx_log.emit("SHELL", f"[{tid}][{stream}] {line}")
+      except Exception:
+        pass
+
+    elif frame.frame_type == FrameType.SHELL_RESULT:
+      try:
+        obj = json.loads(frame.payload.decode("utf-8", errors="replace"))
+        self.sig.sig_rx_log.emit(
+            "SHELL",
+            f"任务结果: {json.dumps(obj, ensure_ascii=False)[:500]}",
+        )
+        # 若是同步等待中的结果，也可通过 fs_pending 类似机制唤醒（简化：日志即可）
+      except Exception:
+        pass
+
+    elif frame.frame_type == FrameType.SHELL_LIST_RESP:
+      try:
+        obj = json.loads(frame.payload.decode("utf-8", errors="replace"))
+        self.sig.sig_rx_log.emit(
+            "SHELL",
+            f"任务列表: {len(obj.get('tasks', []))} 个",
+        )
+      except Exception:
+        pass
+
     elif frame.frame_type == FrameType.FS_REQUEST:
       try:
         req_obj = FSEngine.unpack_payload(frame.payload)
@@ -697,6 +770,45 @@ class SerialWorker(threading.Thread):
 
 
 # ==============================================================================
+
+  def _handle_shell_exec(self, req: Dict[str, Any]):
+    """在本机（通常是主机 B）执行远程 Shell 请求，并回传结果。"""
+    command = req.get("command") or req.get("cmd") or ""
+    shell = req.get("shell", "powershell")
+    cwd = req.get("cwd", "")
+    timeout = int(req.get("timeout", 60) or 60)
+    async_mode = bool(req.get("async", False))
+    env = req.get("env") or {}
+
+    res = self.shell_engine.exec(
+        command=command,
+        shell=shell,
+        cwd=cwd,
+        timeout=timeout,
+        async_mode=async_mode,
+        env=env if isinstance(env, dict) else {},
+    )
+
+    # 同步结果 或 异步启动回执 都通过 SHELL_RESULT 回传
+    self.send_frame(
+        FrameType.SHELL_RESULT,
+        json.dumps(res, ensure_ascii=False).encode("utf-8"),
+    )
+    if not async_mode:
+      # 同步时也把关键信息打到本地日志
+      if res.get("success"):
+        self.sig.sig_rx_log.emit(
+            "SHELL",
+            f"[{res.get('task_id')}] exit={res.get('exit_code')} "
+            f"stdout_len={len(res.get('stdout') or '')}",
+        )
+      else:
+        self.sig.sig_rx_log.emit(
+            "SHELL",
+            f"执行失败: {res.get('error', res)}",
+        )
+
+
 # 北向 REST API 服务器
 # ==============================================================================
 class AntigravityIPCServer:
@@ -774,6 +886,43 @@ class AntigravityIPCServer:
         elif self.path == "/api/v1/message":
           worker_ref.send_frame(FrameType.TEXT_MSG, raw_body.encode("utf-8"))
           self._reply_json(200, {"status": "sent"})
+
+
+        # ---------- Remote Shell API ----------
+        elif self.path in ("/api/v1/shell/exec", "/api/shell/exec"):
+          try:
+            task = json.loads(raw_body) if raw_body.strip() else {}
+          except Exception:
+            task = {"command": raw_body}
+          # 通过串口把命令发到对端（主机 B）执行
+          worker_ref.send_frame(
+              FrameType.SHELL_EXEC,
+              json.dumps(task, ensure_ascii=False).encode("utf-8"),
+          )
+          # 异步模式立即返回；同步模式当前简化为“已提交”，结果走日志/后续轮询
+          self._reply_json(200, {
+              "status": "submitted",
+              "async": bool(task.get("async", False)),
+              "hint": "结果将通过 SHELL_RESULT / 控制台日志回传；异步任务可用 /api/v1/shell/tasks 查询",
+          })
+
+        elif self.path in ("/api/v1/shell/kill", "/api/shell/kill"):
+          try:
+            req = json.loads(raw_body) if raw_body.strip() else {}
+          except Exception:
+            req = {}
+          worker_ref.send_frame(
+              FrameType.SHELL_KILL,
+              json.dumps(req, ensure_ascii=False).encode("utf-8"),
+          )
+          self._reply_json(200, {"status": "kill_submitted", "req": req})
+
+        elif self.path in ("/api/v1/shell/tasks", "/api/v1/shell/list", "/api/shell/tasks"):
+          worker_ref.send_frame(FrameType.SHELL_LIST, b"{}")
+          self._reply_json(200, {
+              "status": "list_submitted",
+              "hint": "任务列表将通过 SHELL_LIST_RESP 回传并打印到控制台",
+          })
 
         elif self.path == "/api/v1/fs/pull":
           try:
