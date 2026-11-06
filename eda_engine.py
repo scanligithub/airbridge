@@ -575,17 +575,16 @@ class DialogKillerWatchdog(threading.Thread):
             "OrCAD X",
         ]
         if class_buf.value == "#32770" or any(
-            k in title for k in popup_keywords
+            k.lower() in title.lower() for k in popup_keywords
         ):
           if hwnd not in self.handled_hwnds:
-            self.log_callback(f"[Watchdog] 自动穿透拦截弹窗 [{title}]")
+            # Observe and report only. Never send Enter/IDOK/close messages:
+            # unknown dialogs may be license, migration, missing-library, or save prompts.
+            safe_title = title if title else "<无标题>"
+            self.log_callback(
+                f"[Watchdog] 检测到弹窗 [{safe_title}]；未自动操作，请人工检查"
+            )
             self.handled_hwnds.add(hwnd)
-
-          user32.PostMessageW(hwnd, 0x0100, 0x0D, 0)
-          user32.PostMessageW(hwnd, 0x0101, 0x0D, 0)
-          user32.PostMessageW(hwnd, 0x0111, 1, 0)
-          if any(k in title for k in ["About", "Improvement", "Launch"]):
-            user32.PostMessageW(hwnd, 0x0010, 0, 0)
       return True
 
     while self.running:
@@ -632,7 +631,13 @@ class EDAExecutor:
     log_callback(f"[EDA Dispatcher] 语言判定: [{lang}] | {reason_msg}")
 
     if lang == EDALanguage.ORCAD_TCL:
-      return self._run_orcad_tcl(script_content, log_callback, timeout, ver_info)
+      return self._run_orcad_tcl(
+          script_content,
+          log_callback,
+          timeout,
+          ver_info,
+          target_file=target_file,
+      )
     else:
       return self._run_allegro_skill(
           script_content, log_callback, timeout, ver_info
@@ -644,6 +649,7 @@ class EDAExecutor:
       log_callback: Callable[[str], None],
       timeout: int,
       ver_info: Optional[Dict[str, Any]] = None,
+      target_file: str = "",
   ) -> Tuple[int, str]:
     cdsroot = ver_info["cdsroot"] if ver_info else ""
     ver_str = ver_info["version"] if ver_info else "unknown"
@@ -707,6 +713,11 @@ class EDAExecutor:
     autoload_dirs = find_cap_autoload_dirs(capture_exe, cdsroot)
     injected_hooks = []
     norm_wrapper = wrapper_file.replace("\\", "/")
+    if not autoload_dirs:
+      log_callback(
+          "[EDA Engine] 警告：未找到 Capture capAutoLoad 目录；"
+          "Capture 仍会尝试启动，但本次 Tcl 脚本不会自动注入执行"
+      )
 
     for adir in autoload_dirs:
       hook_path = os.path.join(adir, "zz_airbridge_autorun.tcl")
