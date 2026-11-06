@@ -1,18 +1,10 @@
-# AirBridge Agent Skill
+# AirBridge-related Agent Skills
 
-Grok / agent skill for controlling air-gapped host B via AirBridge on host A (`http://127.0.0.1:8888`).
+| Skill | Path | Purpose |
+|-------|------|---------|
+| **airbridge** | `skill/airbridge/` | General remote control of host B — RFS, Shell, EDA dispatch |
+| **orcad-pdf-export** | `skill/orcad-pdf-export/` | OrCAD schematic → PDF via Tcl + Ghostscript (no GUI) |
 
-## Layout
+Copy a skill folder into your agent skills directory (e.g. `~/.grok/skills/<name>`).
 
-```
-skill/airbridge/
-├── SKILL.md
-├── references/api-reference.md
-└── scripts/
-    ├── diag_temp.py
-    └── shell_exec.py
-```
-
-Copy `skill/airbridge` into your agent skills directory (e.g. `~/.grok/skills/airbridge`) or load `SKILL.md` as instructed by your agent runtime.
-
-Requires AirBridge running on host A and host B with serial link up.
+Both assume AirBridge is running on host A at `http://127.0.0.1:8888` with serial link to host B.
