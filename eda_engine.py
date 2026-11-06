@@ -976,6 +976,12 @@ class EDAExecutor:
       pid = ctypes.c_ulong()
       user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
       if pid.value == proc.pid:
+        class_buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, class_buf, 256)
+        # Never close a modal dialog directly: it may be an unknown save,
+        # license, migration, or missing-library prompt.
+        if class_buf.value == "#32770":
+          return True
         title_buf = ctypes.create_unicode_buffer(512)
         user32.GetWindowTextW(hwnd, title_buf, 512)
         title = title_buf.value or "<无标题>"
