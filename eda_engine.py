@@ -812,7 +812,8 @@ class EDAExecutor:
       f.write("set window message\n")
       f.write('skill load("' + norm_poly + '")\n')
       f.write('skill load("' + norm_skill + '")\n')
-      f.write("fillin yes\n")
+      # Do not send the unsupported fillin command; Allegro 17.2
+      # reports "Command not found" and pollutes the replay log.
 
     allegro_log = os.path.join(self.workspace_dir, "allegro.log")
     if os.path.exists(allegro_log):
