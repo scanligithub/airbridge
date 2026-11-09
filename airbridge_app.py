@@ -62,7 +62,7 @@ class SerialWorker(threading.Thread):
     self.ser: serial.Serial = None
     self.running = True
     self.tx_high_queue = queue.Queue()  # 高优先级控制帧队列（ACK, NACK, ABORT, HEARTBEAT）
-    self.tx_low_queue = queue.Queue()   # 常规数据帧队列（FILE_CHUNK, FS_REQ, EDA等）
+    self.tx_low_queue = queue.Queue()   # 常规数据帧队列（FILE_CHUNK, RAW_STREAM, FS_REQ等）
     self.parser = FrameParser()
     self.seq_counter = 0
     self.shell_engine = shell_engine
@@ -908,7 +908,7 @@ class AirBridgeMainWindow(QMainWindow):
     self.init_ui()
     self.bind_events()
     self.scan_ports()
-    # Auto-connect to host B: prefer the USB/FTDI gateway and verify the link with a probe request
+    # Auto-connect to host B: prefer the USB/FTDI gateway and verify the serial link with a generic RFS probe
     QTimer.singleShot(100, self.auto_connect_serial)
 
   def auto_connect_serial(self):

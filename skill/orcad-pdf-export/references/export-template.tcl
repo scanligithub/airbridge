@@ -1,6 +1,6 @@
 # OrCAD Capture schematic → PDF (no GUI dialogs)
 # Substitute: DSN_PATH OUT_DIR PDF_NAME GS_EXE PS_DRIVER
-# Requires AirBridge polyfill helpers: ab_open_dsn is_dbo_null
+# Requires Capture's Tcl environment and OrHandlerPDFExport; no AirBridge polyfills
 
 set dsn_path   {DSN_PATH}
 set out_dir    {OUT_DIR}
@@ -13,7 +13,7 @@ file mkdir $out_dir
 puts "Opening $dsn_path"
 set open_rc [catch {Open $dsn_path} open_result]
 if {$open_rc != 0} {
-    puts "\\[ERROR\\] Capture Open failed: $open_result"
+    puts "\[ERROR\] Capture Open failed: $open_result"
     return
 }
 puts "Capture Open accepted: $open_result"
