@@ -44,7 +44,7 @@ import serial
 import serial.tools.list_ports
 
 BUILTIN_TEST_ORCAD_TCL = """puts "=============================================="
-puts ">>> AirBridge OrCAD Capture Open-Design Test <<<"
+puts ">>> AirBridge OrCAD Capture Delayed Open Test <<<"
 puts "System Time: [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]"
 if {[info exists ::AIRBRIDGE_SPB_VER]} {
     puts "Active SPB Version : $::AIRBRIDGE_SPB_VER (Tcl $::tcl_version)"
@@ -52,25 +52,44 @@ if {[info exists ::AIRBRIDGE_SPB_VER]} {
 puts "Current CDSROOT    : [expr {[info exists ::env(CDSROOT)] ? $::env(CDSROOT) : {N/A}}]"
 puts "Current Working Dir: [pwd]"
 
-# Host-B local design path. Use Capture's GUI-level Open command so the
-# design is opened in the Project Manager, not only loaded as a Dbo object.
+# Host-B local design path.
 set dsn_path {E:/_airbridge_temp/RK3588_PDF_Output/RK3588_WX8116-SCH-V2T.DSN}
 puts "Target DSN         : $dsn_path"
 
-if {![file exists $dsn_path]} {
-    set open_error "DSN file does not exist on host B: $dsn_path"
-    puts "ERROR: $open_error"
-    error $open_error
+# Wait for Capture startup and Project Manager initialization to complete.
+# Keep this script active while waiting so the runner can capture all output.
+set ::AirBridgeOpenDone 0
+set ::AirBridgeOpenStatus 1
+set ::AirBridgeOpenError ""
+
+proc ::AirBridgeOpenTargetDsn {} {
+    global dsn_path
+    if {![file exists $dsn_path]} {
+        set ::AirBridgeOpenError "DSN file does not exist on host B: $dsn_path"
+        puts "ERROR: $::AirBridgeOpenError"
+        set ::AirBridgeOpenStatus 1
+    } else {
+        puts "DSN file exists; Capture startup delay elapsed (5000 ms)."
+        puts "Asking Capture to open the design..."
+        if {[catch {Open $dsn_path} ::AirBridgeOpenError]} {
+            puts "ERROR: Capture Open command failed: $::AirBridgeOpenError"
+            set ::AirBridgeOpenStatus 1
+        } else {
+            puts "Capture Open command returned without a Tcl error."
+            set ::AirBridgeOpenStatus 0
+        }
+    }
+    set ::AirBridgeOpenDone 1
 }
 
-puts "DSN file exists; asking Capture to open the design..."
-if {[catch {Open $dsn_path} open_error]} {
-    puts "ERROR: Capture Open command failed: $open_error"
-    error $open_error
+after 5000 ::AirBridgeOpenTargetDsn
+vwait ::AirBridgeOpenDone
+
+if {$::AirBridgeOpenStatus != 0} {
+    error $::AirBridgeOpenError
 }
 
-puts "Capture Open command completed."
-puts "OrCAD Capture Tcl Open-Design Test: PASS"
+puts "OrCAD Capture Tcl Delayed Open Test: Tcl command PASS"
 puts "=============================================="
 """
 
