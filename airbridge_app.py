@@ -1229,10 +1229,10 @@ class AirBridgeMainWindow(QMainWindow):
     self.btn_detect_eda_vers.setStyleSheet("background-color: #007ACC;")
     eda_ctrl.addWidget(self.btn_detect_eda_vers)
 
-    self.btn_test_orcad = QPushButton("📐 测试原理图 (OrCAD)")
+    self.btn_test_orcad = QPushButton("📐 打开原理图Capture")
     self.btn_test_orcad.setStyleSheet("background-color: #2E7D32;")
 
-    self.btn_test_allegro = QPushButton("⚡ 测试PCB (Allegro)")
+    self.btn_test_allegro = QPushButton("⚡ 打开PCB（Allegro）")
     self.btn_test_allegro.setStyleSheet("background-color: #6A1B9A;")
 
     self.btn_close_orcad = QPushButton("关闭原理图Capture")
@@ -1246,14 +1246,15 @@ class AirBridgeMainWindow(QMainWindow):
     self.btn_abort_eda = QPushButton("⏹ 强杀任务")
     self.btn_abort_eda.setStyleSheet("background-color: #C62828;")
 
-    eda_ctrl.addWidget(self.btn_test_orcad)
-    eda_ctrl.addWidget(self.btn_test_allegro)
-    eda_ctrl.addWidget(self.btn_close_orcad)
-    eda_ctrl.addWidget(self.btn_close_allegro)
-    eda_ctrl.addWidget(self.btn_load_eda)
-    eda_ctrl.addWidget(self.btn_exec_eda)
-    eda_ctrl.addWidget(self.btn_abort_eda)
-    eda_ctrl.addStretch()
+    eda_actions = QHBoxLayout()
+    eda_actions.addWidget(self.btn_test_orcad)
+    eda_actions.addWidget(self.btn_test_allegro)
+    eda_actions.addWidget(self.btn_close_orcad)
+    eda_actions.addWidget(self.btn_close_allegro)
+    eda_actions.addWidget(self.btn_load_eda)
+    eda_actions.addWidget(self.btn_exec_eda)
+    eda_actions.addWidget(self.btn_abort_eda)
+    eda_actions.addStretch()
 
     self.txt_eda_editor = QTextEdit()
     self.txt_eda_editor.setPlaceholderText(
@@ -1261,6 +1262,7 @@ class AirBridgeMainWindow(QMainWindow):
     )
 
     eda_layout.addLayout(eda_ctrl)
+    eda_layout.addLayout(eda_actions)
     eda_layout.addWidget(self.txt_eda_editor)
     self.tabs.addTab(eda_tab, "★ EDA 自动化执行")
 
