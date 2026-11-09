@@ -44,14 +44,33 @@ import serial
 import serial.tools.list_ports
 
 BUILTIN_TEST_ORCAD_TCL = """puts "=============================================="
-puts ">>> Hello from AirBridge OrCAD Tcl Engine! <<<"
+puts ">>> AirBridge OrCAD Capture Open-Design Test <<<"
 puts "System Time: [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]"
 if {[info exists ::AIRBRIDGE_SPB_VER]} {
     puts "Active SPB Version : $::AIRBRIDGE_SPB_VER (Tcl $::tcl_version)"
 }
 puts "Current CDSROOT    : [expr {[info exists ::env(CDSROOT)] ? $::env(CDSROOT) : {N/A}}]"
 puts "Current Working Dir: [pwd]"
-puts "OrCAD Capture Tcl Check: PASS (100% OK)"
+
+# Host-B local design path. Use Capture's GUI-level Open command so the
+# design is opened in the Project Manager, not only loaded as a Dbo object.
+set dsn_path {E:/_airbridge_temp/RK3588_PDF_Output/RK3588_WX8116-SCH-V2T.DSN}
+puts "Target DSN         : $dsn_path"
+
+if {![file exists $dsn_path]} {
+    set open_error "DSN file does not exist on host B: $dsn_path"
+    puts "ERROR: $open_error"
+    error $open_error
+}
+
+puts "DSN file exists; asking Capture to open the design..."
+if {[catch {Open $dsn_path} open_error]} {
+    puts "ERROR: Capture Open command failed: $open_error"
+    error $open_error
+}
+
+puts "Capture Open command completed."
+puts "OrCAD Capture Tcl Open-Design Test: PASS"
 puts "=============================================="
 """
 
@@ -1229,7 +1248,7 @@ class AirBridgeMainWindow(QMainWindow):
     self.btn_detect_eda_vers.setStyleSheet("background-color: #007ACC;")
     eda_ctrl.addWidget(self.btn_detect_eda_vers)
 
-    self.btn_test_orcad = QPushButton("📐 打开原理图Capture")
+    self.btn_test_orcad = QPushButton("📐 打开原理图")
     self.btn_test_orcad.setStyleSheet("background-color: #2E7D32;")
 
     self.btn_test_allegro = QPushButton("⚡ 打开PCB（Allegro）")
