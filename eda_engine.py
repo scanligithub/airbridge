@@ -732,8 +732,8 @@ class EDAExecutor:
             + norm_done
             + '" "w"]; _raw_puts $_df "OK"; close $_df }'
         ),
-        # Keep Capture's event loop alive; the process runner requests WM_CLOSE
-        # after observing the marker, allowing Cadence to handle shutdown.
+        # Keep Capture's event loop alive after the probe. In keep-open mode,
+        # closure is initiated later by the independent close command.
     ]
     with open(wrapper_file, "w", encoding="utf-8") as f:
       f.write("\n".join(lines) + "\n")
@@ -821,7 +821,8 @@ class EDAExecutor:
       except Exception:
         pass
 
-    # Keep Allegro alive until the runner sees this marker and requests WM_CLOSE.
+    # The runner observes this marker. In keep-open mode it leaves the GUI
+    # alive for the later independent close command.
     norm_done = done_flag.replace("\\", "/")
     script_content += (
         "\n\n;; AirBridge task completion marker\n"
@@ -1090,14 +1091,18 @@ class EDAExecutor:
     """Gracefully close only the Cadence process started by AirBridge."""
     app_key = (application or "").strip().lower()
     if app_key not in ("capture", "allegro"):
-      return False, f"[EDA Close] 不支持的应用类型: {application}"
+      msg = f"[EDA Close] 不支持的应用类型: {application}"
+      log_callback(msg)
+      return False, msg
 
     proc = self.get_application_process(app_key)
     if not proc:
-      return False, (
+      msg = (
           f"[EDA Close] 没有由 AirBridge 跟踪的 {app_key} 实例；"
           "不会关闭用户手动启动的 Cadence 进程"
       )
+      log_callback(msg)
+      return False, msg
 
     log_callback(
         f"[EDA Close] 正在关闭 {app_key} (PID={proc.pid})；"
