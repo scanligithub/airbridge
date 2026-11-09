@@ -638,12 +638,31 @@ class SerialWorker(threading.Thread):
                 task_data.get("version", "auto"),
                 task_data.get("target_file", ""),
                 task_data.get("timeout", 60),
+                task_data.get("keep_open", False),
             ),
             daemon=True,
         ).start()
       except Exception as e:
         self.send_frame(
             FrameType.EDA_LOG_STREAM, f"[Fatal] 载荷解析失败: {e}".encode("utf-8")
+        )
+
+    elif frame.frame_type == FrameType.EDA_APP_CLOSE:
+      try:
+        close_data = json.loads(frame.payload.decode("utf-8"))
+        application = close_data.get("application", "")
+        self.sig.sig_rx_log.emit(
+            "EDA", f"[任务调度] 收到关闭 Cadence 应用请求: {application}"
+        )
+        threading.Thread(
+            target=self._close_eda_application_async,
+            args=(application,),
+            daemon=True,
+        ).start()
+      except Exception as e:
+        self.send_frame(
+            FrameType.EDA_LOG_STREAM,
+            f"[EDA Close] 关闭请求解析失败: {e}".encode("utf-8"),
         )
 
     elif frame.frame_type == FrameType.EDA_FORCE_KILL:
@@ -755,6 +774,7 @@ class SerialWorker(threading.Thread):
       version: str = "auto",
       target_file: str = "",
       timeout: int = 60,
+      keep_open: bool = False,
   ):
     ret, out = self.eda_executor.execute_script(
         script,
@@ -763,6 +783,7 @@ class SerialWorker(threading.Thread):
         timeout=timeout,
         version=version,
         target_file=target_file,
+        keep_open=keep_open,
     )
     self.send_frame(
         FrameType.EDA_TASK_FIN, json.dumps({"returncode": ret}).encode("utf-8")
@@ -770,6 +791,16 @@ class SerialWorker(threading.Thread):
 
 
 # ==============================================================================
+
+  def _close_eda_application_async(self, application: str):
+    """Close a previously launched Cadence GUI without force-killing it."""
+    def stream_log(line: str):
+      self.send_frame(FrameType.EDA_LOG_STREAM, line.encode("utf-8"))
+
+    try:
+      self.eda_executor.close_application(application, stream_log)
+    except Exception as exc:
+      stream_log(f"[EDA Close] 关闭 {application} 时发生异常: {exc}")
 
   def _handle_shell_exec(self, req: Dict[str, Any]):
     """在本机（通常是主机 B）执行远程 Shell 请求，并回传结果。"""
@@ -861,6 +892,7 @@ class AntigravityIPCServer:
           version = task.get("version", "auto")
           target_file = task.get("target_file", "")
           timeout = int(task.get("timeout", 60))
+          keep_open = bool(task.get("keep_open", False))
 
           submit_payload = {
               "script": script,
@@ -868,6 +900,7 @@ class AntigravityIPCServer:
               "version": version,
               "target_file": target_file,
               "timeout": timeout,
+              "keep_open": keep_open,
           }
           worker_ref.send_frame(
               FrameType.EDA_TASK_SUBMIT,
@@ -1202,6 +1235,11 @@ class AirBridgeMainWindow(QMainWindow):
     self.btn_test_allegro = QPushButton("⚡ 测试PCB (Allegro)")
     self.btn_test_allegro.setStyleSheet("background-color: #6A1B9A;")
 
+    self.btn_close_orcad = QPushButton("关闭原理图Capture")
+    self.btn_close_orcad.setStyleSheet("background-color: #8B3A3A;")
+    self.btn_close_allegro = QPushButton("关闭PCB（Allegro）")
+    self.btn_close_allegro.setStyleSheet("background-color: #8B3A3A;")
+
     self.btn_load_eda = QPushButton("📂 加载本地脚本...")
     self.btn_exec_eda = QPushButton("▶ 立即执行 (F5)")
     self.btn_exec_eda.setStyleSheet("background-color: #0E639C;")
@@ -1210,6 +1248,8 @@ class AirBridgeMainWindow(QMainWindow):
 
     eda_ctrl.addWidget(self.btn_test_orcad)
     eda_ctrl.addWidget(self.btn_test_allegro)
+    eda_ctrl.addWidget(self.btn_close_orcad)
+    eda_ctrl.addWidget(self.btn_close_allegro)
     eda_ctrl.addWidget(self.btn_load_eda)
     eda_ctrl.addWidget(self.btn_exec_eda)
     eda_ctrl.addWidget(self.btn_abort_eda)
@@ -1269,6 +1309,8 @@ class AirBridgeMainWindow(QMainWindow):
     self.btn_detect_eda_vers.clicked.connect(self.detect_remote_eda_versions)
     self.btn_test_orcad.clicked.connect(self.trigger_builtin_orcad_test)
     self.btn_test_allegro.clicked.connect(self.trigger_builtin_allegro_test)
+    self.btn_close_orcad.clicked.connect(self.trigger_close_orcad)
+    self.btn_close_allegro.clicked.connect(self.trigger_close_allegro)
     self.btn_load_eda.clicked.connect(self.load_eda_file)
     self.btn_exec_eda.clicked.connect(self.run_eda_script)
     self.btn_abort_eda.clicked.connect(
@@ -1598,7 +1640,9 @@ class AirBridgeMainWindow(QMainWindow):
         "INFO",
         f"【一键自检】已装载 OrCAD Capture Tcl 探针 (目标版本: {ver})，正在下发...",
     )
-    self._dispatch_script(BUILTIN_TEST_ORCAD_TCL, self.current_hint, ver)
+    self._dispatch_script(
+        BUILTIN_TEST_ORCAD_TCL, self.current_hint, ver, keep_open=True
+    )
 
   def trigger_builtin_allegro_test(self):
     self.txt_eda_editor.setText(BUILTIN_TEST_ALLEGRO_SKILL)
@@ -1608,7 +1652,27 @@ class AirBridgeMainWindow(QMainWindow):
         "INFO",
         f"【一键自检】已装载 Allegro PCB SKILL 探针 (目标版本: {ver})，正在下发...",
     )
-    self._dispatch_script(BUILTIN_TEST_ALLEGRO_SKILL, self.current_hint, ver)
+    self._dispatch_script(
+        BUILTIN_TEST_ALLEGRO_SKILL, self.current_hint, ver, keep_open=True
+    )
+
+  def trigger_close_orcad(self):
+    self._dispatch_close_eda_application("capture")
+
+  def trigger_close_allegro(self):
+    self._dispatch_close_eda_application("allegro")
+
+  def _dispatch_close_eda_application(self, application: str):
+    labels = {
+        "capture": "原理图 Capture",
+        "allegro": "PCB Allegro",
+    }
+    label = labels.get(application, application)
+    self.append_log("INFO", f"正在请求主机 B 关闭 {label}...")
+    payload = json.dumps(
+        {"application": application}, ensure_ascii=False
+    ).encode("utf-8")
+    self.worker.send_frame(FrameType.EDA_APP_CLOSE, payload)
 
   def load_eda_file(self):
     p, _ = QFileDialog.getOpenFileName(
@@ -1636,10 +1700,19 @@ class AirBridgeMainWindow(QMainWindow):
     self._dispatch_script(c, self.current_hint, ver)
 
   def _dispatch_script(
-      self, script_text: str, hint_name: str, version: str = "auto"
+      self,
+      script_text: str,
+      hint_name: str,
+      version: str = "auto",
+      keep_open: bool = False,
   ):
     payload = json.dumps(
-        {"script": script_text, "hint": hint_name, "version": version}
+        {
+            "script": script_text,
+            "hint": hint_name,
+            "version": version,
+            "keep_open": keep_open,
+        }
     ).encode("utf-8")
     self.worker.send_frame(FrameType.EDA_TASK_SUBMIT, payload)
 
