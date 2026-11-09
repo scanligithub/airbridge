@@ -11,12 +11,12 @@ set ps_driver  {PS_DRIVER}
 file mkdir $out_dir
 
 puts "Opening $dsn_path"
-set design [ab_open_dsn $dsn_path]
-if {[is_dbo_null $design]} {
-    puts {[ERROR] ab_open_dsn failed}
+set open_rc [catch {Open $dsn_path} open_result]
+if {$open_rc != 0} {
+    puts "\\[ERROR\\] Capture Open failed: $open_result"
     return
 }
-puts {[OK] design opened}
+puts "Capture Open accepted: $open_result"
 
 if {[catch {package require OrHandlerPDFExport} err]} {
     puts "\[ERROR\] package require OrHandlerPDFExport: $err"
@@ -49,5 +49,4 @@ if {[catch {eval "::OrHandlerPDFExport::printPDF $cfg_wrapped"} err]} {
     puts "\[OK\] PDF export requested → $out_dir/$pdf_name"
 }
 
-# Optional close without saving UI prompts when design was only opened for export
-# ab_save_and_close $design
+# Capture remains under the user-controlled Tcl/session lifecycle.

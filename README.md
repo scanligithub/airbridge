@@ -1,64 +1,54 @@
 # AirBridge
 
-物理网闸通用中继器 & EDA 自动化中枢 + 远程 Shell（v2.4）
+通用串口数据传输通道（ABFP）v2.5
 
-## 能力概览
+## 核心定位
 
-- 串口可靠大文件双向传输（滑动窗口）
+AirBridge 负责在主机 A 与主机 B 之间可靠传输数据，不理解或执行传输内容。
+
+- 串口全双工通信与帧校验
+- 通用原始数据传输（RAW_STREAM）
+- 双向大文件传输（滑动窗口、分片确认与重传）
 - 远程文件系统（RFS）
-- Cadence OrCAD Tcl / Allegro SKILL 远程执行
-- **远程 PowerShell / CMD**（同步 + 异步，实时输出，可强杀，危险命令黑名单）
-- 主机 A 本地 HTTP API（`127.0.0.1:8888`）供大模型 / Agent 调用
+- 可选远程 Shell（独立通用模块）
 
-## 远程 Shell API（主机 A）
+**AirBridge 不集成 Cadence 自动化引擎。** 它不探测 Cadence 版本，不启动或关闭 OrCAD Capture / Allegro，不注入 Tcl/SKILL，不监控 Cadence 进程，也不解析或执行脚本。
 
-前提：A/B 两端均运行 AirBridge，串口已连通。
+Tcl 与 SKILL 的启动、运行、会话和退出流程由独立的应用侧脚本/适配器负责。AirBridge 仅传输脚本文本或文件。
 
-### 执行命令
+## 通用原始数据 API（主机 A）
+
+前提：A/B 两端均运行 AirBridge，串口链路已连接。
 
 ```http
-POST http://127.0.0.1:8888/api/v1/shell/exec
+POST http://127.0.0.1:8888/api/v1/data/send
 Content-Type: application/json
 
 {
-  "command": "Get-Process | Select-Object -First 5 | Format-Table -AutoSize | Out-String",
-  "shell": "powershell",
-  "cwd": "E:\\_airbridge_temp",
-  "timeout": 60,
-  "async": false
+  "data": "任意 UTF-8 文本或脚本文本"
 }
 ```
 
-- `async: false`：同步执行，结果经串口 `SHELL_RESULT` 回传并打印到控制台
-- `async: true`：后台任务，实时输出经 `SHELL_OUTPUT` 流式回传
+该 API 将 data 原样编码为 UTF-8，通过 RAW_STREAM 帧发送到主机 B。主机 B 的 AirBridge 只显示收到的数据，不会执行它。
 
-### 强杀任务
+单帧上限为 65,000 字节；更大的内容请使用文件传输功能。
 
-```http
-POST http://127.0.0.1:8888/api/v1/shell/kill
-{"task_id": "shell-..."}
-```
+也可直接在 GUI 的“通用数据通道”编辑和发送文本。接收端会显示最近收到的数据。需要传输大型 Tcl/SKILL 文件时，请使用“文件传输”页。
 
-### 列出任务
+## 远程文件系统（RFS）
 
-```http
-POST http://127.0.0.1:8888/api/v1/shell/tasks
-{}
-```
+主机 A 的 HTTP API 仍提供 /api/v1/fs/<action>，支持 drives、ls、read、write、mkdir、rm、mv、stat 和 pull。
 
-## 安全
+## 可选远程 Shell
 
-`shell_engine.py` 内置危险命令黑名单（format / shutdown / diskpart / 递归删系统盘等），命中即拒绝执行。
+主机 A 的 HTTP API 仍提供 /api/v1/shell/exec、/api/v1/shell/kill 和 /api/v1/shell/tasks。这是独立的通用远程 Shell 功能，不参与 Cadence 自动化生命周期。
 
 ## 打包
 
-```bat
-build.bat
-```
-
-生成 `dist\\AirBridge.exe`（已包含 shell_engine）。
+在 Windows 主机上运行 build.bat，生成 dist\\AirBridge.exe。
 
 ## 版本
 
-- v2.4：远程 Shell
-- v2.3：多版本 Cadence + 大文件吞吐
+- v2.5：移除内置 Cadence 执行引擎；增加通用 RAW_STREAM 数据传输；AirBridge 不再管理 Cadence 应用生命周期。
+- v2.4：远程 Shell。
+- v2.3：多版本 Cadence 与 EDA 执行（已从 AirBridge 核心移除）。

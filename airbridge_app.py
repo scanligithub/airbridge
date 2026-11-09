@@ -1,8 +1,8 @@
 # airbridge_app.py
 # -*- coding: utf-8 -*-
 """
-AirBridge - 物理网闸通用中继器 & EDA 自动化中枢 v2.4
-多版本 Cadence 自适应 + 大文件吞吐 + 远程 Shell (PowerShell/CMD)
+AirBridge - 通用串口数据传输通道 v2.5
+可靠文件传输、原始数据传输、远程文件系统与可选远程 Shell
 """
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
@@ -14,9 +14,8 @@ import threading
 import time
 from typing import Any, Dict, List, Tuple
 
-from eda_engine import CadenceVersionManager, EDAExecutor
 from fs_engine import FSEngine
-from protocol import ABFPFrame, FrameParser, FrameType
+from protocol import ABFPFrame, FrameParser, FrameType, MAX_PAYLOAD_LEN
 from shell_engine import shell_engine, ShellEngine
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
@@ -43,33 +42,6 @@ from PySide6.QtWidgets import (
 import serial
 import serial.tools.list_ports
 
-BUILTIN_TEST_ORCAD_TCL = """puts "=============================================="
-puts ">>> Hello from AirBridge OrCAD Tcl Engine! <<<"
-puts "System Time: [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]"
-if {[info exists ::AIRBRIDGE_SPB_VER]} {
-    puts "Active SPB Version : $::AIRBRIDGE_SPB_VER (Tcl $::tcl_version)"
-}
-puts "Current CDSROOT    : [expr {[info exists ::env(CDSROOT)] ? $::env(CDSROOT) : {N/A}}]"
-puts "Current Working Dir: [pwd]"
-puts "OrCAD Capture Tcl Check: PASS (100% OK)"
-puts "=============================================="
-"""
-
-BUILTIN_TEST_ALLEGRO_SKILL = """procedure(AirBridgeTestSkill()
-    let(()
-        printf("\\n==============================================\\n")
-        printf(">>> Hello from AirBridge Allegro SKILL!   <<<\\n")
-        printf("Allegro System Time : %s\\n" getCurrentTime())
-        printf("Allegro Tool Version: %L\\n" axlVersion('version))
-        printf("Current CDSROOT     : %s\\n" or(getShellEnvVar("CDSROOT") "N/A"))
-        printf("Allegro PCB Designer SKILL Check: PASS (ALL CHECKS OK)\\n")
-        printf("==============================================\\n")
-    )
-)
-AirBridgeTestSkill()
-"""
-
-
 class SerialWorkerSignals(QObject):
   sig_connected = Signal(bool, str)
   sig_rx_log = Signal(str, str)
@@ -78,7 +50,7 @@ class SerialWorkerSignals(QObject):
   sig_file_progress = Signal(int, int)
   sig_file_done = Signal(str)
   sig_file_aborted = Signal(str)
-  sig_eda_log = Signal(str)
+  sig_data_received = Signal(bytes)
   sig_fs_response = Signal(dict)
 
 
@@ -93,7 +65,6 @@ class SerialWorker(threading.Thread):
     self.tx_low_queue = queue.Queue()   # 常规数据帧队列（FILE_CHUNK, FS_REQ, EDA等）
     self.parser = FrameParser()
     self.seq_counter = 0
-    self.eda_executor = EDAExecutor()
     self.shell_engine = shell_engine
     # 远程 Shell 输出回调：把 stdout/stderr 实时推回对端
     def _shell_output_cb(task_id: str, stream: str, line: str):
@@ -616,39 +587,9 @@ class SerialWorker(threading.Thread):
       )
       self.sig.sig_file_aborted.emit("对端已取消发送")
 
-    elif frame.frame_type == FrameType.EDA_LOG_STREAM:
-      self.sig.sig_eda_log.emit(frame.payload.decode("utf-8", errors="ignore"))
-
-    elif frame.frame_type == FrameType.EDA_TASK_SUBMIT:
-      self.sig.sig_rx_log.emit(
-          "EDA", "[任务调度] 收到 Cadence 自动化脚本，启动执行..."
-      )
-      try:
-        task_data = json.loads(frame.payload.decode("utf-8"))
-
-        def stream_back_log(line: str):
-          self.send_frame(FrameType.EDA_LOG_STREAM, line.encode("utf-8"))
-
-        threading.Thread(
-            target=self._exec_eda_async,
-            args=(
-                task_data.get("script", ""),
-                task_data.get("hint", "auto.tcl"),
-                stream_back_log,
-                task_data.get("version", "auto"),
-                task_data.get("target_file", ""),
-                task_data.get("timeout", 60),
-            ),
-            daemon=True,
-        ).start()
-      except Exception as e:
-        self.send_frame(
-            FrameType.EDA_LOG_STREAM, f"[Fatal] 载荷解析失败: {e}".encode("utf-8")
-        )
-
-    elif frame.frame_type == FrameType.EDA_FORCE_KILL:
-      self.sig.sig_rx_log.emit("WARN", "[任务调度] 收到强杀指令，正在终止进程...")
-      self.eda_executor.kill_active_task()
+    elif frame.frame_type == FrameType.RAW_STREAM:
+      # Raw payload is transport data only. It is never parsed or executed here.
+      self.sig.sig_data_received.emit(frame.payload)
 
     # ---------- Remote Shell ----------
     elif frame.frame_type == FrameType.SHELL_EXEC:
@@ -733,43 +674,10 @@ class SerialWorker(threading.Thread):
         self.sig.sig_rx_log.emit("ERROR", f"FS Response 解码异常: {e}")
 
   def _handle_fs_request_worker(self, req_obj: Dict[str, Any]):
-    # 扩展支持探测远端安装的 Cadence 多版本列表
-    if req_obj.get("action") == "eda_versions":
-      installs = CadenceVersionManager.discover_installations()
-      result = {
-          "req_id": req_obj.get("req_id", 0),
-          "action": "eda_versions",
-          "success": True,
-          "versions": installs,
-      }
-    else:
-      result = FSEngine.dispatch(req_obj)
+    result = FSEngine.dispatch(req_obj)
     compressed_resp = FSEngine.pack_payload(result)
     self.send_frame(FrameType.FS_RESPONSE, compressed_resp)
 
-  def _exec_eda_async(
-      self,
-      script: str,
-      hint: str,
-      log_fn,
-      version: str = "auto",
-      target_file: str = "",
-      timeout: int = 60,
-  ):
-    ret, out = self.eda_executor.execute_script(
-        script,
-        hint,
-        log_fn,
-        timeout=timeout,
-        version=version,
-        target_file=target_file,
-    )
-    self.send_frame(
-        FrameType.EDA_TASK_FIN, json.dumps({"returncode": ret}).encode("utf-8")
-    )
-
-
-# ==============================================================================
 
   def _handle_shell_exec(self, req: Dict[str, Any]):
     """在本机（通常是主机 B）执行远程 Shell 请求，并回传结果。"""
@@ -834,55 +742,45 @@ class AntigravityIPCServer:
         self.wfile.write(body)
 
       def do_GET(self):
-        if self.path == "/api/v1/eda/versions":
-          res = worker_ref.send_fs_request_sync(
-              {"action": "eda_versions"}, timeout=10.0
-          )
-          self._reply_json(200 if res.get("success") else 500, res)
-        else:
-          self._reply_json(404, {"error": "Not Found"})
+        self._reply_json(404, {"error": "Not Found"})
 
       def do_POST(self):
         content_len = int(self.headers.get("Content-Length", 0))
         raw_body = self.rfile.read(content_len).decode("utf-8", errors="ignore")
 
-        if self.path in ["/api/v1/eda/execute", "/api/eda/exec"]:
+        if self.path == "/api/v1/data/send":
           try:
-            task = (
-                json.loads(raw_body)
-                if raw_body.strip().startswith("{")
-                else {"script": raw_body, "hint": "agent_auto.tcl"}
-            )
-          except Exception:
-            task = {"script": raw_body, "hint": "agent_auto.tcl"}
-
-          script = task.get("script") or task.get("script_content", "")
-          hint = task.get("hint") or task.get("script_name", "agent_auto.tcl")
-          version = task.get("version", "auto")
-          target_file = task.get("target_file", "")
-          timeout = int(task.get("timeout", 60))
-
-          submit_payload = {
-              "script": script,
-              "hint": hint,
-              "version": version,
-              "target_file": target_file,
-              "timeout": timeout,
-          }
-          worker_ref.send_frame(
-              FrameType.EDA_TASK_SUBMIT,
-              json.dumps(submit_payload).encode("utf-8"),
-          )
-          self._reply_json(
-              200, {"status": "submitted", "hint": hint, "version": version}
-          )
-
-        elif self.path == "/api/v1/eda/versions":
-          res = worker_ref.send_fs_request_sync(
-              {"action": "eda_versions"}, timeout=10.0
-          )
-          self._reply_json(200 if res.get("success") else 500, res)
-
+            if raw_body.strip().startswith("{"):
+              request_data = json.loads(raw_body)
+              data_text = request_data.get("data", "")
+            else:
+              data_text = raw_body
+            if not isinstance(data_text, str):
+              raise ValueError("'data' must be a UTF-8 string")
+            payload = data_text.encode("utf-8")
+            if not payload:
+              self._reply_json(400, {"error": "data must not be empty"})
+            elif len(payload) > MAX_PAYLOAD_LEN:
+              self._reply_json(
+                  413,
+                  {
+                      "error": "payload too large for one RAW_STREAM frame",
+                      "max_bytes": MAX_PAYLOAD_LEN,
+                      "hint": "Use the normal file-transfer function for larger content.",
+                  },
+              )
+            else:
+              worker_ref.send_frame(FrameType.RAW_STREAM, payload)
+              self._reply_json(
+                  202,
+                  {
+                      "status": "transmitted",
+                      "bytes": len(payload),
+                      "execution": "not_performed",
+                  },
+              )
+          except Exception as exc:
+            self._reply_json(400, {"error": str(exc)})
         elif self.path == "/api/v1/message":
           worker_ref.send_frame(FrameType.TEXT_MSG, raw_body.encode("utf-8"))
           self._reply_json(200, {"status": "sent"})
@@ -991,14 +889,10 @@ class AirBridgeMainWindow(QMainWindow):
 
   def __init__(self):
     super().__init__()
-    self.setWindowTitle(
-        "AirBridge - 物理网闸通用中继器 & EDA 自动化中枢 v2.3 (多版本 Cadence"
-        " 自适应版)"
-    )
+    self.setWindowTitle("AirBridge - 通用串口数据传输通道 v2.5")
     self.resize(1160, 820)
     self.setStyleSheet(DARK_STYLE)
 
-    self.current_hint = "auto.tcl"
     self.current_remote_dir = "e:\\RK3588智能盒子"
 
     self.signals = SerialWorkerSignals()
@@ -1024,9 +918,9 @@ class AirBridgeMainWindow(QMainWindow):
       self.worker.connect_serial(dev, baud)
       if not self.worker.ser:
         continue
-      res = self.worker.send_fs_request_sync({"action": "eda_versions"}, timeout=8.0)
+      res = self.worker.send_fs_request_sync({"action": "drives"}, timeout=8.0)
       if res.get("success"):
-        self.statusBar().showMessage(f"链路已自动连接: {dev}")
+        self.statusBar().showMessage(f"串口链路已连接: {dev}")
         return
       self.worker.disconnect_serial()
     if candidates:
@@ -1180,49 +1074,32 @@ class AirBridgeMainWindow(QMainWindow):
     file_layout.addStretch()
     self.tabs.addTab(file_tab, "📁 大文件双向快传")
 
-    # Tab 3: EDA 自动化
-    eda_tab = QWidget()
-    eda_layout = QVBoxLayout(eda_tab)
-    eda_ctrl = QHBoxLayout()
+    # Tab 3: 通用原始数据通道（不识别、不执行发送内容）
+    data_tab = QWidget()
+    data_layout = QVBoxLayout(data_tab)
+    data_ctrl = QHBoxLayout()
+    self.btn_load_data = QPushButton("📂 加载文本文件...")
+    self.btn_send_data = QPushButton("➡ 发送原始数据")
+    self.btn_send_data.setStyleSheet("background-color: #0E639C;")
+    data_ctrl.addWidget(self.btn_load_data)
+    data_ctrl.addWidget(self.btn_send_data)
+    data_ctrl.addStretch()
+    data_layout.addLayout(data_ctrl)
 
-    eda_ctrl.addWidget(QLabel("目标版本:"))
-    self.combo_eda_ver = QComboBox()
-    self.combo_eda_ver.addItem("自动匹配 (Auto)", "auto")
-    for v in ["17.2", "17.4", "23.1", "22.1", "24.1", "16.6"]:
-      self.combo_eda_ver.addItem(f"SPB {v}", v)
-    eda_ctrl.addWidget(self.combo_eda_ver)
-
-    self.btn_detect_eda_vers = QPushButton("🔍 探测对端版本")
-    self.btn_detect_eda_vers.setStyleSheet("background-color: #007ACC;")
-    eda_ctrl.addWidget(self.btn_detect_eda_vers)
-
-    self.btn_test_orcad = QPushButton("📐 测试原理图 (OrCAD)")
-    self.btn_test_orcad.setStyleSheet("background-color: #2E7D32;")
-
-    self.btn_test_allegro = QPushButton("⚡ 测试PCB (Allegro)")
-    self.btn_test_allegro.setStyleSheet("background-color: #6A1B9A;")
-
-    self.btn_load_eda = QPushButton("📂 加载本地脚本...")
-    self.btn_exec_eda = QPushButton("▶ 立即执行 (F5)")
-    self.btn_exec_eda.setStyleSheet("background-color: #0E639C;")
-    self.btn_abort_eda = QPushButton("⏹ 强杀任务")
-    self.btn_abort_eda.setStyleSheet("background-color: #C62828;")
-
-    eda_ctrl.addWidget(self.btn_test_orcad)
-    eda_ctrl.addWidget(self.btn_test_allegro)
-    eda_ctrl.addWidget(self.btn_load_eda)
-    eda_ctrl.addWidget(self.btn_exec_eda)
-    eda_ctrl.addWidget(self.btn_abort_eda)
-    eda_ctrl.addStretch()
-
-    self.txt_eda_editor = QTextEdit()
-    self.txt_eda_editor.setPlaceholderText(
-        "OrCAD Tcl / Allegro SKILL 代码编辑区..."
+    data_layout.addWidget(QLabel(
+        "发送区（UTF-8 文本；最大单帧 65,000 字节。大文件请使用文件传输。）"
+    ))
+    self.txt_data_editor = QTextEdit()
+    self.txt_data_editor.setPlaceholderText(
+        "在此粘贴要发送到对端的数据。AirBridge 只传输原始内容，不识别或执行任何代码。"
     )
+    data_layout.addWidget(self.txt_data_editor)
 
-    eda_layout.addLayout(eda_ctrl)
-    eda_layout.addWidget(self.txt_eda_editor)
-    self.tabs.addTab(eda_tab, "★ EDA 自动化执行")
+    data_layout.addWidget(QLabel("最近收到的原始数据（只显示，不执行）："))
+    self.txt_data_received = QTextEdit()
+    self.txt_data_received.setReadOnly(True)
+    data_layout.addWidget(self.txt_data_received)
+    self.tabs.addTab(data_tab, "通用数据通道")
 
     # Tab 4: 即时消息
     chat_tab = QWidget()
@@ -1266,14 +1143,8 @@ class AirBridgeMainWindow(QMainWindow):
     self.ipt_chat.returnPressed.connect(self.send_chat_msg)
     self.btn_clear_console.clicked.connect(self.txt_console.clear)
 
-    self.btn_detect_eda_vers.clicked.connect(self.detect_remote_eda_versions)
-    self.btn_test_orcad.clicked.connect(self.trigger_builtin_orcad_test)
-    self.btn_test_allegro.clicked.connect(self.trigger_builtin_allegro_test)
-    self.btn_load_eda.clicked.connect(self.load_eda_file)
-    self.btn_exec_eda.clicked.connect(self.run_eda_script)
-    self.btn_abort_eda.clicked.connect(
-        lambda: self.worker.send_frame(FrameType.EDA_FORCE_KILL, b"")
-    )
+    self.btn_load_data.clicked.connect(self.load_data_file)
+    self.btn_send_data.clicked.connect(self.send_raw_data)
 
     self.btn_browse.clicked.connect(self.browse_file)
     self.btn_send_file.clicked.connect(self.trigger_send_file)
@@ -1294,7 +1165,7 @@ class AirBridgeMainWindow(QMainWindow):
     # 信号
     self.signals.sig_connected.connect(self.on_serial_connected)
     self.signals.sig_rx_log.connect(self.append_log)
-    self.signals.sig_eda_log.connect(lambda l: self.append_log("REMOTE", l))
+    self.signals.sig_data_received.connect(self.on_raw_data_received)
     self.signals.sig_tx_activity.connect(self.flash_tx)
     self.signals.sig_rx_activity.connect(self.flash_rx)
     self.signals.sig_file_progress.connect(self.update_file_progress)
@@ -1360,288 +1231,43 @@ class AirBridgeMainWindow(QMainWindow):
 
     threading.Thread(target=worker_fn, daemon=True).start()
 
-  def detect_remote_eda_versions(self):
-    self._run_fs_call_async(
-        {"action": "eda_versions"}, "正在扫描对端主机已安装的 Cadence 版本..."
+  def load_data_file(self):
+    path, _ = QFileDialog.getOpenFileName(
+        self, "选择要加载的文本文件", "", "文本文件 (*.txt *.tcl *.il *.skill *.scr *.json *.csv);;所有文件 (*.*)"
     )
+    if path:
+      with open(path, "r", encoding="utf-8-sig", errors="replace") as file:
+        self.txt_data_editor.setPlainText(file.read())
+      self.append_log("INFO", f"已加载文本文件: {os.path.basename(path)}")
 
-  def rfs_navigate(self):
-    target = self.ipt_rfs_path.text().strip()
-    if not target:
-      target = "e:\\RK3588智能盒子"
-    self._run_fs_call_async(
-        {"action": "ls", "path": target}, f"请求浏览远程路径: {target}"
-    )
-
-  def rfs_up_level(self):
-    cur = self.ipt_rfs_path.text().strip()
-    parent = os.path.dirname(cur)
-    if parent and parent != cur:
-      self.ipt_rfs_path.setText(parent)
-      self.rfs_navigate()
-
-  def rfs_scan_drives(self):
-    self._run_fs_call_async({"action": "drives"}, "请求远程驱动器列表...")
-
-  def rfs_create_dir(self):
-    cur = self.ipt_rfs_path.text().strip()
-    name, ok = QInputDialog.getText(self, "新建远程目录", "请输入目录名称:")
-    if ok and name.strip():
-      new_path = os.path.join(cur, name.strip())
-      self._run_fs_call_async(
-          {"action": "mkdir", "path": new_path},
-          f"请求创建远程目录: {new_path}",
-      )
-
-  def rfs_download_selected(self):
-    row = self.table_rfs.currentRow()
-    if row < 0:
-      QMessageBox.information(self, "提示", "请先在列表中选中要下载的文件！")
+  def send_raw_data(self):
+    text = self.txt_data_editor.toPlainText()
+    if not text:
+      self.append_log("WARN", "发送内容为空。")
       return
-    name = self.table_rfs.item(row, 0).text()
-    is_dir = self.table_rfs.item(row, 1).text() == "📁 目录"
-    if is_dir:
-      QMessageBox.information(
-          self, "提示", "所选目标是目录，目前仅支持下载具体文件。"
-      )
-      return
-    remote_path = os.path.join(self.ipt_rfs_path.text().strip(), name)
-    self.append_log("INFO", f"启动拉取远程大文件: {remote_path}")
-    self.tabs.setCurrentIndex(1)
-    self.worker.pull_file_async(remote_path)
-
-  def rfs_upload_to_current(self):
-    p, _ = QFileDialog.getOpenFileName(
-        self, "选择要推送到远程的文件", "", "所有文件 (*.*)"
-    )
-    if not p:
-      return
-    remote_cur = self.ipt_rfs_path.text().strip()
-    self.append_log(
-        "INFO", f"上传本地文件 [{os.path.basename(p)}] 至远程 [{remote_cur}]..."
-    )
-    self.tabs.setCurrentIndex(1)
-    self.progress_file.setValue(0)
-    self.btn_send_file.setEnabled(False)
-    self.btn_abort_file.setEnabled(True)
-    self.worker.send_file_async(p, remote_dest_dir=remote_cur)
-
-  def rfs_view_file(self):
-    row = self.table_rfs.currentRow()
-    if row < 0:
-      QMessageBox.information(self, "提示", "请先在列表中选中一个文件！")
-      return
-    name = self.table_rfs.item(row, 0).text()
-    is_dir = self.table_rfs.item(row, 1).text() == "📁 目录"
-    if is_dir:
-      QMessageBox.information(self, "提示", "所选目标是目录，请双击进入。")
-      return
-
-    file_path = os.path.join(self.ipt_rfs_path.text().strip(), name)
-    self._run_fs_call_async(
-        {"action": "read", "path": file_path, "max_preview_bytes": 65536},
-        f"正在请求读取/预览文件: {file_path}",
-    )
-
-  def rfs_delete_selected(self):
-    row = self.table_rfs.currentRow()
-    if row < 0:
-      return
-    name = self.table_rfs.item(row, 0).text()
-    del_path = os.path.join(self.ipt_rfs_path.text().strip(), name)
-    reply = QMessageBox.question(
-        self,
-        "确认删除",
-        f"确定要永久删除远程目标吗？\n{del_path}",
-        QMessageBox.Yes | QMessageBox.No,
-    )
-    if reply == QMessageBox.Yes:
-      self._run_fs_call_async(
-          {"action": "rm", "path": del_path}, f"请求删除远程目标: {del_path}"
-      )
-
-  def rfs_on_double_click(self, row, col):
-    name = self.table_rfs.item(row, 0).text()
-    is_dir = self.table_rfs.item(row, 1).text() == "📁 目录"
-    if is_dir:
-      cur = self.ipt_rfs_path.text().strip()
-      self.ipt_rfs_path.setText(os.path.join(cur, name))
-      self.rfs_navigate()
-    else:
-      self.rfs_view_file()
-
-  def on_rfs_response_arrived(self, resp: dict):
-    action = resp.get("action", "")
-    success = resp.get("success", False)
-
-    if not success:
-      self.append_log("ERROR", f"[RFS 异常] {resp.get('error', '未知调用错误')}")
-      return
-
-    if action == "ls":
-      self.ipt_rfs_path.setText(resp.get("path", ""))
-      items = resp.get("items", [])
-      self.table_rfs.setRowCount(len(items))
-      for i, it in enumerate(items):
-        is_dir = it.get("is_dir", False)
-        self.table_rfs.setItem(i, 0, QTableWidgetItem(it.get("name", "")))
-        self.table_rfs.setItem(
-            i, 1, QTableWidgetItem("📁 目录" if is_dir else "📄 文件")
-        )
-        self.table_rfs.setItem(
-            i, 2, QTableWidgetItem("-" if is_dir else str(it.get("size", 0)))
-        )
-        self.table_rfs.setItem(i, 3, QTableWidgetItem(it.get("mtime", "")))
+    payload = text.encode("utf-8")
+    if len(payload) > MAX_PAYLOAD_LEN:
       self.append_log(
-          "SUCCESS",
-          f"已成功加载远程目录 [{resp.get('path')}] (共 {len(items)} 项)",
+          "WARN",
+          f"内容为 {len(payload)} 字节，超过单帧上限 {MAX_PAYLOAD_LEN}；请改用文件传输。",
       )
-
-    elif action == "drives":
-      drives = resp.get("drives", [])
-      d_str = ", ".join(
-          [f"{d['drive']} (可用: {d['free_gb']}GB)" for d in drives]
-      )
-      self.append_log("SUCCESS", f"远程驱动器列表: {d_str}")
-
-    elif action == "eda_versions":
-      vers = resp.get("versions", {})
-      if not vers:
-        self.append_log("WARN", "对端未扫描到标准 Cadence SPB 安装目录。")
-      else:
-        summary = ", ".join(
-            [f"SPB {v} ({info.get('cdsroot')})" for v, info in vers.items()]
-        )
-        self.append_log("SUCCESS", f"对端可用 Cadence 版本: {summary}")
-
-    elif action == "read":
-      content = resp.get("content", "")
-      sz = resp.get("size", len(content))
-      is_trunc = resp.get("is_truncated", False)
-      tip_str = (
-          f"已捕获文件前 64KB 内容 (全文件大小: {sz/1024/1024:.2f} MB)"
-          if is_trunc
-          else f"文件读取完毕 (共 {sz} 字节)"
-      )
-      self.append_log("SUCCESS", tip_str)
-
-      self.txt_console.append(
-          f"<font color='#4EC9B0'><b>=== [远程文件预览: {resp.get('path')} ({sz}"
-          " 字节)] ===</b></font>"
-      )
-      self.txt_console.append(content[:4000])
-      if is_trunc:
-        self.txt_console.append(
-            "<font color='#CCA700'><b>\n... [后序省略，文件共"
-            f" {sz/1024/1024:.2f} MB。如需完整文件，请直接在列表中点击【⬇"
-            " 下载选中文件 (Pull)】] ...</b></font>"
-        )
-      self.txt_console.append(
-          "<font color='#4EC9B0'><b>=== [预览结束] ===</b></font>"
-      )
-
-    elif action in ["mkdir", "rm", "mv"]:
-      self.append_log(
-          "SUCCESS", f"远程操作 [{action}] 成功！正在自动刷新目录..."
-      )
-      self.rfs_navigate()
-
-  # ---------------- 基础通信逻辑 ----------------
-  def browse_file(self):
-    p, _ = QFileDialog.getOpenFileName(
-        self, "选择要传输的文件", "", "所有文件 (*.*)"
-    )
-    if p:
-      self.ipt_filepath.setText(p)
-
-  def trigger_send_file(self):
-    path = self.ipt_filepath.text().strip()
-    if not path or not os.path.exists(path):
-      self.append_log("WARN", "请先选择一个有效的文件！")
       return
-    self.progress_file.setValue(0)
-    self.btn_send_file.setEnabled(False)
-    self.btn_abort_file.setEnabled(True)
-    self.worker.send_file_async(path)
-
-  def trigger_abort_file(self):
-    self.worker.abort_file_send()
-    self.btn_abort_file.setEnabled(False)
-
-  def on_file_complete(self, fn: str):
-    self.btn_send_file.setEnabled(True)
-    self.btn_abort_file.setEnabled(False)
-    self.progress_file.setValue(100)
-
-  def on_file_aborted(self, reason: str):
-    self.btn_send_file.setEnabled(True)
-    self.btn_abort_file.setEnabled(False)
-    self.progress_file.setValue(0)
-    self.append_log("ERROR", f"[传输终止] {reason}")
-
-  def update_file_progress(self, cur, total):
-    pct = int((cur / total) * 100) if total > 0 else 0
-    self.progress_file.setValue(pct)
-
-  def send_chat_msg(self):
-    t = self.ipt_chat.text().strip()
-    if t:
-      self.worker.send_frame(FrameType.TEXT_MSG, t.encode("utf-8"))
-      self.txt_chat.append(f"<font color='#0E639C'><b>[我]:</b></font> {t}")
-      self.ipt_chat.clear()
-
-  def trigger_builtin_orcad_test(self):
-    self.txt_eda_editor.setText(BUILTIN_TEST_ORCAD_TCL)
-    self.current_hint = "builtin_test.tcl"
-    ver = self.combo_eda_ver.currentData()
+    self.worker.send_frame(FrameType.RAW_STREAM, payload)
     self.append_log(
-        "INFO",
-        f"【一键自检】已装载 OrCAD Capture Tcl 探针 (目标版本: {ver})，正在下发...",
+        "SUCCESS",
+        f"已将 {len(payload)} 字节原始数据加入串口发送队列；AirBridge 不执行发送内容。",
     )
-    self._dispatch_script(BUILTIN_TEST_ORCAD_TCL, self.current_hint, ver)
 
-  def trigger_builtin_allegro_test(self):
-    self.txt_eda_editor.setText(BUILTIN_TEST_ALLEGRO_SKILL)
-    self.current_hint = "builtin_test.il"
-    ver = self.combo_eda_ver.currentData()
+  def on_raw_data_received(self, payload: bytes):
+    try:
+      display_text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+      display_text = "[收到非 UTF-8 原始数据，以下为 HEX 展示]\n" + payload.hex(" ")
+    self.txt_data_received.setPlainText(display_text)
     self.append_log(
-        "INFO",
-        f"【一键自检】已装载 Allegro PCB SKILL 探针 (目标版本: {ver})，正在下发...",
+        "SUCCESS",
+        f"收到对端原始数据: {len(payload)} 字节（未解析、未执行）。",
     )
-    self._dispatch_script(BUILTIN_TEST_ALLEGRO_SKILL, self.current_hint, ver)
-
-  def load_eda_file(self):
-    p, _ = QFileDialog.getOpenFileName(
-        self,
-        "选择脚本",
-        "",
-        "Cadence 脚本 (*.tcl *.il *.skill *.scr);;所有文件 (*.*)",
-    )
-    if p:
-      self.current_hint = os.path.basename(p)
-      with open(p, "r", encoding="utf-8", errors="ignore") as f:
-        self.txt_eda_editor.setText(f.read())
-      self.append_log("INFO", f"已载入本地脚本 [{self.current_hint}]")
-
-  def run_eda_script(self):
-    c = self.txt_eda_editor.toPlainText().strip()
-    if not c:
-      self.append_log("WARN", "编辑器内容为空，无法执行！")
-      return
-    ver = self.combo_eda_ver.currentData()
-    self.append_log(
-        "INFO",
-        f"正在提交当前编辑器代码 (后缀: {self.current_hint}, 版本: {ver})...",
-    )
-    self._dispatch_script(c, self.current_hint, ver)
-
-  def _dispatch_script(
-      self, script_text: str, hint_name: str, version: str = "auto"
-  ):
-    payload = json.dumps(
-        {"script": script_text, "hint": hint_name, "version": version}
-    ).encode("utf-8")
-    self.worker.send_frame(FrameType.EDA_TASK_SUBMIT, payload)
 
   def append_log(self, level: str, msg: str):
     color = "#D4D4D4"

@@ -2,7 +2,7 @@
 
 | Skill | Path | Purpose |
 |-------|------|---------|
-| **airbridge** | `skill/airbridge/` | General remote control of host B — RFS, Shell, EDA dispatch |
+| **airbridge** | `skill/airbridge/` | General serial transport to host B — raw data, file transfer, RFS, optional Shell |
 | **orcad-pdf-export** | `skill/orcad-pdf-export/` | OrCAD schematic → PDF via Tcl + Ghostscript (no GUI) |
 
 Copy a skill folder into your agent skills directory (e.g. `~/.grok/skills/<name>`).

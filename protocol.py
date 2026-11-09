@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 AirBridge Binary Framing Protocol (ABFP) v2.1
-全双工大文件拉取 + EDA 任务 + 远程 Shell
+全双工文件传输 + 通用原始数据 + 远程 Shell
 """
 import struct
 import zlib
@@ -24,10 +24,6 @@ class FrameType:
     RAW_STREAM      = 0x08
     FILE_ABORT      = 0x09
     FILE_PULL_REQ   = 0x0A  # 远程反向文件拉取指令
-    EDA_TASK_SUBMIT = 0x10
-    EDA_LOG_STREAM  = 0x11
-    EDA_TASK_FIN    = 0x12
-    EDA_FORCE_KILL  = 0x13
     FS_REQUEST      = 0x20
     FS_RESPONSE     = 0x21
     # ---- Remote Shell (v2.1) ----

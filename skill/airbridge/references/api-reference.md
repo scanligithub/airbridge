@@ -1,43 +1,34 @@
 # AirBridge HTTP API reference (host A)
 
-Base: `http://127.0.0.1:8888`
+Base: http://127.0.0.1:8888
 
-## EDA
+## Generic raw-data transport
 
-### GET or POST `/api/v1/eda/versions`
+### POST /api/v1/data/send
 
-Returns remote Cadence installations discovered on host B.
+Send a UTF-8 text payload to the peer using the generic RAW_STREAM frame.
 
-Example success:
+Request:
+
+```json
+{ "data": "arbitrary text or script source" }
+```
+
+Response:
 
 ```json
 {
-  "req_id": 123,
-  "action": "eda_versions",
-  "success": true,
-  "versions": { "17.2": { } }
+  "status": "transmitted",
+  "bytes": 28,
+  "execution": "not_performed"
 }
 ```
 
-### POST `/api/v1/eda/execute` (alias `/api/eda/exec`)
-
-Body:
-
-```json
-{
-  "script": "...",
-  "hint": "agent_auto.tcl",
-  "version": "auto",
-  "target_file": "",
-  "timeout": 60
-}
-```
-
-Response: `{"status":"submitted","hint":"...","version":"..."}`
+The receiving AirBridge displays the payload in its generic data panel. It does not parse or execute the contents. Maximum single-frame payload: 65,000 UTF-8 bytes. Use the file-transfer feature for larger or binary files.
 
 ## Filesystem
 
-All under `/api/v1/fs/<action>` with JSON body. Common field: `timeout` (seconds).
+All under /api/v1/fs/<action> with JSON body.
 
 | action | important fields |
 |--------|------------------|
@@ -51,11 +42,11 @@ All under `/api/v1/fs/<action>` with JSON body. Common field: `timeout` (seconds
 | stat | path |
 | pull | remote path fields per server |
 
-`read` returns truncated preview when file larger than `max_preview_bytes` (default 65536).
+read returns a truncated preview when a file is larger than max_preview_bytes (default 65536).
 
-## Shell
+## Optional remote Shell
 
-### POST `/api/v1/shell/exec`
+### POST /api/v1/shell/exec
 
 ```json
 {
@@ -68,50 +59,16 @@ All under `/api/v1/fs/<action>` with JSON body. Common field: `timeout` (seconds
 }
 ```
 
-HTTP response:
+HTTP response indicates submission. Actual stdout/stderr arrive through the serial console as SHELL_RESULT and SHELL_OUTPUT.
 
-```json
-{
-  "status": "submitted",
-  "async": false,
-  "hint": "结果将通过 SHELL_RESULT / 控制台日志回传；..."
-}
-```
-
-Authoritative result frame fields (console):
-
-```json
-{
-  "success": true,
-  "task_id": "shell-...",
-  "exit_code": 0,
-  "stdout": "...",
-  "stderr": "",
-  "duration_ms": 781,
-  "cwd": "E:\\_airbridge_temp"
-}
-```
-
-Blocked command example:
-
-```json
-{
-  "success": false,
-  "error": "安全策略拦截: 命中安全黑名单: \\bshutdown\\b",
-  "blocked": true
-}
-```
-
-### POST `/api/v1/shell/kill`
+### POST /api/v1/shell/kill
 
 ```json
 { "task_id": "shell-...", "pid": 0 }
 ```
 
-### POST `/api/v1/shell/tasks` (or `/api/v1/shell/list`)
+### POST /api/v1/shell/tasks
 
-Triggers list request; details appear on serial log path.
+Requests task-list output through the serial console.
 
-## Blacklist themes (host B)
-
-Blocked patterns include format/diskpart/volume wipe, shutdown/restart, dangerous net user or HKLM deletes, recursive force delete of system roots. Prefer non-destructive commands.
+Remote Shell is independent of Cadence and is not used by the generic raw-data channel.
