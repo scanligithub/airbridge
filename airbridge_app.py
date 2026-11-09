@@ -750,8 +750,11 @@ class AntigravityIPCServer:
 
         if self.path == "/api/v1/data/send":
           try:
-            if raw_body.strip().startswith("{"):
+            content_type = self.headers.get("Content-Type", "").lower()
+            if "application/json" in content_type:
               request_data = json.loads(raw_body)
+              if not isinstance(request_data, dict):
+                raise ValueError("JSON request body must be an object")
               data_text = request_data.get("data", "")
             else:
               data_text = raw_body
@@ -774,7 +777,7 @@ class AntigravityIPCServer:
               self._reply_json(
                   202,
                   {
-                      "status": "transmitted",
+                      "status": "queued",
                       "bytes": len(payload),
                       "execution": "not_performed",
                   },
@@ -1230,6 +1233,177 @@ class AirBridgeMainWindow(QMainWindow):
       self.signals.sig_fs_response.emit(res)
 
     threading.Thread(target=worker_fn, daemon=True).start()
+
+  def rfs_navigate(self):
+    target = self.ipt_rfs_path.text().strip()
+    if not target:
+      target = "e:\\RK3588智能盒子"
+    self._run_fs_call_async(
+        {"action": "ls", "path": target}, f"请求浏览远程路径: {target}"
+    )
+
+  def rfs_up_level(self):
+    cur = self.ipt_rfs_path.text().strip()
+    parent = os.path.dirname(cur)
+    if parent and parent != cur:
+      self.ipt_rfs_path.setText(parent)
+      self.rfs_navigate()
+
+  def rfs_scan_drives(self):
+    self._run_fs_call_async({"action": "drives"}, "请求远程驱动器列表...")
+
+  def rfs_create_dir(self):
+    cur = self.ipt_rfs_path.text().strip()
+    name, ok = QInputDialog.getText(self, "新建远程目录", "请输入目录名称:")
+    if ok and name.strip():
+      new_path = os.path.join(cur, name.strip())
+      self._run_fs_call_async(
+          {"action": "mkdir", "path": new_path},
+          f"请求创建远程目录: {new_path}",
+      )
+
+  def rfs_download_selected(self):
+    row = self.table_rfs.currentRow()
+    if row < 0:
+      QMessageBox.information(self, "提示", "请先在列表中选中要下载的文件！")
+      return
+    name = self.table_rfs.item(row, 0).text()
+    is_dir = self.table_rfs.item(row, 1).text() == "📁 目录"
+    if is_dir:
+      QMessageBox.information(
+          self, "提示", "所选目标是目录，目前仅支持下载具体文件。"
+      )
+      return
+    remote_path = os.path.join(self.ipt_rfs_path.text().strip(), name)
+    self.append_log("INFO", f"启动拉取远程大文件: {remote_path}")
+    self.tabs.setCurrentIndex(1)
+    self.worker.pull_file_async(remote_path)
+
+  def rfs_upload_to_current(self):
+    p, _ = QFileDialog.getOpenFileName(
+        self, "选择要推送到远程的文件", "", "所有文件 (*.*)"
+    )
+    if not p:
+      return
+    remote_cur = self.ipt_rfs_path.text().strip()
+    self.append_log(
+        "INFO", f"上传本地文件 [{os.path.basename(p)}] 至远程 [{remote_cur}]..."
+    )
+    self.tabs.setCurrentIndex(1)
+    self.progress_file.setValue(0)
+    self.btn_send_file.setEnabled(False)
+    self.btn_abort_file.setEnabled(True)
+    self.worker.send_file_async(p, remote_dest_dir=remote_cur)
+
+  def rfs_view_file(self):
+    row = self.table_rfs.currentRow()
+    if row < 0:
+      QMessageBox.information(self, "提示", "请先在列表中选中一个文件！")
+      return
+    name = self.table_rfs.item(row, 0).text()
+    is_dir = self.table_rfs.item(row, 1).text() == "📁 目录"
+    if is_dir:
+      QMessageBox.information(self, "提示", "所选目标是目录，请双击进入。")
+      return
+
+    file_path = os.path.join(self.ipt_rfs_path.text().strip(), name)
+    self._run_fs_call_async(
+        {"action": "read", "path": file_path, "max_preview_bytes": 65536},
+        f"正在请求读取/预览文件: {file_path}",
+    )
+
+  def rfs_delete_selected(self):
+    row = self.table_rfs.currentRow()
+    if row < 0:
+      return
+    name = self.table_rfs.item(row, 0).text()
+    del_path = os.path.join(self.ipt_rfs_path.text().strip(), name)
+    reply = QMessageBox.question(
+        self,
+        "确认删除",
+        f"确定要永久删除远程目标吗？\n{del_path}",
+        QMessageBox.Yes | QMessageBox.No,
+    )
+    if reply == QMessageBox.Yes:
+      self._run_fs_call_async(
+          {"action": "rm", "path": del_path}, f"请求删除远程目标: {del_path}"
+      )
+
+  def rfs_on_double_click(self, row, col):
+    name = self.table_rfs.item(row, 0).text()
+    is_dir = self.table_rfs.item(row, 1).text() == "📁 目录"
+    if is_dir:
+      cur = self.ipt_rfs_path.text().strip()
+      self.ipt_rfs_path.setText(os.path.join(cur, name))
+      self.rfs_navigate()
+    else:
+      self.rfs_view_file()
+
+  def on_rfs_response_arrived(self, resp: dict):
+    action = resp.get("action", "")
+    success = resp.get("success", False)
+
+    if not success:
+      self.append_log("ERROR", f"[RFS 异常] {resp.get('error', '未知调用错误')}")
+      return
+
+    if action == "ls":
+      self.ipt_rfs_path.setText(resp.get("path", ""))
+      items = resp.get("items", [])
+      self.table_rfs.setRowCount(len(items))
+      for i, it in enumerate(items):
+        is_dir = it.get("is_dir", False)
+        self.table_rfs.setItem(i, 0, QTableWidgetItem(it.get("name", "")))
+        self.table_rfs.setItem(
+            i, 1, QTableWidgetItem("📁 目录" if is_dir else "📄 文件")
+        )
+        self.table_rfs.setItem(
+            i, 2, QTableWidgetItem("-" if is_dir else str(it.get("size", 0)))
+        )
+        self.table_rfs.setItem(i, 3, QTableWidgetItem(it.get("mtime", "")))
+      self.append_log(
+          "SUCCESS",
+          f"已成功加载远程目录 [{resp.get('path')}] (共 {len(items)} 项)",
+      )
+
+    elif action == "drives":
+      drives = resp.get("drives", [])
+      d_str = ", ".join(
+          [f"{d['drive']} (可用: {d['free_gb']}GB)" for d in drives]
+      )
+      self.append_log("SUCCESS", f"远程驱动器列表: {d_str}")
+
+    elif action == "read":
+      content = resp.get("content", "")
+      sz = resp.get("size", len(content))
+      is_trunc = resp.get("is_truncated", False)
+      tip_str = (
+          f"已捕获文件前 64KB 内容 (全文件大小: {sz/1024/1024:.2f} MB)"
+          if is_trunc
+          else f"文件读取完毕 (共 {sz} 字节)"
+      )
+      self.append_log("SUCCESS", tip_str)
+
+      self.txt_console.append(
+          f"<font color='#4EC9B0'><b>=== [远程文件预览: {resp.get('path')} ({sz}"
+          " 字节)] ===</b></font>"
+      )
+      self.txt_console.append(content[:4000])
+      if is_trunc:
+        self.txt_console.append(
+            "<font color='#CCA700'><b>\n... [后序省略，文件共"
+            f" {sz/1024/1024:.2f} MB。如需完整文件，请直接在列表中点击【⬇"
+            " 下载选中文件 (Pull)】] ...</b></font>"
+        )
+      self.txt_console.append(
+          "<font color='#4EC9B0'><b>=== [预览结束] ===</b></font>"
+      )
+
+    elif action in ["mkdir", "rm", "mv"]:
+      self.append_log(
+          "SUCCESS", f"远程操作 [{action}] 成功！正在自动刷新目录..."
+      )
+      self.rfs_navigate()
 
   def load_data_file(self):
     path, _ = QFileDialog.getOpenFileName(

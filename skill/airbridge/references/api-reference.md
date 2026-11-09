@@ -18,7 +18,7 @@ Response:
 
 ```json
 {
-  "status": "transmitted",
+  "status": "queued",
   "bytes": 28,
   "execution": "not_performed"
 }
