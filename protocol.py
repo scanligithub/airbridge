@@ -28,6 +28,7 @@ class FrameType:
     EDA_LOG_STREAM  = 0x11
     EDA_TASK_FIN    = 0x12
     EDA_FORCE_KILL  = 0x13
+    EDA_APP_CLOSE   = 0x14  # 独立关闭由 AirBridge 启动的 Capture / Allegro
     FS_REQUEST      = 0x20
     FS_RESPONSE     = 0x21
     # ---- Remote Shell (v2.1) ----
