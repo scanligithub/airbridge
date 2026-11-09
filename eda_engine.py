@@ -612,6 +612,18 @@ class EDAExecutor:
 
     os.makedirs(self.workspace_dir, exist_ok=True)
     self.active_process = None
+    # 仅跟踪由 AirBridge 启动的 GUI；关闭命令不会影响用户手动打开的其他实例。
+    self.managed_processes: Dict[str, subprocess.Popen] = {}
+    self.process_lock = threading.Lock()
+
+  def get_application_process(self, application: str):
+    """Return the live Cadence process started and tracked by AirBridge."""
+    with self.process_lock:
+      proc = self.managed_processes.get(application)
+      if proc and proc.poll() is not None:
+        self.managed_processes.pop(application, None)
+        return None
+      return proc
 
   def execute_script(
       self,
@@ -621,8 +633,20 @@ class EDAExecutor:
       timeout: int = 60,
       version: str = "auto",
       target_file: str = "",
+      keep_open: bool = False,
   ) -> Tuple[int, str]:
     lang = detect_script_type(script_content, filename_hint)
+    application = "capture" if lang == EDALanguage.ORCAD_TCL else "allegro"
+    if keep_open:
+      existing = self.get_application_process(application)
+      if existing:
+        msg = (
+            f"[EDA Engine] {application} 已由 AirBridge 启动且仍在运行 "
+            f"(PID={existing.pid})；为避免重复实例，本次不再启动"
+        )
+        log_callback(msg)
+        return 0, msg
+
     ver_info, reason_msg = CadenceVersionManager.select_best_installation(
         requested_version=version,
         script_content=script_content,
@@ -637,10 +661,12 @@ class EDAExecutor:
           timeout,
           ver_info,
           target_file=target_file,
+          keep_open=keep_open,
       )
     else:
       return self._run_allegro_skill(
-          script_content, log_callback, timeout, ver_info
+          script_content, log_callback, timeout, ver_info,
+          keep_open=keep_open,
       )
 
   def _run_orcad_tcl(
@@ -650,6 +676,7 @@ class EDAExecutor:
       timeout: int,
       ver_info: Optional[Dict[str, Any]] = None,
       target_file: str = "",
+      keep_open: bool = False,
   ) -> Tuple[int, str]:
     cdsroot = ver_info["cdsroot"] if ver_info else ""
     ver_str = ver_info["version"] if ver_info else "unknown"
@@ -754,6 +781,8 @@ class EDAExecutor:
           timeout,
           done_flag_path=done_flag,
           custom_env=isolated_env,
+          keep_open=keep_open,
+          application_key="capture",
       )
     finally:
       for hp in injected_hooks:
@@ -769,6 +798,7 @@ class EDAExecutor:
       log_callback: Callable[[str], None],
       timeout: int,
       ver_info: Optional[Dict[str, Any]] = None,
+      keep_open: bool = False,
   ) -> Tuple[int, str]:
     cdsroot = ver_info["cdsroot"] if ver_info else ""
     ver_str = ver_info["version"] if ver_info else "unknown"
@@ -831,6 +861,8 @@ class EDAExecutor:
         timeout,
         done_flag_path=done_flag,
         custom_env=isolated_env,
+        keep_open=keep_open,
+        application_key="allegro",
     )
 
   def _spawn_and_monitor(
@@ -841,6 +873,8 @@ class EDAExecutor:
       timeout: int,
       done_flag_path: str = None,
       custom_env: dict = None,
+      keep_open: bool = False,
+      application_key: str = "",
   ) -> Tuple[int, str]:
     log_callback(f"[Process Runner] 启动: {' '.join(cmd)}")
 
@@ -850,20 +884,25 @@ class EDAExecutor:
     run_env["CDS_DISABLE_STARTPAGE"] = "1"
 
     try:
-      self.active_process = subprocess.Popen(
+      proc = subprocess.Popen(
           cmd,
           cwd=self.workspace_dir,
           env=run_env,
-          stdout=subprocess.PIPE,
+          # The GUI remains alive after the launch probe completes. Do not
+          # leave an unread PIPE attached to a long-running Cadence process.
+          stdout=subprocess.DEVNULL,
           stderr=subprocess.STDOUT,
-          text=True,
       )
+      self.active_process = proc
+      if keep_open and application_key:
+        with self.process_lock:
+          self.managed_processes[application_key] = proc
     except Exception as e:
       err_msg = f"[Process Runner 异常] 无法启动进程: {str(e)}"
       log_callback(err_msg)
       return -1, err_msg
 
-    watchdog = DialogKillerWatchdog(self.active_process.pid, log_callback)
+    watchdog = DialogKillerWatchdog(proc.pid, log_callback)
     watchdog.start()
 
     output_collected = []
@@ -888,36 +927,59 @@ class EDAExecutor:
           except Exception:
             pass
 
-        ret = self.active_process.poll()
+        ret = proc.poll()
         if ret is not None:
           break
 
         if done_flag_path and os.path.exists(done_flag_path):
           time.sleep(0.3)
-          if self.active_process.poll() is None:
-            self.request_graceful_close(
-                log_callback, reason="Cadence 脚本执行完成"
-            )
-            self._wait_for_exit(15)
-          ret = self.active_process.poll()
-          if ret is None:
-            log_callback(
-                "[Process Runner] 已请求正常关闭，但程序仍在运行；"
-                "可能存在保存/确认弹窗，保留现场，请人工检查"
-            )
-            ret = 0
+          if keep_open:
+            # 任务标记代表启动探针/脚本执行完成，不代表要关闭 GUI。
+            # 进程句柄保留在 managed_processes，等待独立的关闭命令。
+            ret = proc.poll()
+            if ret is None:
+              log_callback(
+                  f"[Process Runner] 脚本执行完成；{application_key} GUI 保持打开 "
+                  f"(PID={proc.pid})"
+              )
+              ret = 0
+            else:
+              log_callback(
+                  f"[Process Runner] {application_key} 进程已自行退出，退出码: {ret}"
+              )
           else:
-            log_callback("[Process Runner] Cadence 程序已正常退出")
+            if proc.poll() is None:
+              self.request_graceful_close(
+                  log_callback, reason="Cadence 脚本执行完成", process=proc
+              )
+              self._wait_for_exit(15, process=proc)
+            ret = proc.poll()
+            if ret is None:
+              log_callback(
+                  "[Process Runner] 已请求正常关闭，但程序仍在运行；"
+                  "可能存在保存/确认弹窗，保留现场，请人工检查"
+              )
+              ret = 0
+            else:
+              log_callback("[Process Runner] Cadence 程序已正常退出")
           break
 
         if time.time() - start_time > timeout:
-          log_callback("[Timeout] 执行超时，先请求 Cadence 正常关闭...")
-          self.request_graceful_close(log_callback, reason="任务超时")
-          if not self._wait_for_exit(15):
+          if keep_open:
             log_callback(
-                "[Process Runner] 正常关闭等待超时；为避免丢失未保存设计，"
-                "不自动强制结束，请人工检查并关闭"
+                f"[Timeout] {application_key} 启动后等待脚本完成超时；"
+                "按“保持打开”模式保留 GUI，不自动关闭"
             )
+          else:
+            log_callback("[Timeout] 执行超时，先请求 Cadence 正常关闭...")
+            self.request_graceful_close(
+                log_callback, reason="任务超时", process=proc
+            )
+            if not self._wait_for_exit(15, process=proc):
+              log_callback(
+                  "[Process Runner] 正常关闭等待超时；为避免丢失未保存设计，"
+                  "不自动强制结束，请人工检查并关闭"
+              )
           return -2, "Execution Timeout"
 
         time.sleep(0.15)
@@ -942,10 +1004,19 @@ class EDAExecutor:
       return ret, "\n".join(output_collected)
     finally:
       watchdog.stop()
-      self.active_process = None
+      if keep_open and proc.poll() is not None and application_key:
+        with self.process_lock:
+          if self.managed_processes.get(application_key) is proc:
+            self.managed_processes.pop(application_key, None)
+      if self.active_process is proc:
+        self.active_process = None
 
-  def _wait_for_exit(self, grace_seconds: float) -> bool:
-    proc = self.active_process
+  def _wait_for_exit(
+      self,
+      grace_seconds: float,
+      process: Optional[subprocess.Popen] = None,
+  ) -> bool:
+    proc = process or self.active_process
     if not proc:
       return True
     deadline = time.time() + max(0.0, grace_seconds)
@@ -957,9 +1028,10 @@ class EDAExecutor:
       self,
       log_callback: Callable[[str], None],
       reason: str = "任务结束",
+      process: Optional[subprocess.Popen] = None,
   ) -> bool:
     """Ask Cadence windows to close through the normal Windows close path."""
-    proc = self.active_process
+    proc = process or self.active_process
     if not proc or proc.poll() is not None:
       return True
     if sys.platform != "win32" or not user32:
@@ -1008,6 +1080,46 @@ class EDAExecutor:
         "等待程序自行退出"
     )
     return False
+
+  def close_application(
+      self,
+      application: str,
+      log_callback: Callable[[str], None],
+      grace_seconds: float = 15.0,
+  ) -> Tuple[bool, str]:
+    """Gracefully close only the Cadence process started by AirBridge."""
+    app_key = (application or "").strip().lower()
+    if app_key not in ("capture", "allegro"):
+      return False, f"[EDA Close] 不支持的应用类型: {application}"
+
+    proc = self.get_application_process(app_key)
+    if not proc:
+      return False, (
+          f"[EDA Close] 没有由 AirBridge 跟踪的 {app_key} 实例；"
+          "不会关闭用户手动启动的 Cadence 进程"
+      )
+
+    log_callback(
+        f"[EDA Close] 正在关闭 {app_key} (PID={proc.pid})；"
+        "通过 Windows WM_CLOSE 请求正常退出"
+    )
+    self.request_graceful_close(
+        log_callback, reason=f"用户请求关闭 {app_key}", process=proc
+    )
+    if self._wait_for_exit(grace_seconds, process=proc):
+      with self.process_lock:
+        if self.managed_processes.get(app_key) is proc:
+          self.managed_processes.pop(app_key, None)
+      msg = f"[EDA Close] {app_key} 已正常退出 (PID={proc.pid})"
+      log_callback(msg)
+      return True, msg
+
+    msg = (
+        f"[EDA Close] {app_key} 在 {grace_seconds:.0f}s 内未退出；"
+        "可能存在保存/确认对话框。未强制结束，请在主机 B 上人工处理"
+    )
+    log_callback(msg)
+    return False, msg
 
   def kill_active_task(self):
     """Explicit last-resort termination; never used for normal completion."""
