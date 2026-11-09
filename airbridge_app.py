@@ -1659,7 +1659,7 @@ class AirBridgeMainWindow(QMainWindow):
     ver = self.combo_eda_ver.currentData()
     self.append_log(
         "INFO",
-        f"【一键自检】已装载 OrCAD Capture Tcl 探针 (目标版本: {ver})，正在下发...",
+        f"【打开原理图】已装载 Capture Tcl 开图脚本 (目标版本: {ver})，正在下发...",
     )
     self._dispatch_script(
         BUILTIN_TEST_ORCAD_TCL, self.current_hint, ver, keep_open=True
