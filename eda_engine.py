@@ -122,18 +122,29 @@ procedure(abOpenDesign(brdPath)
 ;; axlOpenDesign 是 GUI 设计切换/打开入口；Batch API 不会满足用户需要的
 ;; “在当前 Allegro 窗口中打开并显示 PCB”这一交互目标。
 procedure(abOpenDesignInteractive(brdPath)
-    let((openResult)
+    let((openResult openValue shellCommand shellResult)
         openResult = nil
+        openValue = nil
         if(isCallable('axlOpenDesign) then
             openResult = errset(
                 axlOpenDesign(?design brdPath ?mode "wf")
                 t
             )
         )
-        if(openResult then
-            car(openResult)
+        when(openResult
+            openValue = car(openResult)
+        )
+        if(openValue then
+            printf("AirBridge: axlOpenDesign opened the selected BRD.\\n")
+            openValue
         else
-            nil
+            ;; SPB 17.2 has historical axlOpenDesign behavior issues.
+            ;; axlShell interactive commands can terminate the current SKILL,
+            ;; so this fallback is called only after the completion marker.
+            shellCommand = sprintf(nil "open \\"%s\\"" brdPath)
+            printf("AirBridge: axlOpenDesign returned no design; trying Allegro open command.\\n")
+            shellResult = errset(axlShell(shellCommand) t)
+            if(shellResult car(shellResult) nil)
         )
     )
 )
@@ -872,20 +883,37 @@ class EDAExecutor:
       except Exception:
         pass
 
-    # The runner observes this marker. In keep-open mode it leaves the GUI
-    # alive for the later independent close command.
+    # The marker means the initialization script reached the board-open stage.
+    # Write it before the interactive command because axlShell fallback may
+    # terminate the active SKILL function by design.
     norm_done = done_flag.replace("\\", "/")
+    script_content += (
+        "\n\n;; AirBridge task completion marker\n"
+        'let((ab_fp) '
+        'ab_fp = outfile("' + norm_done + '") '
+        'when(ab_fp fprintf(ab_fp "OK") close(ab_fp)) '
+        ')\n'
+    )
+
     if target_file:
       # Keep non-ASCII project paths out of the generated UTF-8 SKILL source.
-      # The path sidecar uses the Windows ANSI code page expected by the
-      # Allegro 17.2 process, while the SKILL script itself remains ASCII.
+      # The path sidecar uses the Windows ANSI code page expected by Allegro
+      # 17.2; the generated SKILL source therefore remains ASCII.
       brd_path_file = os.path.join(
           self.workspace_dir, "_allegro_target_brd_path.txt"
       )
       path_encoding = "mbcs" if sys.platform == "win32" else "utf-8"
-      with open(brd_path_file, "w", encoding=path_encoding) as path_fp:
-        path_fp.write(target_file)
-        path_fp.write("\n")
+      try:
+        with open(brd_path_file, "w", encoding=path_encoding) as path_fp:
+          path_fp.write(target_file)
+          path_fp.write("\n")
+      except UnicodeEncodeError as exc:
+        msg = (
+            "[EDA Engine] BRD 路径包含当前 Windows ANSI 代码页无法表示的字符；"
+            "请将设计放到可由系统代码页表示的目录，或调整系统区域设置。"
+        )
+        log_callback(f"{msg} ({exc})")
+        return -1, msg
 
       norm_brd_path_file = brd_path_file.replace("\\", "/")
       skill_path_file = norm_brd_path_file.replace('"', '\\"')
@@ -898,20 +926,12 @@ class EDAExecutor:
           "    ab_open_result = if(ab_target_file then "
           "abOpenDesignInteractive(ab_target_file) nil)\n"
           "    if(ab_open_result then\n"
-          '        printf("AirBridge: interactive PCB open API returned success.\\n")\n'
+          '        printf("AirBridge: interactive PCB open reported success.\\n")\n'
           "    else\n"
-          '        printf("AirBridge: interactive PCB open API failed. Check Allegro log.\\n")\n'
+          '        printf("AirBridge: interactive PCB open command returned no success value; inspect Allegro GUI.\\n")\n'
           "    )\n"
           ")\n"
       )
-
-    script_content += (
-        "\n\n;; AirBridge task completion marker\n"
-        'let((ab_fp) '
-        'ab_fp = outfile("' + norm_done + '") '
-        'when(ab_fp fprintf(ab_fp "OK") close(ab_fp)) '
-        ')\n'
-    )
 
     skill_file = os.path.join(self.workspace_dir, "_task.il")
     with open(skill_file, "w", encoding="utf-8") as f:
