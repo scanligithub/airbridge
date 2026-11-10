@@ -117,6 +117,28 @@ procedure(abOpenDesign(brdPath)
     )
 )
 
+
+;; 在交互式 Allegro PCB Editor 中打开设计（不使用 Batch API）。
+;; axlOpenDesign 是 GUI 设计切换/打开入口；Batch API 不会满足用户需要的
+;; “在当前 Allegro 窗口中打开并显示 PCB”这一交互目标。
+procedure(abOpenDesignInteractive(brdPath)
+    let((openResult)
+        openResult = nil
+        if(isCallable('axlOpenDesign) then
+            openResult = errset(
+                axlOpenDesign(?design brdPath ?mode "wf")
+                t
+            )
+        )
+        if(openResult then
+            car(openResult)
+        else
+            nil
+        )
+    )
+)
+
+
 ;; 3. 为大模型高频误调的 axlDBGetDesignExtents 提供兼容 Polyfill 别名
 if(!isCallable('axlDBGetDesignExtents) then
     procedure(axlDBGetDesignExtents()
@@ -665,7 +687,11 @@ class EDAExecutor:
       )
     else:
       return self._run_allegro_skill(
-          script_content, log_callback, timeout, ver_info,
+          script_content,
+          log_callback,
+          timeout,
+          ver_info,
+          target_file=target_file,
           keep_open=keep_open,
       )
 
@@ -798,8 +824,23 @@ class EDAExecutor:
       log_callback: Callable[[str], None],
       timeout: int,
       ver_info: Optional[Dict[str, Any]] = None,
+      target_file: str = "",
       keep_open: bool = False,
   ) -> Tuple[int, str]:
+    if target_file:
+      if os.path.splitext(target_file)[1].lower() != ".brd":
+        msg = (
+            f"[EDA Engine] Allegro 目标文件必须是 .brd 文件: {target_file}"
+        )
+        log_callback(msg)
+        return -1, msg
+      if not os.path.isfile(target_file):
+        msg = (
+            f"[EDA Engine] 主机 B 上找不到所选 PCB 文件: {target_file}"
+        )
+        log_callback(msg)
+        return -1, msg
+
     cdsroot = ver_info["cdsroot"] if ver_info else ""
     ver_str = ver_info["version"] if ver_info else "unknown"
     allegro_exe = (
@@ -824,6 +865,22 @@ class EDAExecutor:
     # The runner observes this marker. In keep-open mode it leaves the GUI
     # alive for the later independent close command.
     norm_done = done_flag.replace("\\", "/")
+    if target_file:
+      # Use forward slashes in the SKILL string so Windows backslashes are
+      # not interpreted as escape sequences. Escape the remaining quote char.
+      skill_target = target_file.replace("\\", "/").replace('"', '\\"')
+      script_content += (
+          "\n\n;; AirBridge interactive PCB open\n"
+          "let((ab_open_result)\n"
+          '    ab_open_result = abOpenDesignInteractive("' + skill_target + '")\n'
+          "    if(ab_open_result then\n"
+          '        printf("AirBridge: interactive PCB open API returned success.\\n")\n'
+          "    else\n"
+          '        printf("AirBridge: interactive PCB open API failed. Check Allegro log.\\n")\n'
+          "    )\n"
+          ")\n"
+      )
+
     script_content += (
         "\n\n;; AirBridge task completion marker\n"
         'let((ab_fp) '
