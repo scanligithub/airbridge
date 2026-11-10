@@ -71,7 +71,6 @@ proc ::AirBridgePdfExport::run {} {
         lappend config_values $config_line
     }
     close $config_fp
-    catch {file delete -force $config_file}
 
     if {[llength $config_values] != 4} {
         set message "PDF configuration sidecar must contain exactly four lines."
