@@ -12,10 +12,10 @@
 #   Ghostscript executable
 #   OrCAD PostScript printer name
 
+namespace eval ::AirBridgePdfExport {}
+
 set ::AirBridgePdfExport::config_file @CONFIG_FILE@
 set ::AirBridgePdfExport::result_file @RESULT_FILE@
-
-namespace eval ::AirBridgePdfExport {}
 
 proc ::AirBridgePdfExport::single_line {value} {
     return [string map [list "\r" " " "\n" " "] $value]
