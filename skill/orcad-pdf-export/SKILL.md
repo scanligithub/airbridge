@@ -43,6 +43,7 @@ Key rules:
 3. Ghostscript 64-bit CLI exists, typically gswin64c.exe.
 4. An OrCAD PostScript printer is installed. The expected 17.2 name is often OrCADPS_17.2; confirm the exact printer name on host B.
 5. AirBridge is running on both hosts, serial is connected, and host A exposes http://127.0.0.1:8888.
+6. Python 3 and the Python `requests` package are installed on host A (`python -m pip install requests` if needed).
 
 If the DSN path is not known, use RFS drives and directory listing on host B to find .dsn candidates. Show the candidate paths to the user and obtain the intended design before submitting the export. Do not search the local host-A filesystem or open the DSN through Tcl.
 
@@ -81,7 +82,7 @@ Get-Printer | Where-Object { $_.Name -match 'OrCAD|PS|PostScript' } | Select-Obj
 
 ### 2. Run the host-A submitter
 
-Run scripts/submit_export.py on host A, not in the model sandbox:
+Run scripts/submit_export.py on host A, not in the model sandbox. If the target PDF already exists, the helper refuses to overwrite it; add `--overwrite` only when replacement is intended:
 
 ~~~powershell
 python .\skill\orcad-pdf-export\scripts\submit_export.py --dsn "E:\Projects\Example\Design.dsn" --out-dir "E:\_airbridge_temp\pdf_out" --gs "C:\Program Files\gs\gs10.05.1\bin\gswin64c.exe" --ps-driver "OrCADPS_17.2" --version "17.2"
