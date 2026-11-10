@@ -230,6 +230,12 @@ class RemoteFileDialog(QDialog):
     if not target:
       self.status_label.setText("请先输入远程路径，或扫描主机 B 的盘符。")
       return
+    # Clear stale rows immediately so a failed directory request cannot leave
+    # files from the previous directory selectable by mistake.
+    self.path_edit.setText(target)
+    self.tree.clear()
+    self.selected_label.clear()
+    self.ok_button.setEnabled(False)
     self._request(
         {"action": "ls", "path": target},
         f"正在读取远程目录: {target}",
@@ -282,6 +288,8 @@ class RemoteFileDialog(QDialog):
         drive_part, _ = ntpath.splitdrive(self._initial_path)
         if drive_part and drive_part.lower() == drive.lower():
           selected_index = self.drive_combo.count() - 1
+      if not self._initial_path and self.drive_combo.count() > 1:
+        selected_index = 1
       self.drive_combo.setCurrentIndex(selected_index)
       self.drive_combo.blockSignals(False)
 
@@ -289,9 +297,8 @@ class RemoteFileDialog(QDialog):
         self._initial_load_pending = False
         if self._initial_path:
           self._navigate(self._initial_path)
-        elif self.drive_combo.count() > 1:
-          self.drive_combo.setCurrentIndex(1)
-          self._navigate(str(self.drive_combo.itemData(1)))
+        elif selected_index > 0:
+          self._navigate(str(self.drive_combo.itemData(selected_index)))
         else:
           self.status_label.setText("主机 B 没有返回可用盘符。")
       else:
