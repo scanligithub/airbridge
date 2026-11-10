@@ -11,7 +11,7 @@ import json
 import sys
 import time
 import uuid
-from pathlib import PureWindowsPath
+from pathlib import Path, PureWindowsPath
 
 try:
     import requests
@@ -20,7 +20,7 @@ except ImportError:
 
 API = "http://127.0.0.1:8888"
 WORKSPACE = r"E:\_airbridge_temp"
-TEMPLATE = PureWindowsPath(__file__).resolve().parent.parent / "references" / "export-template.tcl"
+TEMPLATE = Path(__file__).resolve().parent.parent / "references" / "export-template.tcl"
 
 
 def remote_path(path: str) -> str:
