@@ -1,11 +1,11 @@
 # OrCAD Capture 原理图启动、开图与关闭流程
 
-- 文档状态：当前实现基线 / 已完成主机 B 实机验证
+- 文档状态：远程文件选择与动态路径传递已实现；新的选择器流程待主机 A / B 实机复测
 - 适用程序：AirBridge（主机 A 与主机 B 使用同一套代码）
 - 适用工具：OrCAD Capture
-- 当前目标设计：`RK3588_WX8116-SCH-V2T.DSN`
-- 对应实现基线：`ba562740bb8f50edeb21ef512866661225be8c7d`
-- 验证结论：用户已确认可以顺畅打开和关闭原理图；此前通过启动期 Tcl `Open` 打开设计时出现的恢复提示，在改为 Capture 命令行传入 DSN 后不再影响当前工作流程。
+- 设计文件：每次由用户从主机 B 的远程文件选择器中选择 `.dsn`
+- 对应实现：`RemoteFileDialog` + `FS_REQUEST/FS_RESPONSE` + `target_file`
+- 历史验证：用户此前已确认 Capture 原生命令行传入 DSN 的启停流程正常；本次远程选择器改造尚待实机复测。
 
 ---
 
@@ -13,29 +13,32 @@
 
 Capture 的生命周期拆分为三个独立阶段：
 
-1. **启动 Capture**：由 AirBridge 在主机 B 启动 `capture.exe`。
-2. **打开原理图**：由 Capture 原生启动参数接收 DSN 路径并打开设计。
+1. **选择设计文件**：主机 A 使用 RFS 远程浏览主机 B 的目录，只显示 `.dsn` 文件；用户选定后得到主机 B 的绝对路径。
+2. **启动并打开原理图**：AirBridge 将该路径放入 `target_file`，主机 B 启动 `capture.exe` 并将 DSN 路径作为原生命令行参数传入。
 3. **关闭 Capture**：由主机 A 的独立关闭按钮发出关闭请求，主机 B 对 AirBridge 跟踪的 Capture 进程发送正常窗口关闭消息。
 
 必须遵循以下原则：
 
 - 主机 A 只负责界面操作和通过 AirBridge 通信链路下发命令。
 - Cadence 程序实际运行在主机 B，设计文件路径也是主机 B 本地路径。
-- Tcl 只用于 Capture 启动期的轻量初始化和环境探针，不负责打开 DSN。
+- Tcl 只用于 Capture 启动期的轻量初始化和环境探针，不负责打开 DSN；开图仍由 Capture 原生命令行参数完成。
+- 远程文件浏览复用现有 RFS 盘符扫描与目录列表请求，不下载 DSN 文件，也不增加新的通信帧类型。
 - 不在 `capAutoLoad` 启动钩子中使用 `Open`、`after` 或 `vwait` 来打开设计或等待设计打开。
 - Capture 启动后保持运行，不因启动探针执行完成而自动关闭。
 - 关闭操作是独立命令，正常情况下使用 Windows `WM_CLOSE`，不以强制结束进程作为正常关闭方式。
 - Capture 的启动、进程跟踪和关闭必须与 Allegro 分别管理，互不影响。
 
-## 2. 当前固定目标设计
+## 2. 远程选择主机 B 上的 DSN 文件
 
-当前「打开原理图」按钮使用以下主机 B 本地路径：
+用户点击「打开原理图」后，主机 A 打开 `RemoteFileDialog`。该窗口通过现有 RFS 请求浏览主机 B：
 
-```text
-E:\\_airbridge_temp\\RK3588_PDF_Output\\RK3588_WX8116-SCH-V2T.DSN
-```
+- `drives`：扫描主机 B 可用盘符；
+- `ls`：读取当前远程目录；
+- 目录始终可见，普通文件只显示扩展名为 `.dsn` 的文件（大小写不敏感）；
+- 双击目录进入下一级，选择文件后点击「确定」返回完整路径；
+- 点击「取消」不会启动 Capture。
 
-该路径只在主机 B 上有意义。主机 A 不需要能够访问该文件，也不应在主机 A 检查它是否存在。
+选择器返回的是主机 B 的绝对路径。主机 A 不访问、不下载、不复制 DSN 文件。主机 B 在启动前再次检查扩展名和文件是否存在。
 
 ## 3. 打开原理图：完整执行流程
 
@@ -43,13 +46,13 @@ E:\\_airbridge_temp\\RK3588_PDF_Output\\RK3588_WX8116-SCH-V2T.DSN
 
 用户在主机 A 的 AirBridge 界面点击「打开原理图」。
 
-`AirBridgeMainWindow.trigger_builtin_orcad_test()` 准备：
+`AirBridgeMainWindow.trigger_builtin_orcad_test()` 首先调用 `_browse_remote_eda_file("capture", [".dsn"])`，弹出远程文件选择器。用户确认文件后，函数准备：
 
 - 内置 Tcl 启动探针 `BUILTIN_TEST_ORCAD_TCL`
 - 脚本提示名 `builtin_test.tcl`
 - 当前选择的 Cadence 版本
 - `keep_open=True`
-- `target_file`：上述 DSN 完整路径
+- `target_file`：选择器返回的主机 B 绝对路径
 
 随后调用：
 
@@ -73,11 +76,11 @@ self._dispatch_script(
   "hint": "builtin_test.tcl",
   "version": "auto",
   "keep_open": true,
-  "target_file": "E:\\_airbridge_temp\\RK3588_PDF_Output\\RK3588_WX8116-SCH-V2T.DSN"
+  "target_file": "<主机 B 远程选择器返回的绝对 DSN 路径>"
 }
 ```
 
-JSON 序列化会负责对反斜杠进行转义；主机 B 解析后得到正常的 Windows 路径字符串。
+JSON 序列化会负责对反斜杠进行转义；主机 B 解析后得到正常的 Windows 路径字符串。路径只以字符串形式传输，文件内容不会经过 AirBridge 通信链路。
 
 ### 3.2 主机 B：接收任务并传递参数
 
@@ -243,7 +246,9 @@ WM_CLOSE，Capture 正常退出
 | 文件 | 函数 / 常量 | 职责 |
 |---|---|---|
 | `airbridge_app.py` | `BUILTIN_TEST_ORCAD_TCL` | 轻量 Tcl 环境探针，不执行开图 |
-| `airbridge_app.py` | `trigger_builtin_orcad_test()` | 设置固定 DSN 路径和 `keep_open=True` |
+| `airbridge_app.py` | `RemoteFileDialog` | 复用 RFS 浏览盘符和目录，筛选 `.dsn` 并返回远程绝对路径 |
+| `airbridge_app.py` | `_browse_remote_eda_file()` | 在启动 Capture 前取得用户选择的 DSN 路径 |
+| `airbridge_app.py` | `trigger_builtin_orcad_test()` | 将动态 DSN 路径与 `keep_open=True` 一起下发 |
 | `airbridge_app.py` | `_dispatch_script()` | 将 `target_file` 等参数写入任务 JSON |
 | `protocol.py` | `EDA_TASK_SUBMIT` | 传递启动任务 |
 | `protocol.py` | `EDA_APP_CLOSE` | 独立关闭 Cadence 应用 |
@@ -258,8 +263,10 @@ WM_CLOSE，Capture 正常退出
 
 以下项目构成 Capture 启停流程的验收标准：
 
-- [x] 主机 A 点击「打开原理图」后，主机 B 能启动 Capture。
-- [x] Capture 能通过原生启动参数打开指定 DSN。
+- [x] 主机 A 原有启动流程可以启动 Capture（此前已实机验证）。
+- [ ] 远程文件选择器能浏览主机 B 盘符和目录，并正确筛选 `.dsn`（本次代码改造待实机复测）。
+- [x] Capture 能通过原生启动参数打开指定 DSN（此前固定路径流程已实机验证）。
+- [ ] 选择器选出的不同 DSN 路径能正确打开（待主机 B 实机验收）。
 - [x] 不再依赖 capAutoLoad 中的 Tcl `Open`、`after`、`vwait` 开图。
 - [x] Capture 启动后保持运行，不随 Tcl 探针结束而关闭。
 - [x] 主机 A 可以通过独立按钮关闭由 AirBridge 启动的 Capture。
@@ -268,7 +275,7 @@ WM_CLOSE，Capture 正常退出
 
 ## 8. 当前约束与注意事项
 
-1. **固定路径**：当前「打开原理图」按钮把目标 DSN 路径固定在主机 A 的内置按钮逻辑中。更换设计文件时，需要调整该路径或后续增加路径选择功能。
+1. **动态路径**：当前按钮不再写死 DSN 文件路径。每次从主机 B 远程选择器选取 `.dsn`；最近一次选中文件所在目录仅保存在当前 AirBridge 会话内。
 2. **关闭范围**：独立关闭按钮只关闭当前 AirBridge 进程所跟踪的 Capture 实例，不接管用户手动打开的 Capture。
 3. **进程记录是内存状态**：`managed_processes` 目前保存在主机 B 的 AirBridge 进程内。Capture 尚未关闭时，不要重启主机 B 的 AirBridge；否则新的 AirBridge 实例不会自动继承旧实例的进程句柄记录。
 4. **保存决策由用户负责**：遇到未保存设计或模态对话框时，AirBridge 不强制退出、不替用户选择保存或丢弃。
@@ -277,4 +284,4 @@ WM_CLOSE，Capture 正常退出
 
 ---
 
-**当前标准：Capture 由 AirBridge 启动，DSN 由 Capture 原生启动参数打开，Tcl 只做轻量初始化，关闭由独立的 AirBridge 命令完成。**
+**当前标准：主机 A 通过 RFS 选择主机 B 上的 DSN，AirBridge 只传递绝对路径；Capture 由原生命令行打开设计，Tcl 只做轻量初始化，关闭由独立命令完成。远程选择器与新路径流程仍需主机 B 实机复测。**
