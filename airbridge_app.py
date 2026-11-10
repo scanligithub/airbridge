@@ -237,10 +237,13 @@ class RemoteFileDialog(QDialog):
 
   def _navigate_up(self):
     current = self.path_edit.text().strip()
+    drive, tail = ntpath.splitdrive(current)
+    if drive and tail in ("", "\\\\", "/"):
+      return
     parent = ntpath.dirname(current.rstrip("\\\\/"))
-    if parent and parent != current:
-      if len(parent) == 2 and parent[1] == ":":
-        parent += "\\\\"
+    if drive and parent.lower() == drive.lower():
+      parent = drive + "\\\\"
+    if parent and ntpath.normcase(parent) != ntpath.normcase(current):
       self._navigate(parent)
 
   def _on_drive_changed(self, index: int):
