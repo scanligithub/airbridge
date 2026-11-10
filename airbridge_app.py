@@ -238,11 +238,11 @@ class RemoteFileDialog(QDialog):
   def _navigate_up(self):
     current = self.path_edit.text().strip()
     drive, tail = ntpath.splitdrive(current)
-    if drive and tail in ("", "\\\\", "/"):
+    if drive and tail in ("", "\\", "/"):
       return
-    parent = ntpath.dirname(current.rstrip("\\\\/"))
+    parent = ntpath.dirname(current.rstrip("\\/"))
     if drive and parent.lower() == drive.lower():
-      parent = drive + "\\\\"
+      parent = drive + "\\"
     if parent and ntpath.normcase(parent) != ntpath.normcase(current):
       self._navigate(parent)
 
@@ -274,7 +274,7 @@ class RemoteFileDialog(QDialog):
         drive = str(drive_info.get("drive", "")).strip()
         if not drive:
           continue
-        root = drive if drive.endswith(("\\\\", "/")) else drive + "\\\\"
+        root = drive if drive.endswith(("\\", "/")) else drive + "\\"
         free_gb = drive_info.get("free_gb", 0)
         self.drive_combo.addItem(
             f"{drive}  (可用 {free_gb} GB)", root
