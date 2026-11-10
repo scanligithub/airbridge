@@ -135,16 +135,20 @@ procedure(abOpenDesignInteractive(brdPath)
             openValue = car(openResult)
         )
         if(openValue then
-            printf("AirBridge: axlOpenDesign opened the selected BRD.\\n")
-            openValue
+            progn(
+                printf("AirBridge: axlOpenDesign opened the selected BRD.\n")
+                openValue
+            )
         else
-            ;; SPB 17.2 has historical axlOpenDesign behavior issues.
-            ;; axlShell interactive commands can terminate the current SKILL,
-            ;; so this fallback is called only after the completion marker.
-            shellCommand = sprintf(nil "open \\"%s\\"" brdPath)
-            printf("AirBridge: axlOpenDesign returned no design; trying Allegro open command.\\n")
-            shellResult = errset(axlShell(shellCommand) t)
-            if(shellResult car(shellResult) nil)
+            progn(
+                ;; SPB 17.2 has historical axlOpenDesign behavior issues.
+                ;; axlShell interactive commands can terminate the current SKILL,
+                ;; so this fallback is called only after the completion marker.
+                shellCommand = sprintf(nil "open \"%s\"" brdPath)
+                printf("AirBridge: axlOpenDesign returned no design; trying Allegro open command.\n")
+                shellResult = errset(axlShell(shellCommand) t)
+                if(shellResult car(shellResult) nil)
+            )
         )
     )
 )
