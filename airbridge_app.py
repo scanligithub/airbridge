@@ -1940,6 +1940,14 @@ class AirBridgeMainWindow(QMainWindow):
   def _browse_remote_eda_file(
       self, application: str, extensions: List[str]
   ) -> str:
+    if not self.worker.ser or not self.worker.ser.is_open:
+      QMessageBox.warning(
+          self,
+          "远程文件浏览",
+          "当前尚未连接主机 B。请先建立 AirBridge 通信连接，再选择设计文件。",
+      )
+      return ""
+
     labels = {
         "capture": "选择主机 B 上的 OrCAD Capture 原理图 DSN",
         "allegro": "选择主机 B 上的 Allegro PCB BRD",
