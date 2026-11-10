@@ -143,16 +143,22 @@ proc ::AirBridgePdfExport::run {} {
         return 1
     }
 
-    # This follows the Capture PDF utility's documented converter-command
-    # convention: brace the executable path so spaces remain one path.
+    # The PDF utility fills these two global paths later, while processing
+    # printPDF. Preserve their Tcl variable references literally in the
+    # configured converter command; do not expand them while building cfg.
+    set gs_output_arg "-sOutputFile=\$::capPdfUtil::mPdfFilePath"
+    set gs_ps_arg "\$::capPdfUtil::mPSFilePath"
+
+    # Tcl list quoting keeps the executable and file arguments intact even
+    # when their paths contain spaces.
     set gs_cmd [list \
         $gs_exe \
         -sDEVICE=pdfwrite \
-        -sOutputFile=$::capPdfUtil::mPdfFilePath \
+        $gs_output_arg \
         -dBATCH \
         -dNOPAUSE \
         -dSAFER \
-        $::capPdfUtil::mPSFilePath]
+        $gs_ps_arg]
 
     set cfg_items [list \
         [format "\"outputDirectory\":%s" [::AirBridgePdfExport::json_quote $out_dir]] \
