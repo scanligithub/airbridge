@@ -19,7 +19,7 @@ except ImportError:
     raise SystemExit("Install dependency first: pip install requests")
 
 API = "http://127.0.0.1:8888"
-WORKSPACE = r"E:\_airbridge_temp"
+DEFAULT_WORKSPACE = r"E:\_airbridge_temp"
 TEMPLATE = Path(__file__).resolve().parent.parent / "references" / "export-template.tcl"
 
 
@@ -110,6 +110,7 @@ def main():
     )
     parser.add_argument("--dsn", required=True, help="Absolute .dsn path on host B")
     parser.add_argument("--out-dir", default=r"E:\_airbridge_temp\pdf_out")
+    parser.add_argument("--workspace", default=DEFAULT_WORKSPACE, help="Remote AirBridge workspace; match AIRBRIDGE_WORKSPACE_DIR if customized")
     parser.add_argument("--pdf-name", default=None, help="PDF filename (default: DSN basename.pdf)")
     parser.add_argument("--gs", required=True, help="Absolute gswin64c.exe path on host B")
     parser.add_argument("--ps-driver", default="OrCADPS_17.2")
@@ -176,8 +177,11 @@ def main():
     # 2. Upload a UTF-8 sidecar. The Tcl source stays ASCII-safe while paths
     #    (including Chinese output directories) retain their exact characters.
     job_id = uuid.uuid4().hex
-    config_file = str(PureWindowsPath(WORKSPACE) / f"_pdf_export_config_{job_id}.txt")
-    result_file = str(PureWindowsPath(WORKSPACE) / f"_pdf_export_result_{job_id}.txt")
+    workspace = args.workspace.strip()
+    if not workspace:
+        raise SystemExit("--workspace cannot be empty.")
+    config_file = str(PureWindowsPath(workspace) / f"_pdf_export_config_{job_id}.txt")
+    result_file = str(PureWindowsPath(workspace) / f"_pdf_export_result_{job_id}.txt")
     config_text = "\n".join([
         remote_path(out_dir),
         pdf_name,
@@ -235,7 +239,7 @@ def main():
         time.sleep(max(0.5, args.poll_interval))
 
     if not result_data:
-        log_path = str(PureWindowsPath(WORKSPACE) / "_cadence_stdout.log")
+        log_path = str(PureWindowsPath(workspace) / "_cadence_stdout.log")
         log_data = request_json(
             "POST", "/api/v1/fs/read",
             body={"path": log_path, "max_preview_bytes": 16000, "timeout": 15},
