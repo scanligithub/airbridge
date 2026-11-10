@@ -180,14 +180,21 @@ def main():
     workspace = args.workspace.strip()
     if not workspace:
         raise SystemExit("--workspace cannot be empty.")
+    try:
+        workspace.encode("ascii")
+    except UnicodeEncodeError:
+        raise SystemExit("--workspace must use an ASCII-only path because it is embedded in the Capture Tcl source.")
     config_file = str(PureWindowsPath(workspace) / f"_pdf_export_config_{job_id}.txt")
     result_file = str(PureWindowsPath(workspace) / f"_pdf_export_result_{job_id}.txt")
-    config_text = "\n".join([
+    config_values = [
         remote_path(out_dir),
         pdf_name,
         remote_path(gs_exe),
         ps_driver,
-    ])
+    ]
+    if any("\n" in value or "\r" in value for value in config_values):
+        raise SystemExit("Output paths, PDF name, and printer name must not contain newline characters.")
+    config_text = "\n".join(config_values)
     config_write = request_json(
         "POST", "/api/v1/fs/write",
         body={
@@ -234,7 +241,7 @@ def main():
     result_data = None
     while time.monotonic() < deadline:
         result_data = read_remote_result(result_file)
-        if result_data:
+        if result_data and "STATUS" in result_data:
             break
         time.sleep(max(0.5, args.poll_interval))
 
