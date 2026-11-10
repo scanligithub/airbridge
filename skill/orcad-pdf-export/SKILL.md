@@ -84,7 +84,7 @@ Run scripts/submit_export.py on host A, not in the model sandbox:
 python .\skill\orcad-pdf-export\scripts\submit_export.py --dsn "E:\Projects\Example\Design.dsn" --out-dir "E:\_airbridge_temp\pdf_out" --gs "C:\Program Files\gs\gs10.05.1\bin\gswin64c.exe" --ps-driver "OrCADPS_17.2" --version "17.2"
 ~~~
 
-The helper checks Cadence availability, verifies the DSN and Ghostscript with RFS, creates the output directory, uploads a per-job UTF-8 config sidecar, submits Tcl with target_file and keep_open=false, polls the result marker, and verifies the final PDF size.
+The helper checks Cadence availability, verifies the DSN and Ghostscript with RFS, creates the output directory, uploads a per-job UTF-8 config sidecar, submits Tcl with target_file and keep_open=false, polls the result marker, and verifies the final PDF size. If the host-B EDA workspace was overridden with AIRBRIDGE_WORKSPACE_DIR, pass the same value through --workspace. The default is E:\\_airbridge_temp.
 
 The Tcl template checks the %PDF- signature and asks Ghostscript to parse/render the PDF to the nullpage device. This checks basic readability; it does not certify page count, bookmark correctness, or visual completeness.
 
