@@ -1,12 +1,12 @@
 # Allegro PCB 启动、打开设计与关闭流程
 
-- 文档状态：远程文件选择、BRD 路径读取状态修正和活动设计验证已提交；自动开板待主机 B SPB 17.2 实机验收
+- 文档状态：**PASS（主机 B / Allegro 17.2 实机验证）**
 - 适用程序：AirBridge（主机 A 与主机 B 使用同一套代码）
-- 适用工具：Cadence Allegro PCB Designer
-- 设计文件：每次由主机 A 通过 RFS 远程浏览选择主机 B 上的 `.brd`
-- 当前开板方式：SKILL 启动脚本调用 `axlOpenDesign()` 交互式 API；不是 Batch API
-- 历史验证：此前启动 Allegro、手动打开 PCB、正常关闭及多次循环已由用户实机确认；本次自动开板改造尚待复测
-- 代码位置：仓库当前 main 分支的 airbridge_app.py、eda_engine.py、protocol.py
+- 适用工具：Cadence Allegro PCB Designer 17.2
+- 实测设计：`E:\RK3588智能盒子\RK3588_WX8116-PCB-V2T.brd`
+- 实测结果：主机 A 通过 RFS 选择 BRD；主机 B 正确读取路径，`axlOpenDesign()` 打开设计，`axlCurrentDesign()` 返回 `RK3588_WX8116-PCB-V2T`，PCB 编辑画面实际显示
+- 关闭：此前独立关闭按钮已由用户实机确认正常；本次截图专门验收远程选择和自动开板
+- 代码位置：仓库当前 `main` 分支的 `airbridge_app.py`、`eda_engine.py`、`protocol.py`
 
 ---
 
@@ -180,11 +180,11 @@ SKILL 会输出侧车文件是否打开、读取是否成功以及读取到的�
 
 参考：[Cadence Community：Allegro SKILL 文件读取示例](https://community.cadence.com/cadence_technology_forums/pcb-design/f/allegro-x-pcb-editor/24126/how-to-read-a-text-file-as-text-type)；[Cadence Community：SKILL 文件 I/O 指南](https://community.cadence.com/cadence_blogs_8/b/pcb/posts/guide-to-file-input-output-operations-in-allegro-skill)；[Cadence Community：axlOpenDesign / axlShell 注意事项](https://community.cadence.com/cadence_technology_forums/pcb-design/f/allegro-x-scripting-skill/47976/open-command-axlopendesign)。
 
-**本次已修正路径读取状态判断及路径尾部换行问题，并增加活动设计验证。仍需在主机 B 的 SPB 17.2 上重新运行，确认选中的 BRD 确实显示在 PCB Editor 中。**
+<badge>实机验收 PASS</badge> 用户在主机 B 的 Allegro 17.2 中确认：所选 BRD 已在 PCB Editor 中打开并显示板图。日志显示 `BRD sidecar opened = t`、`line read = t`、`axlCurrentDesign after open = "RK3588_WX8116-PCB-V2T"`，并输出 `interactive PCB design is now active`。
 
 ## 5. SKILL 执行完成后保持 Allegro 运行
 
-_run_allegro_skill() 会在 _task.il 的开板调用之前写入 _allegro_done.flag。此标记仅表示初始化脚本已到达开板阶段；由于 axlShell() 备用命令可能中断当前 SKILL，它不能作为 PCB 已成功打开的判据。
+_run_allegro_skill() 会在 _task.il 的开板调用之前写入 `_allegro_done.flag`。此标记仅表示初始化脚本已到达开板阶段，并不单独代表 PCB 已成功加载。实际开板状态由 `axlCurrentDesign()` 和 Allegro GUI 中显示的设计共同确认。
 
 _spawn_and_monitor() 启动进程时：
 
@@ -203,7 +203,7 @@ managed_processes["allegro"] = proc
 - 不退出 Allegro GUI；
 - 保留进程句柄，等待独立的关闭命令。
 
-此时所选 PCB 已由交互式 SKILL 首选 API 或备用命令尝试打开；用户必须在主机 B 的 Allegro 窗口中确认板图实际加载成功后，再进行编辑和保存。
+本次实机验收已确认所选 PCB 在主机 B 的 Allegro GUI 中实际加载成功；用户可在该窗口继续编辑和保存。
 
 ## 6. 从主机 A 远程选择 PCB 设计
 
@@ -341,7 +341,7 @@ Allegro 正常退出，清除受管进程记录
 
 - Allegro 仍处于运行状态时再次点击启动按钮，执行器会检测到已有受管进程并跳过重复启动。
 - Allegro 正常退出并清除进程记录后，可以重新启动。
-- 用户此前已实机确认“SKILL 启动 Allegro → 手动打开 PCB → 关闭 Allegro”可以多次循环正常运行。新的远程选择与交互式自动开板链路尚未完成实机验收。
+- 用户此前已确认 Allegro 的启动、手动开图和独立关闭可以多次循环。2026-11-10，用户进一步实机验收了新的 RFS 远程选择和自动开板流程：从主机 A 选择主机 B 的 BRD 后，Allegro 17.2 自动打开目标设计并显示板图，结果 PASS。
 
 ## 9. 关键实现位置
 
@@ -370,7 +370,7 @@ Allegro 正常退出，清除受管进程记录
 ## 10. 当前实现边界与注意事项
 
 1. **动态文件路径**：当前按钮不再写死 BRD 路径；每次通过主机 B 远程选择器选择 .brd，主机 B 会再次检查扩展名和文件存在性。
-2. **交互式开板待实机验收**：gets() 参数顺序已修正，并增加 axlCurrentDesign() 活动设计检查。需要在主机 B 的 SPB 17.2 上确认命令窗口读到的完整路径正确，且可见 GUI 中实际打开目标板图。BRD 路径中的非 ASCII 字符仍需能由主机 B 的 Windows ANSI 代码页表示。
+2. **交互式开板已通过实机验收**：主机 B 的 Allegro 17.2 已成功打开 `RK3588_WX8116-PCB-V2T.brd`，`axlCurrentDesign()` 返回预期设计名，GUI 中实际显示板图。路径侧车文件由 Windows ANSI 代码页写入；当前测试所用中文目录路径可正常工作。
 3. **没有自动保存功能**：关闭按钮只请求正常退出，不替用户选择保存或丢弃设计修改。
 4. **关闭范围有限**：关闭按钮只处理当前 AirBridge 实例跟踪的 Allegro 进程，不关闭用户手动启动的其他实例。
 5. **进程记录保存在内存中**：managed_processes 属于主机 B 当前 AirBridge 进程的内存状态。若 Allegro 尚未退出就重启主机 B 的 AirBridge，新实例不会自动继承旧进程句柄；此时不要假设关闭按钮仍能管理之前的实例。
@@ -379,4 +379,4 @@ Allegro 正常退出，清除受管进程记录
 
 ---
 
-**当前标准：主机 A 通过 RFS 选择主机 B 的 BRD 文件；AirBridge 将绝对路径传给主机 B，SKILL 按正确的 gets(variable port) 形式读取 BRD 路径，再调用 axlOpenDesign()，并用 axlCurrentDesign() 验证是否成功打开。Allegro 编辑与保存仍由用户操作，关闭仍由独立 AirBridge 命令完成。自动开板须经主机 B 实机验收后才能标记 PASS。**
+**当前标准：主机 A 通过 RFS 选择主机 B 的 BRD 文件；AirBridge 将绝对路径传给主机 B，SKILL 使用 `gets(variable port)` 正确读取路径，再调用 `axlOpenDesign()`，并通过 `axlCurrentDesign()` 确认活动设计。主机 B Allegro 17.2 已实机打开并显示指定 PCB，自动开板 PASS。Allegro 编辑与保存仍由用户操作，关闭仍由独立 AirBridge 命令完成。**
