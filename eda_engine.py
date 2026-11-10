@@ -908,7 +908,6 @@ class EDAExecutor:
       try:
         with open(brd_path_file, "w", encoding=path_encoding) as path_fp:
           path_fp.write(target_file)
-          path_fp.write("\n")
       except UnicodeEncodeError as exc:
         msg = (
             "[EDA Engine] BRD 路径包含当前 Windows ANSI 代码页无法表示的字符；"
@@ -924,10 +923,10 @@ class EDAExecutor:
           "let((ab_path_fp ab_target_file ab_read_ok ab_open_result)\n"
           '    ab_path_fp = infile("' + skill_path_file + '")\n'
           '    ab_target_file = ""\n'
-          "    ab_read_ok = if(ab_path_fp then gets(ab_target_file ab_path_fp) nil)\n"
+          "    when(ab_path_fp ab_read_ok = gets(ab_target_file ab_path_fp))\n"
           "    when(ab_path_fp close(ab_path_fp))\n"
           '    printf("AirBridge: BRD sidecar opened = %L, line read = %L\\n" '
-          "if(ab_path_fp t nil) ab_read_ok)\n"
+          "if(ab_path_fp t nil) if(ab_read_ok then t else nil))\n"
           '    printf("AirBridge: BRD path read from sidecar = %L\\n" ab_target_file)\n'
           "    ab_open_result = if(ab_read_ok && ab_target_file != \"\" then "
           "abOpenDesignInteractive(ab_target_file) nil)\n"
