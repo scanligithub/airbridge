@@ -54,8 +54,11 @@ def request_json(method: str, path: str, *, body=None, timeout=30):
             f"AirBridge returned non-JSON response ({response.status_code}): "
             f"{response.text[:500]}"
         )
-    if response.status_code >= 400 and not isinstance(payload, dict):
-        raise RuntimeError(f"AirBridge HTTP {response.status_code}: {payload}")
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"AirBridge returned an unexpected JSON type ({response.status_code}): "
+            f"{type(payload).__name__}"
+        )
     return payload
 
 
