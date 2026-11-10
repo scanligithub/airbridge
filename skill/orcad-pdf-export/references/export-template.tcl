@@ -122,7 +122,12 @@ proc ::AirBridgePdfExport::run {} {
         puts "\[PDF_EXPORT_ERROR\] $message"
         return 1
     }
-    DboDesign -this $design
+    if {[catch {DboDesign -this $design} err]} {
+        set message "Cannot bind active DboDesign object: $err"
+        catch {::AirBridgePdfExport::write_result "ERROR" "" 0 $message}
+        puts "\[PDF_EXPORT_ERROR\] $message"
+        return 1
+    }
     puts "\[PDF_EXPORT\] Active Capture design is available."
 
     if {[catch {package require OrHandlerPDFExport} err]} {
@@ -212,7 +217,7 @@ proc ::AirBridgePdfExport::run {} {
     # This catches truncated or structurally invalid PDFs without creating
     # another output file.
     if {[catch {
-        exec -- $gs_exe -sDEVICE=nullpage -dBATCH -dNOPAUSE -dSAFER $pdf_path
+        exec -- $gs_exe -sDEVICE=nullpage -dBATCH -dNOPAUSE -dSAFER $pdf_path 2>@1
     } gs_validation]} {
         set message "Ghostscript PDF validation failed: $gs_validation"
         catch {::AirBridgePdfExport::write_result "ERROR" $pdf_path $pdf_size $message}
