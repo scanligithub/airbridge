@@ -29,11 +29,20 @@ Body:
   "hint": "agent_auto.tcl",
   "version": "auto",
   "target_file": "",
-  "timeout": 60
+  "timeout": 60,
+  "keep_open": false
 }
 ```
 
 Response: `{"status":"submitted","hint":"...","version":"..."}`
+
+
+
+Field semantics:
+
+- target_file: optional absolute path on host B. For OrCAD Tcl, a .dsn target is passed as a native capture.exe command-line argument so Capture opens the design before the capAutoLoad Tcl hook runs. For Allegro SKILL, .brd is passed to the Allegro startup path.
+- keep_open: optional boolean, default false. When false, the EDA runner requests graceful WM_CLOSE after the task script reaches its completion marker. When true, the GUI remains open and its managed process is retained for a later close request through the AirBridge GUI/protocol.
+- A response with status: submitted is only an acknowledgement. Read streamed EDA logs or a task-specific RFS result marker to determine the actual outcome.
 
 ## Filesystem
 
