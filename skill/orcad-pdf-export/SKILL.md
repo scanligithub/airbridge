@@ -38,11 +38,13 @@ Key rules:
 
 ## Prerequisites
 
-1. OrCAD Capture / Cadence SPB installed (tested target: SPB 17.2).
+1. OrCAD Capture / Cadence SPB installed (target version: SPB 17.2).
 2. The selected DSN exists and is not simultaneously open in another Capture instance. Close any pre-existing Capture session first.
 3. Ghostscript 64-bit CLI exists, typically gswin64c.exe.
 4. An OrCAD PostScript printer is installed. The expected 17.2 name is often OrCADPS_17.2; confirm the exact printer name on host B.
 5. AirBridge is running on both hosts, serial is connected, and host A exposes http://127.0.0.1:8888.
+
+If the DSN path is not known, use RFS drives and directory listing on host B to find .dsn candidates. Show the candidate paths to the user and obtain the intended design before submitting the export. Do not search the local host-A filesystem or open the DSN through Tcl.
 
 Quick health check:
 
@@ -87,6 +89,8 @@ python .\skill\orcad-pdf-export\scripts\submit_export.py --dsn "E:\Projects\Exam
 The helper checks Cadence availability, verifies the DSN and Ghostscript with RFS, creates the output directory, uploads a per-job UTF-8 config sidecar, submits Tcl with target_file and keep_open=false, polls the result marker, and verifies the final PDF size. If the host-B EDA workspace was overridden with AIRBRIDGE_WORKSPACE_DIR, pass the same value through --workspace. The default is E:\\_airbridge_temp.
 
 The Tcl template checks the %PDF- signature and asks Ghostscript to parse/render the PDF to the nullpage device. This checks basic readability; it does not certify page count, bookmark correctness, or visual completeness.
+
+Implementation status: the Capture-native open, active-design lookup, PDF export, result polling, and graceful-close path are wired together in this Skill. The complete PDF export flow still requires an end-to-end run on the target host-B SPB 17.2 installation before it can be marked PASS.
 
 ### 3. Close behavior
 
