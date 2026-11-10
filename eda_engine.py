@@ -885,7 +885,7 @@ class EDAExecutor:
       path_encoding = "mbcs" if sys.platform == "win32" else "utf-8"
       with open(brd_path_file, "w", encoding=path_encoding) as path_fp:
         path_fp.write(target_file)
-        path_fp.write("\\n")
+        path_fp.write("\n")
 
       norm_brd_path_file = brd_path_file.replace("\\", "/")
       skill_path_file = norm_brd_path_file.replace('"', '\\"')
