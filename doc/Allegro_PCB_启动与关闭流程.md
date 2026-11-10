@@ -1,6 +1,6 @@
 # Allegro PCB 启动、打开设计与关闭流程
 
-- 文档状态：远程文件选择与 BRD 路径传递已实现；交互式自动开板待主机 B 实机验收
+- 文档状态：远程文件选择、BRD 路径读取状态修正和活动设计验证已提交；自动开板待主机 B SPB 17.2 实机验收
 - 适用程序：AirBridge（主机 A 与主机 B 使用同一套代码）
 - 适用工具：Cadence Allegro PCB Designer
 - 设计文件：每次由主机 A 通过 RFS 远程浏览选择主机 B 上的 `.brd`
@@ -154,44 +154,33 @@ allegro.exe -s "_run.scr"
 
 ### 4.1 从路径侧车文件读取 BRD
 
-由于远程选择的路径可能包含中文目录名，主机 B 不把 BRD 路径直接嵌入 UTF-8 的 _task.il。执行器将完整路径写入 _allegro_target_brd_path.txt，Windows 上使用系统 ANSI 代码页写入。
+由于远程选择的路径可能包含中文目录名，主机 B 不把 BRD 路径直接嵌入 UTF-8 的 _task.il。执行器将完整路径写入 _allegro_target_brd_path.txt，Windows 上使用系统 ANSI 代码页写入。当前侧车文件只写入路径本身，不再附加行尾换行符。
 
-SKILL 从该文件读取路径。这里必须遵循 Cadence gets 的参数顺序：**接收字符串的变量在前，输入端口在后**。
+SKILL 使用 gets 的标准文件读取方式：接收字符串的变量放在第一个参数，输入端口放在第二个参数：
 
 ~~~skill
 ab_path_fp = infile("E:/_airbridge_temp/_allegro_target_brd_path.txt")
 ab_target_file = ""
-ab_read_ok = if(ab_path_fp then gets(ab_target_file ab_path_fp) nil)
+when(ab_path_fp ab_read_ok = gets(ab_target_file ab_path_fp))
 when(ab_path_fp close(ab_path_fp))
 ~~~
 
-之前的代码误写成 gets(ab_path_fp)，把文件端口当成接收字符串的变量，无法正确取得所选 BRD 路径。这是本次截图中开板失败的直接代码缺陷，已在 fa307b6 中修正。
+上一版代码虽然已使用正确的 gets 参数顺序，但将它写在 `if(ab_path_fp then gets(...) nil)` 中，尾随的 nil 把赋值表达式的最终结果覆盖为 nil。截图中 `BRD path read from sidecar` 已显示路径内容，而 `line read = nil`，证明路径本身读到了，只是状态变量被错误写成 nil，导致后续开板调用被跳过。这次改为 `when(ab_path_fp ab_read_ok = gets(...))`，并删除侧车文件末尾的换行，避免目标路径附带换行字符。
 
-### 4.2 验证路径后调用交互式开板 API
+### 4.2 路径与开板结果验证
 
-路径读取后，SKILL 会依次输出：
+SKILL 会输出侧车文件是否打开、读取是否成功以及读取到的完整路径。随后 `abOpenDesignInteractive()`：
 
-- 侧车文件是否成功打开；
-- gets 是否成功读取一行；
-- 实际读取到的 BRD 路径；
-- isFile() 对该路径的存在性检查结果。
+1. 使用 `isFile(brdPath)` 检查该路径是否为主机 B 上的真实文件；
+2. 调用 `axlOpenDesign(?design brdPath ?mode "wf")` 尝试在当前交互式 Allegro GUI 中打开；
+3. 调用 `axlCurrentDesign()` 检查当前 Allegro 会话是否已有活动设计；
+4. 只有活动设计检查通过，才输出 `interactive PCB design is now active`；否则输出明确错误。
 
-随后调用：
+这里不再使用 `axlOpenDesignForBatch()`，也不再将 `axlShell("open ...")` 作为自动备用方式。Cadence 社区提醒，`axlShell()` 提交交互命令可能中断当前正在运行的 SKILL 函数，容易令控制流程和完成状态产生歧义。
 
-~~~skill
-axlOpenDesign(?design brdPath ?mode "wf")
-~~~
+参考：[Cadence Community：Allegro SKILL 文件读取示例](https://community.cadence.com/cadence_technology_forums/pcb-design/f/allegro-x-pcb-editor/24126/how-to-read-a-text-file-as-text-type)；[Cadence Community：SKILL 文件 I/O 指南](https://community.cadence.com/cadence_blogs_8/b/pcb/posts/guide-to-file-input-output-operations-in-allegro-skill)；[Cadence Community：axlOpenDesign / axlShell 注意事项](https://community.cadence.com/cadence_technology_forums/pcb-design/f/allegro-x-scripting-skill/47976/open-command-axlopendesign)。
 
-Cadence 社区的交互式开板示例确认了这一调用形式；axlOpenDesignForBatch() 是批处理入口，不用于本流程的交互式 GUI 开板。
-
-执行器不再仅凭 axlOpenDesign() 的返回值判断开板结果，而是在调用后检查 axlCurrentDesign()：
-
-- axlCurrentDesign() 返回当前设计名称：报告交互式设计已激活；
-- 没有活动设计：输出明确错误，说明 BRD 尚未在当前 Allegro GUI 中打开。
-
-参考：[Cadence Community：axlOpenDesign GUI 开板示例](https://community.cadence.com/cadence_technology_forums/pcb-design/f/allegro-x-pcb-editor/8074/overide-a-blocker-function/11925)；[Cadence Community：Open command, axlOpenDesign](https://community.cadence.com/cadence_technology_forums/pcb-design/f/allegro-x-scripting-skill/47976/open-command-axlopendesign)。
-
-**本次修复已纠正 SKILL 路径读取接口并增加活动设计验证；仍需在主机 B 的 SPB 17.2 上重新运行，确认选中的 BRD 确实显示在 PCB Editor 中。**
+**本次已修正路径读取状态判断及路径尾部换行问题，并增加活动设计验证。仍需在主机 B 的 SPB 17.2 上重新运行，确认选中的 BRD 确实显示在 PCB Editor 中。**
 
 ## 5. SKILL 执行完成后保持 Allegro 运行
 
