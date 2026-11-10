@@ -41,3 +41,6 @@ The HTTP response is only a submission acknowledgement (status: submitted), not 
 - POST /api/v1/fs/pull — optionally transfer the PDF back to host A.
 
 On timeout or a missing marker, read E:\_airbridge_temp\_cadence_stdout.log and E:\_airbridge_temp\_bootstrap.tcl via RFS. Shell and EDA command results may also appear in the AirBridge console logs.
+
+
+The helper stores per-job config and result marker files in the AirBridge EDA workspace (default E:\\_airbridge_temp). If AIRBRIDGE_WORKSPACE_DIR is configured on host B, pass the same remote path with the submitter's --workspace option. The workspace path must be absolute and ASCII-only because its marker filename is embedded in the Tcl source.
