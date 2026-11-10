@@ -141,7 +141,7 @@ if target_file:
 因此实际启动形式为：
 
 ```powershell
-D:\\\\Cadence\\\\SPB_17.2\\\\tools\\\\bin\\\\capture.exe "<主机 B 远程选择器返回的完整 DSN 路径>"
+D:\Cadence\SPB_17.2\tools\bin\capture.exe "<主机 B 远程选择器返回的完整 DSN 路径>"
 ```
 
 由 Capture 自己解析 DSN 启动参数并打开设计。这里不通过 Tcl Dbo 的 `GetDesignAndSchematics` 或 Tcl GUI `Open` 命令代替原生开图。
