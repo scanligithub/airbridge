@@ -44,52 +44,16 @@ import serial
 import serial.tools.list_ports
 
 BUILTIN_TEST_ORCAD_TCL = """puts "=============================================="
-puts ">>> AirBridge OrCAD Capture Delayed Open Test <<<"
+puts ">>> AirBridge OrCAD Capture Bootstrap Test <<<"
 puts "System Time: [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]"
 if {[info exists ::AIRBRIDGE_SPB_VER]} {
     puts "Active SPB Version : $::AIRBRIDGE_SPB_VER (Tcl $::tcl_version)"
 }
 puts "Current CDSROOT    : [expr {[info exists ::env(CDSROOT)] ? $::env(CDSROOT) : {N/A}}]"
 puts "Current Working Dir: [pwd]"
-
-# Host-B local design path.
-set dsn_path {E:/_airbridge_temp/RK3588_PDF_Output/RK3588_WX8116-SCH-V2T.DSN}
-puts "Target DSN         : $dsn_path"
-
-# Wait for Capture startup and Project Manager initialization to complete.
-# Keep this script active while waiting so the runner can capture all output.
-set ::AirBridgeOpenDone 0
-set ::AirBridgeOpenStatus 1
-set ::AirBridgeOpenError ""
-
-proc ::AirBridgeOpenTargetDsn {} {
-    global dsn_path
-    if {![file exists $dsn_path]} {
-        set ::AirBridgeOpenError "DSN file does not exist on host B: $dsn_path"
-        puts "ERROR: $::AirBridgeOpenError"
-        set ::AirBridgeOpenStatus 1
-    } else {
-        puts "DSN file exists; Capture startup delay elapsed (5000 ms)."
-        puts "Asking Capture to open the design..."
-        if {[catch {Open $dsn_path} ::AirBridgeOpenError]} {
-            puts "ERROR: Capture Open command failed: $::AirBridgeOpenError"
-            set ::AirBridgeOpenStatus 1
-        } else {
-            puts "Capture Open command returned without a Tcl error."
-            set ::AirBridgeOpenStatus 0
-        }
-    }
-    set ::AirBridgeOpenDone 1
-}
-
-after 5000 ::AirBridgeOpenTargetDsn
-vwait ::AirBridgeOpenDone
-
-if {$::AirBridgeOpenStatus != 0} {
-    error $::AirBridgeOpenError
-}
-
-puts "OrCAD Capture Tcl Delayed Open Test: Tcl command PASS"
+puts "Capture Tcl bootstrap loaded successfully."
+puts "The DSN design is supplied through capture.exe command-line arguments."
+puts "OrCAD Capture Bootstrap Test: PASS"
 puts "=============================================="
 """
 
@@ -1676,12 +1640,17 @@ class AirBridgeMainWindow(QMainWindow):
     self.txt_eda_editor.setText(BUILTIN_TEST_ORCAD_TCL)
     self.current_hint = "builtin_test.tcl"
     ver = self.combo_eda_ver.currentData()
+    dsn_path = r"E:\\_airbridge_temp\\RK3588_PDF_Output\\RK3588_WX8116-SCH-V2T.DSN"
     self.append_log(
         "INFO",
-        f"【打开原理图】已装载 Capture Tcl 开图脚本 (目标版本: {ver})，正在下发...",
+        f"【打开原理图】将通过 Capture 启动参数打开 DSN (目标版本: {ver})，正在下发...",
     )
     self._dispatch_script(
-        BUILTIN_TEST_ORCAD_TCL, self.current_hint, ver, keep_open=True
+        BUILTIN_TEST_ORCAD_TCL,
+        self.current_hint,
+        ver,
+        keep_open=True,
+        target_file=dsn_path,
     )
 
   def trigger_builtin_allegro_test(self):
@@ -1745,6 +1714,7 @@ class AirBridgeMainWindow(QMainWindow):
       hint_name: str,
       version: str = "auto",
       keep_open: bool = False,
+      target_file: str = "",
   ):
     payload = json.dumps(
         {
@@ -1752,6 +1722,7 @@ class AirBridgeMainWindow(QMainWindow):
             "hint": hint_name,
             "version": version,
             "keep_open": keep_open,
+            "target_file": target_file,
         }
     ).encode("utf-8")
     self.worker.send_frame(FrameType.EDA_TASK_SUBMIT, payload)
