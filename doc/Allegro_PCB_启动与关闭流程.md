@@ -152,51 +152,46 @@ allegro.exe -s "_run.scr"
 
 ## 4. 交互式自动打开 PCB
 
-eda_engine.py 新增 abOpenDesignInteractive()。它优先使用交互式设计 API axlOpenDesign()；若没有返回设计对象，则退回 Allegro 的普通 open "文件路径" 命令：
+### 4.1 从路径侧车文件读取 BRD
+
+由于远程选择的路径可能包含中文目录名，主机 B 不把 BRD 路径直接嵌入 UTF-8 的 _task.il。执行器将完整路径写入 _allegro_target_brd_path.txt，Windows 上使用系统 ANSI 代码页写入。
+
+SKILL 从该文件读取路径。这里必须遵循 Cadence gets 的参数顺序：**接收字符串的变量在前，输入端口在后**。
 
 ~~~skill
-procedure(abOpenDesignInteractive(brdPath)
-    let((openResult openValue shellCommand shellResult)
-        openResult = nil
-        openValue = nil
-        if(isCallable('axlOpenDesign) then
-            openResult = errset(
-                axlOpenDesign(?design brdPath ?mode "wf")
-                t
-            )
-        )
-        when(openResult
-            openValue = car(openResult)
-        )
-        if(openValue then
-            progn(
-                printf("AirBridge: axlOpenDesign opened the selected BRD.\n")
-                openValue
-            )
-        else
-            progn(
-                shellCommand = sprintf(nil "open \"%s\"" brdPath)
-                printf("AirBridge: trying Allegro open command.\n")
-                shellResult = errset(axlShell(shellCommand) t)
-                if(shellResult car(shellResult) nil)
-            )
-        )
-    )
-)
+ab_path_fp = infile("E:/_airbridge_temp/_allegro_target_brd_path.txt")
+ab_target_file = ""
+ab_read_ok = if(ab_path_fp then gets(ab_target_file ab_path_fp) nil)
+when(ab_path_fp close(ab_path_fp))
 ~~~
 
-本流程有两个不同的打开尝试：
+之前的代码误写成 gets(ab_path_fp)，把文件端口当成接收字符串的变量，无法正确取得所选 BRD 路径。这是本次截图中开板失败的直接代码缺陷，已在 fa307b6 中修正。
 
-1. **首选 API**：调用 axlOpenDesign(?design brdPath ?mode "wf")，目标是直接在当前交互式 Allegro GUI 中打开设计。
-2. **备用命令**：如果 API 调用报错或没有返回设计对象，使用 sprintf() 把路径拼接为 open "完整路径"，再通过 axlShell() 提交给 Allegro 命令解释器。
+### 4.2 验证路径后调用交互式开板 API
 
-Cadence 社区明确提醒，axlShell() 提交交互式命令时可能终止当前正在运行的 SKILL 函数；因此它只能作为最后一步使用。当前实现会在开板代码之前先写入 _allegro_done.flag，确保即便备用命令中断 SKILL，AirBridge 也不会持续等待脚本完成。该标记代表启动脚本已到达开板阶段，**不代表 BRD 已经成功加载**。
+路径读取后，SKILL 会依次输出：
 
-BRD 路径通过 _allegro_target_brd_path.txt 侧车文件传给 SKILL。主机 B 的 Windows 环境使用系统 ANSI 代码页（Python mbcs）写入；若所选路径含有当前代码页无法表示的字符，执行器会在启动 Allegro 前报告错误并取消本次启动。SKILL 从侧车文件读取路径后再调用开板函数，避免把中文路径直接嵌入 UTF-8 .il 源码。
+- 侧车文件是否成功打开；
+- gets 是否成功读取一行；
+- 实际读取到的 BRD 路径；
+- isFile() 对该路径的存在性检查结果。
 
-Cadence 17.2 的历史修复清单曾列出 axlOpenDesign() 行为异常，因此保留备用命令是有意的兼容措施。参考：[Cadence Community：Open command, axlOpenDesign](https://community.cadence.com/cadence_technology_forums/pcb-design/f/allegro-x-scripting-skill/47976/open-command-axlopendesign/1374137)；[SPB 17.2 历史修复清单（含 CCR 1663819）](https://electronix.ru/forum/topic/138247-vyshel-hotfiks-orcadallegro-172/)。
+随后调用：
 
-**注意：首选 API 和备用命令都尚未在当前主机 B 的 SPB 17.2 安装上实机验收。必须确认 .brd 最终显示在交互式 Allegro GUI 中，才能将自动开板标记为 PASS。**
+~~~skill
+axlOpenDesign(?design brdPath ?mode "wf")
+~~~
+
+Cadence 社区的交互式开板示例确认了这一调用形式；axlOpenDesignForBatch() 是批处理入口，不用于本流程的交互式 GUI 开板。
+
+执行器不再仅凭 axlOpenDesign() 的返回值判断开板结果，而是在调用后检查 axlCurrentDesign()：
+
+- axlCurrentDesign() 返回当前设计名称：报告交互式设计已激活；
+- 没有活动设计：输出明确错误，说明 BRD 尚未在当前 Allegro GUI 中打开。
+
+参考：[Cadence Community：axlOpenDesign GUI 开板示例](https://community.cadence.com/cadence_technology_forums/pcb-design/f/allegro-x-pcb-editor/8074/overide-a-blocker-function/11925)；[Cadence Community：Open command, axlOpenDesign](https://community.cadence.com/cadence_technology_forums/pcb-design/f/allegro-x-scripting-skill/47976/open-command-axlopendesign)。
+
+**本次修复已纠正 SKILL 路径读取接口并增加活动设计验证；仍需在主机 B 的 SPB 17.2 上重新运行，确认选中的 BRD 确实显示在 PCB Editor 中。**
 
 ## 5. SKILL 执行完成后保持 Allegro 运行
 
@@ -386,7 +381,7 @@ Allegro 正常退出，清除受管进程记录
 ## 10. 当前实现边界与注意事项
 
 1. **动态文件路径**：当前按钮不再写死 BRD 路径；每次通过主机 B 远程选择器选择 .brd，主机 B 会再次检查扩展名和文件存在性。
-2. **交互式开板待实机验收**：先尝试 axlOpenDesign()，无设计对象返回时再尝试 axlShell("open ...")。两种方式都需在主机 B 的 SPB 17.2 上确认可见 GUI 中实际打开了目标板图；检查命令窗口日志。还需确保 BRD 路径中的非 ASCII 字符能由主机 B 的 Windows ANSI 代码页表示。
+2. **交互式开板待实机验收**：gets() 参数顺序已修正，并增加 axlCurrentDesign() 活动设计检查。需要在主机 B 的 SPB 17.2 上确认命令窗口读到的完整路径正确，且可见 GUI 中实际打开目标板图。BRD 路径中的非 ASCII 字符仍需能由主机 B 的 Windows ANSI 代码页表示。
 3. **没有自动保存功能**：关闭按钮只请求正常退出，不替用户选择保存或丢弃设计修改。
 4. **关闭范围有限**：关闭按钮只处理当前 AirBridge 实例跟踪的 Allegro 进程，不关闭用户手动启动的其他实例。
 5. **进程记录保存在内存中**：managed_processes 属于主机 B 当前 AirBridge 进程的内存状态。若 Allegro 尚未退出就重启主机 B 的 AirBridge，新实例不会自动继承旧进程句柄；此时不要假设关闭按钮仍能管理之前的实例。
@@ -395,4 +390,4 @@ Allegro 正常退出，清除受管进程记录
 
 ---
 
-**当前标准：主机 A 通过 RFS 选择主机 B 的 BRD 文件；AirBridge 将绝对路径传给主机 B，Allegro 启动后先尝试 axlOpenDesign()，必要时退回命令窗口 open。Allegro 编辑与保存仍由用户操作，关闭仍由独立 AirBridge 命令完成。自动开板须经主机 B 实机验收后才能标记 PASS。**
+**当前标准：主机 A 通过 RFS 选择主机 B 的 BRD 文件；AirBridge 将绝对路径传给主机 B，SKILL 按正确的 gets(variable port) 形式读取 BRD 路径，再调用 axlOpenDesign()，并用 axlCurrentDesign() 验证是否成功打开。Allegro 编辑与保存仍由用户操作，关闭仍由独立 AirBridge 命令完成。自动开板须经主机 B 实机验收后才能标记 PASS。**
