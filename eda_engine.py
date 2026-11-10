@@ -704,6 +704,16 @@ class EDAExecutor:
       target_file: str = "",
       keep_open: bool = False,
   ) -> Tuple[int, str]:
+    if target_file:
+      if os.path.splitext(target_file)[1].lower() != ".dsn":
+        msg = f"[EDA Engine] Capture 目标文件必须是 .dsn 文件: {target_file}"
+        log_callback(msg)
+        return -1, msg
+      if not os.path.isfile(target_file):
+        msg = f"[EDA Engine] 主机 B 上找不到所选原理图文件: {target_file}"
+        log_callback(msg)
+        return -1, msg
+
     cdsroot = ver_info["cdsroot"] if ver_info else ""
     ver_str = ver_info["version"] if ver_info else "unknown"
     capture_exe = (
