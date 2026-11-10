@@ -876,13 +876,27 @@ class EDAExecutor:
     # alive for the later independent close command.
     norm_done = done_flag.replace("\\", "/")
     if target_file:
-      # Use forward slashes in the SKILL string so Windows backslashes are
-      # not interpreted as escape sequences. Escape the remaining quote char.
-      skill_target = target_file.replace("\\", "/").replace('"', '\\"')
+      # Keep non-ASCII project paths out of the generated UTF-8 SKILL source.
+      # The path sidecar uses the Windows ANSI code page expected by the
+      # Allegro 17.2 process, while the SKILL script itself remains ASCII.
+      brd_path_file = os.path.join(
+          self.workspace_dir, "_allegro_target_brd_path.txt"
+      )
+      path_encoding = "mbcs" if sys.platform == "win32" else "utf-8"
+      with open(brd_path_file, "w", encoding=path_encoding) as path_fp:
+        path_fp.write(target_file)
+        path_fp.write("\\n")
+
+      norm_brd_path_file = brd_path_file.replace("\\", "/")
+      skill_path_file = norm_brd_path_file.replace('"', '\\"')
       script_content += (
           "\n\n;; AirBridge interactive PCB open\n"
-          "let((ab_open_result)\n"
-          '    ab_open_result = abOpenDesignInteractive("' + skill_target + '")\n'
+          "let((ab_path_fp ab_target_file ab_open_result)\n"
+          '    ab_path_fp = infile("' + skill_path_file + '")\n'
+          "    ab_target_file = if(ab_path_fp then gets(ab_path_fp) nil)\n"
+          "    when(ab_path_fp close(ab_path_fp))\n"
+          "    ab_open_result = if(ab_target_file then "
+          "abOpenDesignInteractive(ab_target_file) nil)\n"
           "    if(ab_open_result then\n"
           '        printf("AirBridge: interactive PCB open API returned success.\\n")\n'
           "    else\n"
