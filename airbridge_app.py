@@ -1640,7 +1640,7 @@ class AirBridgeMainWindow(QMainWindow):
     self.txt_eda_editor.setText(BUILTIN_TEST_ORCAD_TCL)
     self.current_hint = "builtin_test.tcl"
     ver = self.combo_eda_ver.currentData()
-    dsn_path = r"E:\\_airbridge_temp\\RK3588_PDF_Output\\RK3588_WX8116-SCH-V2T.DSN"
+    dsn_path = r"E:\_airbridge_temp\RK3588_PDF_Output\RK3588_WX8116-SCH-V2T.DSN"
     self.append_log(
         "INFO",
         f"【打开原理图】将通过 Capture 启动参数打开 DSN (目标版本: {ver})，正在下发...",
