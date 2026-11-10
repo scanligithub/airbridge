@@ -121,8 +121,12 @@ def main():
     args = parser.parse_args()
 
     dsn_path = args.dsn.strip()
+    if not PureWindowsPath(dsn_path).is_absolute():
+        raise SystemExit("--dsn must be an absolute Windows path on host B.")
     if PureWindowsPath(dsn_path).suffix.lower() != ".dsn":
         raise SystemExit("--dsn must point to a .dsn file on host B.")
+    if not PureWindowsPath(args.gs.strip()).is_absolute():
+        raise SystemExit("--gs must be an absolute Windows path on host B.")
     if not args.gs.strip().lower().endswith(".exe"):
         raise SystemExit("--gs must point to gswin64c.exe on host B.")
     if args.timeout < 30 or args.wait_timeout < args.timeout:
@@ -144,6 +148,8 @@ def main():
     ps_driver = args.ps_driver.strip()
     if not out_dir or not ps_driver:
         raise SystemExit("--out-dir and --ps-driver cannot be empty.")
+    if not PureWindowsPath(out_dir).is_absolute():
+        raise SystemExit("--out-dir must be an absolute Windows path on host B.")
 
     # 1. Verify AirBridge and the selected remote inputs.
     health = request_json("GET", "/api/v1/eda/versions", timeout=20)
@@ -180,6 +186,8 @@ def main():
     workspace = args.workspace.strip()
     if not workspace:
         raise SystemExit("--workspace cannot be empty.")
+    if not PureWindowsPath(workspace).is_absolute():
+        raise SystemExit("--workspace must be an absolute Windows path on host B.")
     try:
         workspace.encode("ascii")
     except UnicodeEncodeError:
@@ -241,11 +249,13 @@ def main():
     result_data = None
     while time.monotonic() < deadline:
         result_data = read_remote_result(result_file)
-        if result_data and "STATUS" in result_data:
+        required_result_fields = {"STATUS", "PDF_PATH", "PDF_SIZE", "MESSAGE"}
+        if result_data and required_result_fields.issubset(result_data):
             break
         time.sleep(max(0.5, args.poll_interval))
 
-    if not result_data:
+    required_result_fields = {"STATUS", "PDF_PATH", "PDF_SIZE", "MESSAGE"}
+    if not result_data or not required_result_fields.issubset(result_data):
         log_path = str(PureWindowsPath(workspace) / "_cadence_stdout.log")
         log_data = request_json(
             "POST", "/api/v1/fs/read",
