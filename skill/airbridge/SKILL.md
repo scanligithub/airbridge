@@ -125,7 +125,9 @@ curl -s -X POST http://127.0.0.1:8888/api/v1/eda/execute \
     "script": "puts \"hello from OrCAD\"",
     "hint": "agent_auto.tcl",
     "version": "auto",
-    "timeout": 60
+    "target_file": "",
+    "timeout": 60,
+    "keep_open": false
   }'
 ```
 
@@ -133,7 +135,10 @@ curl -s -X POST http://127.0.0.1:8888/api/v1/eda/execute \
 - Skill-style content / `.il` style → Allegro SKILL path
 - `version`: `"auto"` or a known SPB version string such as `"17.2"`
 
-Logs stream back to the AirBridge console. Bootstrap and stdout on B often live under:
+Logs stream back to the AirBridge console.
+
+For OrCAD Capture startup, pass the host-B .dsn path as target_file so Capture opens the design natively before Tcl runs. keep_open=false uses AirBridge's automatic graceful close after the Tcl task; use keep_open=true only when the caller explicitly needs the GUI left open. status: submitted is not task success; use streamed logs or an RFS result marker.
+ Bootstrap and stdout on B often live under:
 
 - `E:\_airbridge_temp\_bootstrap.tcl`
 - `E:\_airbridge_temp\_cadence_stdout.log`
