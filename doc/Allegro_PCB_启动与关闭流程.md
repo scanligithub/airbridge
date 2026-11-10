@@ -1,10 +1,11 @@
 # Allegro PCB 启动、打开设计与关闭流程
 
-- 文档状态：当前代码实现说明 / 用户已完成多次实机循环验证
+- 文档状态：远程文件选择与 BRD 路径传递已实现；交互式自动开板待主机 B 实机验收
 - 适用程序：AirBridge（主机 A 与主机 B 使用同一套代码）
 - 适用工具：Cadence Allegro PCB Designer
-- 设计文件：由用户在主机 B 的 Allegro 界面中手动选择并打开；当前按钮没有固定 .brd 路径
-- 验证流程：主机 A 启动 Allegro → 主机 B 手动打开 PCB → 主机 A 关闭 Allegro；用户已确认该流程可以多次循环正常执行
+- 设计文件：每次由主机 A 通过 RFS 远程浏览选择主机 B 上的 `.brd`
+- 当前开板方式：SKILL 启动脚本调用 `axlOpenDesign()` 交互式 API；不是 Batch API
+- 历史验证：此前启动 Allegro、手动打开 PCB、正常关闭及多次循环已由用户实机确认；本次自动开板改造尚待复测
 - 代码位置：仓库当前 main 分支的 airbridge_app.py、eda_engine.py、protocol.py
 
 ---
@@ -13,8 +14,8 @@
 
 Allegro 的生命周期分为三个相互独立的步骤：
 
-1. **启动 Allegro**：主机 A 点击「打开PCB（Allegro）」，AirBridge 在主机 B 启动 Allegro，并通过启动脚本加载 SKILL 探针。
-2. **打开 PCB 设计**：Allegro 启动并完成探针后保持运行；用户在主机 B 的 Allegro 界面中手动打开所需的 .brd 文件。
+1. **选择 PCB 设计**：主机 A 使用 RFS 远程浏览主机 B 的目录，选择 `.brd` 文件并取得主机 B 的绝对路径。
+2. **启动并打开 PCB**：AirBridge 将该路径作为 `target_file` 传给主机 B；Allegro 启动后加载 SKILL 探针，并调用交互式 `axlOpenDesign()` 打开所选设计。
 3. **关闭 Allegro**：主机 A 点击「关闭PCB（Allegro）」，AirBridge 通知主机 B 对本次由 AirBridge 启动并跟踪的 Allegro 进程发送正常关闭请求。
 
 需要坚持以下原则：
@@ -22,8 +23,8 @@ Allegro 的生命周期分为三个相互独立的步骤：
 - 主机 A 负责按钮操作和 AirBridge 通信，不直接操作主机 B 的 Cadence GUI。
 - Allegro 实际运行在主机 B；PCB 设计文件由主机 B 本地打开。
 - SKILL 探针用于确认 Allegro 已启动、SKILL 环境可执行，并输出版本及环境信息。
-- **当前启动按钮只启动 Allegro，不会自动打开 .brd 文件。**
-- 用户打开、编辑和保存 PCB 的操作仍在主机 B 的 Allegro 界面中完成。
+- **当前启动按钮先要求用户从主机 B 远程选择 `.brd` 文件，再下发启动任务。**
+- 用户仍在主机 B 的 Allegro GUI 中编辑和保存 PCB；文件选择发生在主机 A。
 - 启动探针完成不等于关闭 Allegro。通过 keep_open=True 保持 GUI 运行，等待独立关闭命令。
 - 正常关闭使用 Windows WM_CLOSE；不把强制结束进程作为正常关闭方式。
 - Allegro 和 Capture 的受管进程分别记录，关闭命令按应用类型区分。
@@ -37,12 +38,15 @@ Allegro 的生命周期分为三个相互独立的步骤：
 - 打开PCB（Allegro）
 - 关闭PCB（Allegro）
 
-点击启动按钮后，调用链从 trigger_builtin_allegro_test() 开始。该函数执行以下操作：
+点击启动按钮后，调用链从 `trigger_builtin_allegro_test()` 开始。该函数先调用 `_browse_remote_eda_file("allegro", [".brd"])`，打开远程文件选择器。用户选择文件后才继续：
 
-1. 将内置 SKILL 探针 BUILTIN_TEST_ALLEGRO_SKILL 放入脚本编辑区。
-2. 将提示文件名设为 builtin_test.il。
+1. 将内置 SKILL 探针 `BUILTIN_TEST_ALLEGRO_SKILL` 放入脚本编辑区。
+2. 将提示文件名设为 `builtin_test.il`。
 3. 读取当前选择的 Cadence 版本。
-4. 调用 _dispatch_script(..., keep_open=True) 下发脚本。
+4. 设置 `keep_open=True`，并将所选 BRD 绝对路径作为 `target_file`。
+5. 调用 `_dispatch_script(...)` 下发脚本和路径。
+
+目录浏览复用 RFS 的 `drives` 与 `ls` 请求，不下载 PCB 文件。
 
 当前内置 SKILL 探针主要输出：
 
@@ -52,7 +56,7 @@ Allegro 的生命周期分为三个相互独立的步骤：
 - 当前 CDSROOT；
 - SKILL 检查通过信息。
 
-探针**不包含打开 PCB 设计文件的调用**。
+探针自身只负责环境检查；`_run_allegro_skill()` 会在探针之后追加由 `target_file` 生成的交互式开板调用。
 
 ### 2.2 下发的任务载荷
 
@@ -64,15 +68,15 @@ _dispatch_script() 将任务序列化为 JSON，并通过 FrameType.EDA_TASK_SUB
   "hint": "builtin_test.il",
   "version": "<当前选择的 Cadence 版本>",
   "keep_open": true,
-  "target_file": ""
+  "target_file": "<主机 B 远程选择器返回的绝对 BRD 路径>"
 }
 ~~~
 
 说明：
 
-- keep_open=true 是启动后保持 Allegro GUI 的关键参数。
-- 当前 Allegro 启动按钮没有设置 target_file，因此该字段为空。
-- 即使其他任务载荷包含 target_file，当前 execute_script() 的 Allegro 分支也没有把它传入 _run_allegro_skill()；不能据此认为当前已实现 .brd 自动开图。
+- `keep_open=true` 是启动后保持 Allegro GUI 的关键参数。
+- 当前 Allegro 启动按钮将选择器返回的 BRD 绝对路径写入 `target_file`。
+- `execute_script()` 将 `target_file` 传入 `_run_allegro_skill()`；执行器会在主机 B 检查 `.brd` 扩展名和文件存在性，再构造交互式开板 SKILL 调用。
 
 ## 3. 主机 B：接收任务并启动 Allegro
 
@@ -89,7 +93,8 @@ _dispatch_script() 将任务序列化为 JSON，并通过 FrameType.EDA_TASK_SUB
 
 ~~~text
 主机 A：trigger_builtin_allegro_test()
-    └─ _dispatch_script(..., keep_open=True)
+    └─ RemoteFileDialog / RFS 选择 BRD
+       └─ _dispatch_script(..., target_file=brd_path, keep_open=True)
        └─ EDA_TASK_SUBMIT
           ↓ AirBridge 通信链路
 主机 B：SerialWorker._handle_incoming_frame()
@@ -144,36 +149,39 @@ allegro.exe -s "_run.scr"
 
 其中没有附加 .brd 设计文件路径。Allegro 启动后通过 -s 执行 SCR，SCR 再加载 Polyfill 和本次 SKILL 探针。
 
-## 4. 为什么当前不会自动打开 PCB
+## 4. 交互式自动打开 PCB
 
-eda_engine.py 的 ALLEGRO_SKILL_POLYFILL 中确实定义了一个辅助函数：
+`eda_engine.py` 保留原有 `abOpenDesign()` 辅助函数（它优先尝试 Batch API），同时新增专门用于交互式 GUI 开板的 `abOpenDesignInteractive()`：
 
 ~~~skill
-procedure(abOpenDesign(brdPath)
-    let((ok)
-        axlSetVariable("NOCONFIRM" t)
-        ok = nil
-        if(isCallable('axlOpenDesignForBatch) then
-            errset(ok = axlOpenDesignForBatch(brdPath "wf") t)
+procedure(abOpenDesignInteractive(brdPath)
+    let((openResult)
+        openResult = nil
+        if(isCallable('axlOpenDesign) then
+            openResult = errset(
+                axlOpenDesign(?design brdPath ?mode "wf")
+                t
+            )
         )
-        if(!ok then
-            errset(ok = axlOpenDesign(?design brdPath ?mode "wf") t)
+        if(openResult then
+            car(openResult)
+        else
+            nil
         )
-        ok
     )
 )
 ~~~
 
 但必须区分“定义函数”和“调用函数”：
 
-- _polyfill.il 被加载时，只是把 abOpenDesign() 定义到 Allegro SKILL 环境中。
-- 当前 BUILTIN_TEST_ALLEGRO_SKILL 只运行环境探针，没有调用 abOpenDesign()。
-- 当前 _run_allegro_skill() 只启动 allegro.exe -s _run.scr，没有将 PCB 文件路径拼接到命令行。
-- 当前 Allegro 分支也没有把 target_file 继续传给 _run_allegro_skill()。
+- `_polyfill.il` 加载时会定义 `abOpenDesignInteractive()`，但该函数只在本次任务带有 `target_file` 时才会被追加调用。
+- `abOpenDesignInteractive()` 调用 `axlOpenDesign(?design brdPath ?mode "wf")`，不调用 `axlOpenDesignForBatch()`，目标是打开当前交互式 Allegro GUI 设计。
+- `_run_allegro_skill()` 会先验证目标文件扩展名为 `.brd` 且在主机 B 上真实存在，然后把路径转换为 SKILL 字符串并追加开板代码。
+- 开板代码运行后在 Allegro 命令窗口输出 API 返回成功或失败的信息；任务完成标记仍在后面写入。
 
-因此，abOpenDesign() 目前只是一个已定义的辅助函数，不是当前按钮的自动开板流程。它内部还优先尝试 Batch API，不能在未验证交互式编辑器行为前，就把它等同于已验证的 GUI 开板方法。
+Cadence 社区对通过 SKILL 打开设计的讨论指向 `axlOpenDesign()`，同时也提醒 `axlShell()` 这类交互命令可能中断正在执行的 SKILL 函数。因此当前实现优先使用 `axlOpenDesign()`，不采用 `axlShell("open ...")` 或 Batch API 作为交互式 GUI 开板的替代。参考：[Cadence Community：Allegro shell command](https://community.cadence.com/cadence_technology_forums/pcb-design/f/allegro-x-scripting-skill/47967/allegro-shell-command)。
 
-**当前正确操作是：先启动 Allegro，再由用户在 Allegro 中手动打开 PCB 文件。**
+**注意：`axlOpenDesign()` 在目标机实际使用的 SPB 17.2 上尚待实机验收。代码已接通，但本次提交不能等同于 Allegro 自动开板 PASS。**
 
 ## 5. SKILL 执行完成后保持 Allegro 运行
 
@@ -196,20 +204,18 @@ managed_processes["allegro"] = proc
 - 不退出 Allegro GUI；
 - 保留进程句柄，等待独立的关闭命令。
 
-此时用户可以在主机 B 的 Allegro 窗口中手动打开 PCB 设计，随后正常检查、编辑和保存。
+此时所选 PCB 已由追加的交互式 SKILL 调用尝试打开；用户在主机 B 的 Allegro 窗口中检查是否加载成功，然后正常编辑和保存。若 API 返回失败，应查看 Allegro 命令窗口日志，并按验收结果修正开板方法。
 
-## 6. 用户手动打开 PCB 设计
+## 6. 从主机 A 远程选择 PCB 设计
 
-当主机 B 上的 Allegro 启动并完成 SKILL 探针后：
+1. 主机 A 点击「打开PCB（Allegro）」；
+2. 在远程文件选择器中扫描盘符、逐级浏览主机 B 的目录；
+3. 选择 `.brd` 文件并点击「确定」；
+4. AirBridge 将主机 B 的完整路径传到主机 B；
+5. 主机 B 启动 Allegro，加载 SKILL 探针并调用 `abOpenDesignInteractive()`；
+6. 用户在主机 B 检查 PCB 是否已在交互式 Allegro 窗口中打开，然后进行编辑和保存。
 
-1. 在 Allegro 窗口中使用正常的打开设计操作；
-2. 选择需要操作的 .brd 文件；
-3. 等待 Allegro 加载完成；
-4. 按正常 Cadence 工作方式编辑和保存设计。
-
-本阶段由 Allegro 自身管理 PCB 数据库和设计文件。AirBridge 当前不参与文件选择，也不负责判断 PCB 是否已成功打开。
-
-注意：主机 A 上的「打开PCB（Allegro）」按钮，当前实际含义是“启动 Allegro 并运行 SKILL 启动探针”，不是“指定并自动打开某个 PCB 文件”。
+RFS 只传输目录项元数据和文件路径，不传输 BRD 文件内容。
 
 ## 7. 关闭 Allegro：完整执行流程
 
@@ -309,13 +315,17 @@ WM_CLOSE = 0x0010
 ~~~text
 主机 A 点击「打开PCB（Allegro）」
         ↓
-主机 B 启动 Allegro
+RemoteFileDialog 通过 RFS 浏览主机 B
         ↓
-执行 _run.scr，加载 Polyfill 和 SKILL 探针
+选择 .brd，返回主机 B 绝对路径
         ↓
-探针完成，Allegro GUI 保持运行
+EDA_TASK_SUBMIT 将 target_file 传给主机 B
         ↓
-用户在主机 B 手动打开 .brd 文件
+主机 B 启动 Allegro，执行 _run.scr
+        ↓
+加载 Polyfill / 探针并调用 axlOpenDesign() 打开 BRD
+        ↓
+Allegro GUI 保持运行
         ↓
 用户编辑 / 保存 PCB
         ↓
@@ -332,12 +342,14 @@ Allegro 正常退出，清除受管进程记录
 
 - Allegro 仍处于运行状态时再次点击启动按钮，执行器会检测到已有受管进程并跳过重复启动。
 - Allegro 正常退出并清除进程记录后，可以重新启动。
-- 用户已实机确认“SKILL 启动 Allegro → 手动打开 PCB → 关闭 Allegro”可以多次循环正常运行。
+- 用户此前已实机确认“SKILL 启动 Allegro → 手动打开 PCB → 关闭 Allegro”可以多次循环正常运行。新的远程选择与交互式自动开板链路尚未完成实机验收。
 
 ## 9. 关键实现位置
 
 | 文件 | 函数 / 常量 | 职责 |
 |---|---|---|
+| airbridge_app.py | RemoteFileDialog | 通过 RFS 浏览主机 B，过滤并选择 `.brd` 文件 |
+| airbridge_app.py | _browse_remote_eda_file() | 返回主机 B 选定文件的绝对路径 |
 | airbridge_app.py | BUILTIN_TEST_ALLEGRO_SKILL | 内置 SKILL 启动探针，只输出环境信息 |
 | airbridge_app.py | trigger_builtin_allegro_test() | 设置脚本、版本并以 keep_open=True 下发 |
 | airbridge_app.py | trigger_close_allegro() | 触发 Allegro 独立关闭请求 |
@@ -348,9 +360,9 @@ Allegro 正常退出，清除受管进程记录
 | airbridge_app.py | _close_eda_application_async() | 后台执行 Allegro 正常关闭 |
 | protocol.py | EDA_TASK_SUBMIT | 提交 SKILL 启动任务 |
 | protocol.py | EDA_APP_CLOSE = 0x14 | 独立关闭受管 Cadence GUI |
-| eda_engine.py | ALLEGRO_SKILL_POLYFILL | 定义跨版本 SKILL 辅助函数，包括尚未接入启动按钮的 abOpenDesign() |
+| eda_engine.py | ALLEGRO_SKILL_POLYFILL | 定义跨版本辅助函数及交互式 abOpenDesignInteractive() |
 | eda_engine.py | EDAExecutor.execute_script() | 识别 SKILL 并分派 Allegro 执行 |
-| eda_engine.py | _run_allegro_skill() | 生成 Polyfill、任务 SKILL、SCR 并启动 Allegro |
+| eda_engine.py | _run_allegro_skill() | 校验 BRD 路径，生成开板调用、任务 SKILL、SCR 并启动 Allegro |
 | eda_engine.py | _spawn_and_monitor() | 监控探针完成标记并在保持打开模式下登记进程 |
 | eda_engine.py | DialogKillerWatchdog | 检测并记录弹窗，不自动处理 |
 | eda_engine.py | close_application() | 关闭指定类型的受管 Cadence 进程 |
@@ -359,7 +371,7 @@ Allegro 正常退出，清除受管进程记录
 ## 10. 当前实现边界与注意事项
 
 1. **PCB 文件需要手动打开**：当前启动按钮没有传入 .brd 路径，用户需在主机 B 的 Allegro 界面中手动打开设计。
-2. **abOpenDesign() 尚未接入**：虽然 Polyfill 已定义该函数，但当前内置探针没有调用它。后续若开发自动开板功能，需要单独验证 API 在交互式 Allegro GUI 中的行为，不能仅凭函数定义认为已经实现。
+2. **交互式开板 API 待实机验收**：当前使用 `axlOpenDesign(?design ... ?mode "wf")`。尤其需要在主机 B 实际使用的 SPB 17.2 上确认打开的是可见 GUI 设计，而非仅有 SKILL 返回值；如失败，应检查 Allegro 命令窗口日志并调整 API 调用。
 3. **没有自动保存功能**：关闭按钮只请求正常退出，不替用户选择保存或丢弃设计修改。
 4. **关闭范围有限**：关闭按钮只处理当前 AirBridge 实例跟踪的 Allegro 进程，不关闭用户手动启动的其他实例。
 5. **进程记录保存在内存中**：managed_processes 属于主机 B 当前 AirBridge 进程的内存状态。若 Allegro 尚未退出就重启主机 B 的 AirBridge，新实例不会自动继承旧进程句柄；此时不要假设关闭按钮仍能管理之前的实例。
@@ -368,4 +380,4 @@ Allegro 正常退出，清除受管进程记录
 
 ---
 
-**当前标准：AirBridge 负责启动 Allegro、加载 SKILL 探针、跟踪进程和发送正常关闭请求；用户在 Allegro 中手动打开、编辑和保存 PCB。启动、手动开图与关闭是三个独立步骤。**
+**当前标准：主机 A 通过 RFS 选择主机 B 的 BRD 文件；AirBridge 将绝对路径传给主机 B，Allegro 启动后调用交互式 `axlOpenDesign()` 尝试开板。Allegro 编辑与保存仍由用户操作，关闭仍由独立 AirBridge 命令完成。自动开板须经主机 B 实机验收后才能标记 PASS。**
