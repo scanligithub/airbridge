@@ -137,7 +137,7 @@ procedure(abOpenDesignInteractive(brdPath)
             ;; Do not interpret the API's return value alone as success.
             ;; Verify that the interactive Allegro session now has a design.
             currentResult = errset(axlCurrentDesign() t)
-            currentName = if(currentResult then car(currentResult) nil)
+            when(currentResult currentName = car(currentResult))
             printf("AirBridge: axlCurrentDesign after open = %L\n" currentName)
 
             if(currentName then
@@ -928,8 +928,8 @@ class EDAExecutor:
           '    printf("AirBridge: BRD sidecar opened = %L, line read = %L\\n" '
           "if(ab_path_fp t nil) if(ab_read_ok then t else nil))\n"
           '    printf("AirBridge: BRD path read from sidecar = %L\\n" ab_target_file)\n'
-          "    ab_open_result = if(ab_read_ok && ab_target_file != \"\" then "
-          "abOpenDesignInteractive(ab_target_file) nil)\n"
+          "    when(ab_read_ok && ab_target_file != \"\" "
+          "ab_open_result = abOpenDesignInteractive(ab_target_file))\n"
           "    unless(ab_open_result\n"
           '        printf("AirBridge ERROR: selected PCB did not become the active Allegro design.\\n")\n'
           "    )\n"
