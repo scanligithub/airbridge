@@ -1,49 +1,291 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Fill export-template.tcl and POST to AirBridge EDA API (run on host A)."""
+"""Submit and supervise an OrCAD Capture PDF export through AirBridge.
+
+Run on host A. Capture is started on host B with the DSN as a native command-
+line argument. The Tcl export runs inside that Capture GUI session, then
+AirBridge requests a normal WM_CLOSE because keep_open=False.
+"""
 import argparse
 import json
-from pathlib import Path
+import sys
+import time
+import uuid
+from pathlib import PureWindowsPath
 
 try:
     import requests
 except ImportError:
-    raise SystemExit("pip install requests")
+    raise SystemExit("Install dependency first: pip install requests")
 
 API = "http://127.0.0.1:8888"
-TEMPLATE = Path(__file__).resolve().parent.parent / "references" / "export-template.tcl"
+WORKSPACE = r"E:\_airbridge_temp"
+TEMPLATE = PureWindowsPath(__file__).resolve().parent.parent / "references" / "export-template.tcl"
+
+
+def remote_path(path: str) -> str:
+    """Normalize a Windows path for Tcl / AirBridge without touching host A."""
+    return str(path).replace("\\", "/")
+
+
+def tcl_quote(value: str) -> str:
+    """Quote a Tcl value without allowing substitutions or command injection."""
+    value = str(value)
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("$", "\\$")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
+def request_json(method: str, path: str, *, body=None, timeout=30):
+    url = f"{API}{path}"
+    response = requests.request(method, url, json=body, timeout=timeout)
+    try:
+        payload = response.json()
+    except ValueError:
+        raise RuntimeError(
+            f"AirBridge returned non-JSON response ({response.status_code}): "
+            f"{response.text[:500]}"
+        )
+    if response.status_code >= 400 and not isinstance(payload, dict):
+        raise RuntimeError(f"AirBridge HTTP {response.status_code}: {payload}")
+    return payload
+
+
+def require_remote_file(path: str, label: str):
+    result = request_json(
+        "POST", "/api/v1/fs/stat",
+        body={"path": path, "timeout": 15},
+    )
+    if not result.get("success") or not result.get("exists") or result.get("is_dir"):
+        raise RuntimeError(
+            f"{label} does not exist as a file on host B: {path}\n"
+            f"AirBridge response: {json.dumps(result, ensure_ascii=False)}"
+        )
+    return result
+
+
+def parse_result(text: str):
+    values = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key.strip()] = value.strip()
+    return values
+
+
+def read_remote_result(path: str):
+    result = request_json(
+        "POST", "/api/v1/fs/read",
+        body={"path": path, "max_preview_bytes": 8192, "timeout": 15},
+    )
+    if not result.get("success"):
+        return None
+    return parse_result(result.get("content", ""))
+
+
+def render_template(template_text: str, config_file: str, result_file: str):
+    replacements = {
+        "@CONFIG_FILE@": tcl_quote(remote_path(config_file)),
+        "@RESULT_FILE@": tcl_quote(remote_path(result_file)),
+    }
+    script = template_text
+    for marker, value in replacements.items():
+        script = script.replace(marker, value)
+    if "@CONFIG_FILE@" in script or "@RESULT_FILE@" in script:
+        raise RuntimeError("Unresolved Tcl template marker.")
+    return script
 
 
 def main():
-    p = argparse.ArgumentParser(description="Submit OrCAD schematic PDF export via AirBridge")
-    p.add_argument("--dsn", required=True, help="Absolute path to .dsn on host B")
-    p.add_argument("--out-dir", default=r"E:\_airbridge_temp\pdf_out")
-    p.add_argument("--pdf-name", default="schematic.pdf")
-    p.add_argument("--gs", required=True, help="Absolute path to gswin64c.exe on host B")
-    p.add_argument("--ps-driver", default="OrCADPS_17.2")
-    p.add_argument("--version", default="17.2")
-    p.add_argument("--timeout", type=int, default=300)
-    args = p.parse_args()
+    parser = argparse.ArgumentParser(
+        description="Export an OrCAD DSN to PDF through AirBridge on host B."
+    )
+    parser.add_argument("--dsn", required=True, help="Absolute .dsn path on host B")
+    parser.add_argument("--out-dir", default=r"E:\_airbridge_temp\pdf_out")
+    parser.add_argument("--pdf-name", default=None, help="PDF filename (default: DSN basename.pdf)")
+    parser.add_argument("--gs", required=True, help="Absolute gswin64c.exe path on host B")
+    parser.add_argument("--ps-driver", default="OrCADPS_17.2")
+    parser.add_argument("--version", default="17.2")
+    parser.add_argument("--timeout", type=int, default=600, help="Capture task timeout in seconds")
+    parser.add_argument("--wait-timeout", type=int, default=720, help="Host A wait for result marker")
+    parser.add_argument("--poll-interval", type=float, default=2.0)
+    args = parser.parse_args()
 
-    tpl = TEMPLATE.read_text(encoding="utf-8")
-    script = (
-        tpl.replace("DSN_PATH", args.dsn.replace("\\", "/"))
-        .replace("OUT_DIR", args.out_dir.replace("\\", "/"))
-        .replace("PDF_NAME", args.pdf_name)
-        .replace("GS_EXE", args.gs.replace("\\", "/"))
-        .replace("PS_DRIVER", args.ps_driver)
+    dsn_path = args.dsn.strip()
+    if PureWindowsPath(dsn_path).suffix.lower() != ".dsn":
+        raise SystemExit("--dsn must point to a .dsn file on host B.")
+    if not args.gs.strip().lower().endswith(".exe"):
+        raise SystemExit("--gs must point to gswin64c.exe on host B.")
+    if args.timeout < 30 or args.wait_timeout < args.timeout:
+        raise SystemExit("Set --timeout >= 30 and --wait-timeout >= --timeout.")
+
+    pdf_name = args.pdf_name or f"{PureWindowsPath(dsn_path).stem}.pdf"
+    if (
+        not pdf_name.lower().endswith(".pdf")
+        or pdf_name in (".pdf", "..")
+        or "/" in pdf_name
+        or "\\" in pdf_name
+        or "\r" in pdf_name
+        or "\n" in pdf_name
+    ):
+        raise SystemExit("--pdf-name must be a plain filename ending in .pdf.")
+
+    out_dir = args.out_dir.strip()
+    gs_exe = args.gs.strip()
+    ps_driver = args.ps_driver.strip()
+    if not out_dir or not ps_driver:
+        raise SystemExit("--out-dir and --ps-driver cannot be empty.")
+
+    # 1. Verify AirBridge and the selected remote inputs.
+    health = request_json("GET", "/api/v1/eda/versions", timeout=20)
+    if not health.get("success"):
+        raise RuntimeError(f"AirBridge EDA health check failed: {health}")
+    versions = health.get("versions") or {}
+    if args.version != "auto" and versions and args.version not in versions:
+        raise RuntimeError(
+            f"Cadence version {args.version} is unavailable on host B. "
+            f"Available versions: {', '.join(versions.keys())}"
+        )
+
+    dsn_stat = require_remote_file(dsn_path, "DSN")
+    gs_stat = require_remote_file(gs_exe, "Ghostscript")
+    print(
+        f"[OK] Host B DSN: {dsn_path} ({dsn_stat.get('size', 0)} bytes)",
+        flush=True,
+    )
+    print(
+        f"[OK] Host B Ghostscript: {gs_exe} ({gs_stat.get('size', 0)} bytes)",
+        flush=True,
     )
 
-    body = {
-        "script": script,
-        "hint": "export_pdf.tcl",
-        "version": args.version,
-        "timeout": args.timeout,
-    }
-    r = requests.post(f"{API}/api/v1/eda/execute", json=body, timeout=60)
-    print(json.dumps(r.json(), ensure_ascii=False, indent=2))
-    print("Watch AirBridge EDA console for [OK]/[ERROR]; then fs/ls the out dir.", flush=True)
+    mkdir = request_json(
+        "POST", "/api/v1/fs/mkdir",
+        body={"path": remote_path(out_dir), "timeout": 20},
+    )
+    if not mkdir.get("success"):
+        raise RuntimeError(f"Cannot create remote output directory: {mkdir}")
+
+    # 2. Upload a UTF-8 sidecar. The Tcl source stays ASCII-safe while paths
+    #    (including Chinese output directories) retain their exact characters.
+    job_id = uuid.uuid4().hex
+    config_file = str(PureWindowsPath(WORKSPACE) / f"_pdf_export_config_{job_id}.txt")
+    result_file = str(PureWindowsPath(WORKSPACE) / f"_pdf_export_result_{job_id}.txt")
+    config_text = "\n".join([
+        remote_path(out_dir),
+        pdf_name,
+        remote_path(gs_exe),
+        ps_driver,
+    ])
+    config_write = request_json(
+        "POST", "/api/v1/fs/write",
+        body={
+            "path": config_file,
+            "content": config_text,
+            "is_base64": False,
+            "mode": "w",
+            "timeout": 20,
+        },
+    )
+    if not config_write.get("success"):
+        raise RuntimeError(f"Cannot upload PDF config sidecar: {config_write}")
+
+    template_text = TEMPLATE.read_text(encoding="utf-8")
+    script = render_template(template_text, config_file, result_file)
+
+    # 3. Native target_file opens the DSN before capAutoLoad runs.
+    #    keep_open=False makes EDAExecutor request the same graceful WM_CLOSE
+    #    used by the AirBridge Capture close button after the Tcl export ends.
+    submit = request_json(
+        "POST", "/api/v1/eda/execute",
+        body={
+            "script": script,
+            "hint": "airbridge_pdf_export.tcl",
+            "version": args.version,
+            "target_file": dsn_path,
+            "timeout": args.timeout,
+            "keep_open": False,
+        },
+        timeout=60,
+    )
+    if submit.get("status") != "submitted":
+        raise RuntimeError(f"PDF export task was not submitted: {submit}")
+
+    print(
+        "[SUBMITTED] Capture on host B will open the DSN natively, run "
+        "OrHandlerPDFExport, validate the PDF, then receive a normal close request.",
+        flush=True,
+    )
+    print(f"[INFO] Result marker: {result_file}", flush=True)
+
+    # 4. Poll the RFS result marker; HTTP 'submitted' is not treated as success.
+    deadline = time.monotonic() + args.wait_timeout
+    result_data = None
+    while time.monotonic() < deadline:
+        result_data = read_remote_result(result_file)
+        if result_data:
+            break
+        time.sleep(max(0.5, args.poll_interval))
+
+    if not result_data:
+        log_path = str(PureWindowsPath(WORKSPACE) / "_cadence_stdout.log")
+        log_data = request_json(
+            "POST", "/api/v1/fs/read",
+            body={"path": log_path, "max_preview_bytes": 16000, "timeout": 15},
+        )
+        excerpt = log_data.get("content", "") if log_data.get("success") else ""
+        raise RuntimeError(
+            "Timed out waiting for the PDF result marker. The Capture task may "
+            "still be running or may have failed before the Tcl script started.\n"
+            f"Recent Capture log:\n{excerpt[-8000:]}"
+        )
+
+    if result_data.get("STATUS") != "OK":
+        raise RuntimeError(
+            "PDF export failed on host B.\n"
+            f"Status: {result_data.get('STATUS')}\n"
+            f"Message: {result_data.get('MESSAGE')}\n"
+            f"Capture result: {json.dumps(result_data, ensure_ascii=False)}"
+        )
+
+    pdf_path = result_data.get("PDF_PATH", "")
+    expected_size = int(result_data.get("PDF_SIZE", "0") or 0)
+    pdf_stat = require_remote_file(pdf_path, "PDF output")
+    actual_size = int(pdf_stat.get("size", 0))
+    if actual_size <= 0 or (expected_size and actual_size != expected_size):
+        raise RuntimeError(
+            f"PDF size verification failed: Tcl={expected_size}, RFS={actual_size}"
+        )
+
+    # Remove only this job's temporary config sidecar; keep the result marker
+    # as an audit record for the user.
+    request_json(
+        "POST", "/api/v1/fs/rm",
+        body={"path": config_file, "timeout": 15},
+    )
+
+    print("[PASS] PDF generated and parsed by Ghostscript.", flush=True)
+    print(f"PDF: {pdf_path}", flush=True)
+    print(f"Size: {actual_size} bytes", flush=True)
+    print(f"Result marker: {result_file}", flush=True)
+    print(
+        "AirBridge uses its normal WM_CLOSE path after the Tcl task finishes; "
+        "check the AirBridge console if a save/confirmation dialog prevents exit.",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except requests.RequestException as exc:
+        raise SystemExit(f"AirBridge HTTP request failed: {exc}")
+    except Exception as exc:
+        raise SystemExit(str(exc))
