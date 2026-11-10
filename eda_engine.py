@@ -122,32 +122,30 @@ procedure(abOpenDesign(brdPath)
 ;; axlOpenDesign 是 GUI 设计切换/打开入口；Batch API 不会满足用户需要的
 ;; “在当前 Allegro 窗口中打开并显示 PCB”这一交互目标。
 procedure(abOpenDesignInteractive(brdPath)
-    let((openResult openValue shellCommand shellResult)
-        openResult = nil
-        openValue = nil
-        if(isCallable('axlOpenDesign) then
+    let((openResult currentResult currentName)
+        printf("AirBridge: requested BRD path = %L\n" brdPath)
+        if(!isFile(brdPath) then
+            printf("AirBridge ERROR: BRD path is not an existing file: %L\n" brdPath)
+            nil
+        else
             openResult = errset(
                 axlOpenDesign(?design brdPath ?mode "wf")
                 t
             )
-        )
-        when(openResult
-            openValue = car(openResult)
-        )
-        if(openValue then
-            progn(
-                printf("AirBridge: axlOpenDesign opened the selected BRD.\n")
-                openValue
-            )
-        else
-            progn(
-                ;; SPB 17.2 has historical axlOpenDesign behavior issues.
-                ;; axlShell interactive commands can terminate the current SKILL,
-                ;; so this fallback is called only after the completion marker.
-                shellCommand = sprintf(nil "open \"%s\"" brdPath)
-                printf("AirBridge: axlOpenDesign returned no design; trying Allegro open command.\n")
-                shellResult = errset(axlShell(shellCommand) t)
-                if(shellResult car(shellResult) nil)
+            printf("AirBridge: axlOpenDesign raw result = %L\n" openResult)
+
+            ;; Do not interpret the API's return value alone as success.
+            ;; Verify that the interactive Allegro session now has a design.
+            currentResult = errset(axlCurrentDesign() t)
+            currentName = if(currentResult then car(currentResult) nil)
+            printf("AirBridge: axlCurrentDesign after open = %L\n" currentName)
+
+            if(currentName then
+                printf("AirBridge: interactive PCB design is now active.\n")
+                t
+            else
+                printf("AirBridge ERROR: no active PCB design after axlOpenDesign.\n")
+                nil
             )
         )
     )
@@ -923,16 +921,18 @@ class EDAExecutor:
       skill_path_file = norm_brd_path_file.replace('"', '\\"')
       script_content += (
           "\n\n;; AirBridge interactive PCB open\n"
-          "let((ab_path_fp ab_target_file ab_open_result)\n"
+          "let((ab_path_fp ab_target_file ab_read_ok ab_open_result)\n"
           '    ab_path_fp = infile("' + skill_path_file + '")\n'
-          "    ab_target_file = if(ab_path_fp then gets(ab_path_fp) nil)\n"
+          '    ab_target_file = ""\n'
+          "    ab_read_ok = if(ab_path_fp then gets(ab_target_file ab_path_fp) nil)\n"
           "    when(ab_path_fp close(ab_path_fp))\n"
-          "    ab_open_result = if(ab_target_file then "
+          '    printf("AirBridge: BRD sidecar opened = %L, line read = %L\\n" '
+          "if(ab_path_fp t nil) ab_read_ok)\n"
+          '    printf("AirBridge: BRD path read from sidecar = %L\\n" ab_target_file)\n'
+          "    ab_open_result = if(ab_read_ok && ab_target_file != \"\" then "
           "abOpenDesignInteractive(ab_target_file) nil)\n"
-          "    if(ab_open_result then\n"
-          '        printf("AirBridge: interactive PCB open reported success.\\n")\n'
-          "    else\n"
-          '        printf("AirBridge: interactive PCB open command returned no success value; inspect Allegro GUI.\\n")\n'
+          "    unless(ab_open_result\n"
+          '        printf("AirBridge ERROR: selected PCB did not become the active Allegro design.\\n")\n'
           "    )\n"
           ")\n"
       )
