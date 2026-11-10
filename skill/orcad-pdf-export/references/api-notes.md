@@ -34,9 +34,8 @@ The HTTP response is only a submission acknowledgement (status: submitted), not 
 
 ## Poll and verify
 
-- POST /api/v1/fs/stat — poll the unique _pdf_export_result_<job-id>.txt marker.
-- POST /api/v1/fs/read — read the marker and parse STATUS, PDF_PATH, PDF_SIZE, and MESSAGE.
-- POST /api/v1/fs/stat — verify the PDF exists and its byte size matches the marker.
+- POST /api/v1/fs/read — poll and read the unique _pdf_export_result_<job-id>.txt marker; parse STATUS, PDF_PATH, PDF_SIZE, and MESSAGE only after all fields are present.
+- POST /api/v1/fs/stat — verify the final PDF exists and its byte size matches the marker.
 - POST /api/v1/fs/rm — remove the per-job temporary configuration sidecar after success.
 - POST /api/v1/fs/pull — optionally transfer the PDF back to host A.
 
@@ -44,3 +43,5 @@ On timeout or a missing marker, read E:\_airbridge_temp\_cadence_stdout.log and 
 
 
 The helper stores per-job config and result marker files in the AirBridge EDA workspace (default E:\\_airbridge_temp). If AIRBRIDGE_WORKSPACE_DIR is configured on host B, pass the same remote path with the submitter's --workspace option. The workspace path must be absolute and ASCII-only because its marker filename is embedded in the Tcl source.
+
+Run one PDF export at a time. The EDA runner uses shared Capture task/bootstrap/log files and tracks one managed Capture process per AirBridge instance; do not submit concurrent PDF jobs to the same host-B AirBridge instance.
