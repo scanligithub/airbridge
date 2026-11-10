@@ -7,6 +7,7 @@ AirBridge - 物理网闸通用中继器 & EDA 自动化中枢 v2.4
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import math
+import ntpath
 import os
 import queue
 import sys
@@ -21,7 +22,10 @@ from shell_engine import shell_engine, ShellEngine
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -37,6 +41,8 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -82,6 +88,298 @@ class SerialWorkerSignals(QObject):
   sig_file_aborted = Signal(str)
   sig_eda_log = Signal(str)
   sig_fs_response = Signal(dict)
+
+
+
+
+class RemoteFileDialog(QDialog):
+  """Browse files on the remote host through the existing RFS request path."""
+
+  response_ready = Signal(int, dict)
+  ROLE_PATH = int(Qt.ItemDataRole.UserRole)
+  ROLE_IS_DIR = ROLE_PATH + 1
+
+  def __init__(
+      self,
+      worker: "SerialWorker",
+      parent: QWidget,
+      title: str,
+      allowed_extensions: List[str],
+      initial_path: str = "",
+  ):
+    super().__init__(parent)
+    self.worker = worker
+    self.allowed_extensions = {
+        ext.lower() if ext.startswith(".") else f".{ext.lower()}"
+        for ext in allowed_extensions
+    }
+    self.selected_path = ""
+    self._request_token = 0
+    self._closing = False
+    self._initial_path = initial_path.strip()
+    self._initial_load_pending = True
+
+    self.setWindowTitle(title)
+    self.resize(860, 600)
+    self.setModal(True)
+
+    layout = QVBoxLayout(self)
+
+    path_row = QHBoxLayout()
+    path_row.addWidget(QLabel("主机 B 路径:"))
+    self.path_edit = QLineEdit(self._initial_path)
+    self.path_edit.setPlaceholderText("输入主机 B 目录路径，或扫描盘符后浏览")
+    self.btn_go = QPushButton("进入")
+    self.btn_up = QPushButton("上一级")
+    self.btn_drives = QPushButton("扫描盘符")
+    path_row.addWidget(self.path_edit, stretch=1)
+    path_row.addWidget(self.btn_go)
+    path_row.addWidget(self.btn_up)
+    path_row.addWidget(self.btn_drives)
+    layout.addLayout(path_row)
+
+    drive_row = QHBoxLayout()
+    drive_row.addWidget(QLabel("远程盘符:"))
+    self.drive_combo = QComboBox()
+    self.drive_combo.addItem("选择盘符...", "")
+    drive_row.addWidget(self.drive_combo)
+    drive_row.addStretch()
+    drive_row.addWidget(
+        QLabel("文件类型: " + ", ".join(sorted(self.allowed_extensions)))
+    )
+    layout.addLayout(drive_row)
+
+    self.tree = QTreeWidget()
+    self.tree.setColumnCount(4)
+    self.tree.setHeaderLabels(["名称", "类型", "大小 (Bytes)", "修改时间"])
+    self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    for col in (1, 2, 3):
+      self.tree.header().setSectionResizeMode(
+          col, QHeaderView.ResizeMode.ResizeToContents
+      )
+    self.tree.setSelectionBehavior(
+        QAbstractItemView.SelectionBehavior.SelectRows
+    )
+    self.tree.setSelectionMode(
+        QAbstractItemView.SelectionMode.SingleSelection
+    )
+    self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    layout.addWidget(self.tree, stretch=1)
+
+    self.selected_label = QLineEdit()
+    self.selected_label.setReadOnly(True)
+    self.selected_label.setPlaceholderText("请选择一个匹配的远程文件")
+    layout.addWidget(self.selected_label)
+
+    self.status_label = QLabel("正在连接主机 B...")
+    self.status_label.setWordWrap(True)
+    layout.addWidget(self.status_label)
+
+    self.button_box = QDialogButtonBox(
+        QDialogButtonBox.StandardButton.Ok
+        | QDialogButtonBox.StandardButton.Cancel
+    )
+    self.ok_button = self.button_box.button(
+        QDialogButtonBox.StandardButton.Ok
+    )
+    self.ok_button.setEnabled(False)
+    layout.addWidget(self.button_box)
+
+    self.response_ready.connect(self._on_response)
+    self.btn_go.clicked.connect(self._navigate)
+    self.path_edit.returnPressed.connect(self._navigate)
+    self.btn_up.clicked.connect(self._navigate_up)
+    self.btn_drives.clicked.connect(self._request_drives)
+    self.drive_combo.currentIndexChanged.connect(self._on_drive_changed)
+    self.tree.currentItemChanged.connect(self._on_current_item_changed)
+    self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+    self.button_box.accepted.connect(self._accept_selection)
+    self.button_box.rejected.connect(self.reject)
+
+    QTimer.singleShot(0, self._request_drives)
+
+  def _request(self, request: dict, status: str):
+    self._request_token += 1
+    token = self._request_token
+    self.status_label.setText(status)
+
+    def run_request():
+      try:
+        response = self.worker.send_fs_request_sync(
+            dict(request), timeout=20.0
+        )
+      except Exception as exc:
+        response = {
+            "success": False,
+            "action": request.get("action", ""),
+            "error": str(exc),
+        }
+      try:
+        self.response_ready.emit(token, response)
+      except RuntimeError:
+        # The dialog may have been closed while the request was in flight.
+        pass
+
+    threading.Thread(target=run_request, daemon=True).start()
+
+  def _request_drives(self):
+    self._request({"action": "drives"}, "正在读取主机 B 的盘符...")
+
+  def _navigate(self, path: str = ""):
+    target = path or self.path_edit.text().strip()
+    if not target:
+      self.status_label.setText("请先输入远程路径，或扫描主机 B 的盘符。")
+      return
+    self._request(
+        {"action": "ls", "path": target},
+        f"正在读取远程目录: {target}",
+    )
+
+  def _navigate_up(self):
+    current = self.path_edit.text().strip()
+    parent = ntpath.dirname(current.rstrip("\\\\/"))
+    if parent and parent != current:
+      if len(parent) == 2 and parent[1] == ":":
+        parent += "\\\\"
+      self._navigate(parent)
+
+  def _on_drive_changed(self, index: int):
+    if index < 0:
+      return
+    drive_root = self.drive_combo.itemData(index)
+    if drive_root:
+      self._navigate(str(drive_root))
+
+  def _on_response(self, token: int, response: dict):
+    if self._closing or token != self._request_token:
+      return
+
+    if not response.get("success", False):
+      self.status_label.setText(
+          f"远程浏览失败: {response.get('error', '主机 B 无响应')}"
+      )
+      return
+
+    action = response.get("action", "")
+    if action == "drives":
+      drives = response.get("drives", [])
+      self.drive_combo.blockSignals(True)
+      self.drive_combo.clear()
+      self.drive_combo.addItem("选择盘符...", "")
+      selected_index = 0
+      for drive_info in drives:
+        drive = str(drive_info.get("drive", "")).strip()
+        if not drive:
+          continue
+        root = drive if drive.endswith(("\\\\", "/")) else drive + "\\\\"
+        free_gb = drive_info.get("free_gb", 0)
+        self.drive_combo.addItem(
+            f"{drive}  (可用 {free_gb} GB)", root
+        )
+        drive_part, _ = ntpath.splitdrive(self._initial_path)
+        if drive_part and drive_part.lower() == drive.lower():
+          selected_index = self.drive_combo.count() - 1
+      self.drive_combo.setCurrentIndex(selected_index)
+      self.drive_combo.blockSignals(False)
+
+      if self._initial_load_pending:
+        self._initial_load_pending = False
+        if self._initial_path:
+          self._navigate(self._initial_path)
+        elif self.drive_combo.count() > 1:
+          self.drive_combo.setCurrentIndex(1)
+          self._navigate(str(self.drive_combo.itemData(1)))
+        else:
+          self.status_label.setText("主机 B 没有返回可用盘符。")
+      else:
+        self.status_label.setText(
+            f"已发现 {len(drives)} 个远程盘符。"
+        )
+      return
+
+    if action != "ls":
+      self.status_label.setText(
+          f"收到未处理的远程响应: {action or 'unknown'}"
+      )
+      return
+
+    remote_dir = str(response.get("path", self.path_edit.text().strip()))
+    self.path_edit.setText(remote_dir)
+    self.tree.clear()
+    self.selected_label.clear()
+    self.ok_button.setEnabled(False)
+
+    visible_count = 0
+    for entry in response.get("items", []):
+      name = str(entry.get("name", ""))
+      is_dir = bool(entry.get("is_dir", False))
+      extension = ntpath.splitext(name)[1].lower()
+      if not is_dir and extension not in self.allowed_extensions:
+        continue
+
+      full_path = ntpath.join(remote_dir, name)
+      item = QTreeWidgetItem([
+          name,
+          "文件夹" if is_dir else "文件",
+          "-" if is_dir else str(entry.get("size", 0)),
+          str(entry.get("mtime", "")),
+      ])
+      item.setData(0, self.ROLE_PATH, full_path)
+      item.setData(0, self.ROLE_IS_DIR, is_dir)
+      self.tree.addTopLevelItem(item)
+      visible_count += 1
+
+    self.status_label.setText(
+        f"目录加载完成: {remote_dir}（显示 {visible_count} 项；"
+        f"文件过滤: {', '.join(sorted(self.allowed_extensions))}）"
+    )
+
+  def _on_current_item_changed(self, current, _previous):
+    self.ok_button.setEnabled(False)
+    self.selected_label.clear()
+    if current is None:
+      return
+    if current.data(0, self.ROLE_IS_DIR):
+      return
+
+    path = str(current.data(0, self.ROLE_PATH) or "")
+    extension = ntpath.splitext(path)[1].lower()
+    if extension in self.allowed_extensions:
+      self.selected_label.setText(path)
+      self.ok_button.setEnabled(True)
+
+  def _on_item_double_clicked(self, item, _column):
+    path = str(item.data(0, self.ROLE_PATH) or "")
+    if item.data(0, self.ROLE_IS_DIR):
+      self._navigate(path)
+    else:
+      self._accept_selection()
+
+  def _accept_selection(self):
+    current = self.tree.currentItem()
+    if current is None or current.data(0, self.ROLE_IS_DIR):
+      self.status_label.setText("请先选中一个匹配类型的文件。")
+      return
+
+    path = str(current.data(0, self.ROLE_PATH) or "")
+    extension = ntpath.splitext(path)[1].lower()
+    if extension not in self.allowed_extensions:
+      self.status_label.setText(
+          f"文件类型不匹配: {extension or '无扩展名'}"
+      )
+      return
+
+    self.selected_path = path
+    self._closing = True
+    super().accept()
+
+  def reject(self):
+    self._closing = True
+    super().reject()
+
+  def closeEvent(self, event):
+    self._closing = True
+    super().closeEvent(event)
 
 
 class SerialWorker(threading.Thread):
@@ -1636,14 +1934,48 @@ class AirBridgeMainWindow(QMainWindow):
       self.txt_chat.append(f"<font color='#0E639C'><b>[我]:</b></font> {t}")
       self.ipt_chat.clear()
 
+  def _browse_remote_eda_file(
+      self, application: str, extensions: List[str]
+  ) -> str:
+    labels = {
+        "capture": "选择主机 B 上的 OrCAD Capture 原理图 DSN",
+        "allegro": "选择主机 B 上的 Allegro PCB BRD",
+    }
+    initial_path = (
+        self.ipt_rfs_path.text().strip() or self.current_remote_dir
+    )
+    dialog = RemoteFileDialog(
+        self.worker,
+        self,
+        labels.get(application, "选择主机 B 文件"),
+        extensions,
+        initial_path=initial_path,
+    )
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+      self.append_log("INFO", f"已取消 {application} 文件选择。")
+      return ""
+
+    selected_path = dialog.selected_path
+    if selected_path:
+      self.current_remote_dir = ntpath.dirname(selected_path)
+      self.ipt_rfs_path.setText(self.current_remote_dir)
+      self.append_log(
+          "SUCCESS", f"已选择主机 B 文件: {selected_path}"
+      )
+    return selected_path
+
   def trigger_builtin_orcad_test(self):
+    dsn_path = self._browse_remote_eda_file("capture", [".dsn"])
+    if not dsn_path:
+      return
+
     self.txt_eda_editor.setText(BUILTIN_TEST_ORCAD_TCL)
     self.current_hint = "builtin_test.tcl"
     ver = self.combo_eda_ver.currentData()
-    dsn_path = r"E:\_airbridge_temp\RK3588_PDF_Output\RK3588_WX8116-SCH-V2T.DSN"
     self.append_log(
         "INFO",
-        f"【打开原理图】将通过 Capture 启动参数打开 DSN (目标版本: {ver})，正在下发...",
+        f"【打开原理图】已选择远程 DSN，准备通过 Capture 启动参数打开 "
+        f"(目标版本: {ver})，正在下发...",
     )
     self._dispatch_script(
         BUILTIN_TEST_ORCAD_TCL,
@@ -1654,15 +1986,24 @@ class AirBridgeMainWindow(QMainWindow):
     )
 
   def trigger_builtin_allegro_test(self):
+    brd_path = self._browse_remote_eda_file("allegro", [".brd"])
+    if not brd_path:
+      return
+
     self.txt_eda_editor.setText(BUILTIN_TEST_ALLEGRO_SKILL)
     self.current_hint = "builtin_test.il"
     ver = self.combo_eda_ver.currentData()
     self.append_log(
         "INFO",
-        f"【一键自检】已装载 Allegro PCB SKILL 探针 (目标版本: {ver})，正在下发...",
+        f"【打开PCB（Allegro）】已选择远程 BRD，准备启动 Allegro 并打开设计 "
+        f"(目标版本: {ver})，正在下发...",
     )
     self._dispatch_script(
-        BUILTIN_TEST_ALLEGRO_SKILL, self.current_hint, ver, keep_open=True
+        BUILTIN_TEST_ALLEGRO_SKILL,
+        self.current_hint,
+        ver,
+        keep_open=True,
+        target_file=brd_path,
     )
 
   def trigger_close_orcad(self):
