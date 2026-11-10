@@ -118,7 +118,8 @@ _run_allegro_skill() 在执行工作目录生成或更新以下文件：
 | 文件 | 用途 |
 |---|---|
 | _polyfill.il | AirBridge 的 Allegro 跨版本 SKILL 辅助函数库 |
-| _task.il | 本次需要执行的 SKILL 探针及任务完成标记 |
+| _task.il | 本次需要执行的 SKILL 探针、交互式开板调用及任务完成标记 |
+| _allegro_target_brd_path.txt | 本次所选 BRD 路径侧车文件；在 Windows 上按系统 ANSI 代码页写入，避免将中文路径直接嵌入 UTF-8 SKILL 源码 |
 | _run.scr | Allegro 启动后执行的命令脚本 |
 | _allegro_done.flag | 表示本次 SKILL 脚本已执行到完成标记 |
 | allegro.log | 本次运行监控的 Allegro 日志文件 |
@@ -176,7 +177,7 @@ procedure(abOpenDesignInteractive(brdPath)
 
 - `_polyfill.il` 加载时会定义 `abOpenDesignInteractive()`，但该函数只在本次任务带有 `target_file` 时才会被追加调用。
 - `abOpenDesignInteractive()` 调用 `axlOpenDesign(?design brdPath ?mode "wf")`，不调用 `axlOpenDesignForBatch()`，目标是打开当前交互式 Allegro GUI 设计。
-- `_run_allegro_skill()` 会先验证目标文件扩展名为 `.brd` 且在主机 B 上真实存在，然后把路径转换为 SKILL 字符串并追加开板代码。
+- `_run_allegro_skill()` 会先验证目标文件扩展名为 `.brd` 且在主机 B 上真实存在，然后把完整路径写入 `_allegro_target_brd_path.txt`。Windows 主机按系统 ANSI 代码页（Python `mbcs`）写入侧车文件；SKILL 通过 `infile()` / `gets()` 读取路径，再调用交互式开板函数。这样避免把中文目录名直接嵌入 UTF-8 的 `.il` 源码。
 - 开板代码运行后在 Allegro 命令窗口输出 API 返回成功或失败的信息；任务完成标记仍在后面写入。
 
 Cadence 社区对通过 SKILL 打开设计的讨论指向 `axlOpenDesign()`，同时也提醒 `axlShell()` 这类交互命令可能中断正在执行的 SKILL 函数。因此当前实现优先使用 `axlOpenDesign()`，不采用 `axlShell("open ...")` 或 Batch API 作为交互式 GUI 开板的替代。参考：[Cadence Community：Allegro shell command](https://community.cadence.com/cadence_technology_forums/pcb-design/f/allegro-x-scripting-skill/47967/allegro-shell-command)。
@@ -371,7 +372,7 @@ Allegro 正常退出，清除受管进程记录
 ## 10. 当前实现边界与注意事项
 
 1. **PCB 文件需要手动打开**：当前启动按钮没有传入 .brd 路径，用户需在主机 B 的 Allegro 界面中手动打开设计。
-2. **交互式开板 API 待实机验收**：当前使用 `axlOpenDesign(?design ... ?mode "wf")`。尤其需要在主机 B 实际使用的 SPB 17.2 上确认打开的是可见 GUI 设计，而非仅有 SKILL 返回值；如失败，应检查 Allegro 命令窗口日志并调整 API 调用。
+2. **交互式开板 API 待实机验收**：当前使用 `axlOpenDesign(?design ... ?mode "wf")`。尤其需要在主机 B 实际使用的 SPB 17.2 上确认打开的是可见 GUI 设计，而非仅有 SKILL 返回值；如失败，应检查 Allegro 命令窗口日志并调整 API 调用。还需确认主机 B 的系统 ANSI 代码页能表示所选路径中的非 ASCII 字符；如遇编码问题，应进一步验证 Cadence 17.2 的路径字符集处理。
 3. **没有自动保存功能**：关闭按钮只请求正常退出，不替用户选择保存或丢弃设计修改。
 4. **关闭范围有限**：关闭按钮只处理当前 AirBridge 实例跟踪的 Allegro 进程，不关闭用户手动启动的其他实例。
 5. **进程记录保存在内存中**：managed_processes 属于主机 B 当前 AirBridge 进程的内存状态。若 Allegro 尚未退出就重启主机 B 的 AirBridge，新实例不会自动继承旧进程句柄；此时不要假设关闭按钮仍能管理之前的实例。
