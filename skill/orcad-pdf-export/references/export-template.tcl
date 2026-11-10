@@ -141,9 +141,14 @@ proc ::AirBridgePdfExport::run {} {
 
     # This follows the Capture PDF utility's documented converter-command
     # convention: brace the executable path so spaces remain one path.
-    set gs_cmd [format \
-        "{%s} -sDEVICE=pdfwrite -sOutputFile=$::capPdfUtil::mPdfFilePath -dBATCH -dNOPAUSE -dSAFER $::capPdfUtil::mPSFilePath" \
-        $gs_exe]
+    set gs_cmd [list \
+        $gs_exe \
+        -sDEVICE=pdfwrite \
+        -sOutputFile=$::capPdfUtil::mPdfFilePath \
+        -dBATCH \
+        -dNOPAUSE \
+        -dSAFER \
+        $::capPdfUtil::mPSFilePath]
 
     set cfg_items [list \
         [format "\"outputDirectory\":%s" [::AirBridgePdfExport::json_quote $out_dir]] \
