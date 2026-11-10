@@ -487,12 +487,16 @@ class SerialWorker(threading.Thread):
   def send_fs_request_sync(
       self, req_dict: Dict[str, Any], timeout: float = 15.0
   ) -> Dict[str, Any]:
-    req_id = int(time.time() * 1000) & 0x7FFFFFFF
-    req_dict["req_id"] = req_id
-
     wait_event = threading.Event()
     with self.fs_pending_lock:
-      self.fs_pending_requests[req_id] = {"event": wait_event, "response": None}
+      req_id = int(time.time() * 1000) & 0x7FFFFFFF
+      while req_id in self.fs_pending_requests:
+        req_id = (req_id + 1) & 0x7FFFFFFF
+      req_dict["req_id"] = req_id
+      self.fs_pending_requests[req_id] = {
+          "event": wait_event,
+          "response": None,
+      }
 
     compressed_payload = FSEngine.pack_payload(req_dict)
     self.send_frame(FrameType.FS_REQUEST, compressed_payload)
