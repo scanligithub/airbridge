@@ -74,6 +74,7 @@ Get-Printer | Where-Object { $_.Name -match 'OrCAD|PS|PostScript' } | Select-Obj
 - Absolute DSN path on host B.
 - Output directory on host B.
 - PDF filename (plain filename ending in .pdf); omitted filename defaults to the DSN basename.
+- Use --overwrite only when the existing output PDF is intentionally being replaced.
 - Absolute gswin64c.exe path on host B.
 - Exact OrCAD PostScript printer name.
 - Cadence version (17.2 or auto).
