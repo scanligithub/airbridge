@@ -115,6 +115,7 @@ def main():
     parser.add_argument("--out-dir", default=r"E:\_airbridge_temp\pdf_out")
     parser.add_argument("--workspace", default=DEFAULT_WORKSPACE, help="Remote AirBridge workspace; match AIRBRIDGE_WORKSPACE_DIR if customized")
     parser.add_argument("--pdf-name", default=None, help="PDF filename (default: DSN basename.pdf)")
+    parser.add_argument("--overwrite", action="store_true", help="Replace the target PDF if it already exists")
     parser.add_argument("--gs", required=True, help="Absolute gswin64c.exe path on host B")
     parser.add_argument("--ps-driver", default="OrCADPS_17.2")
     parser.add_argument("--version", default="17.2")
@@ -182,6 +183,20 @@ def main():
     )
     if not mkdir.get("success"):
         raise RuntimeError(f"Cannot create remote output directory: {mkdir}")
+
+    expected_pdf_path = str(PureWindowsPath(out_dir) / pdf_name)
+    existing_pdf = request_json(
+        "POST", "/api/v1/fs/stat",
+        body={"path": expected_pdf_path, "timeout": 15},
+    )
+    if existing_pdf.get("success") and existing_pdf.get("exists"):
+        if existing_pdf.get("is_dir"):
+            raise RuntimeError(f"PDF output path is a directory: {expected_pdf_path}")
+        if not args.overwrite:
+            raise RuntimeError(
+                f"Output PDF already exists: {expected_pdf_path}. "
+                "Use --overwrite only when you intend to replace it."
+            )
 
     # 2. Upload a UTF-8 sidecar. The Tcl source stays ASCII-safe while paths
     #    (including Chinese output directories) retain their exact characters.
