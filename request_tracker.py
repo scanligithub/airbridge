@@ -186,3 +186,40 @@ class RequestTracker:
         if record.get("error"):
             snapshot["error"] = record["error"]
         return snapshot
+
+
+def encode_bounded_json_payload(data: Dict[str, Any], max_bytes: int = 65000) -> bytes:
+    """Encode JSON while safely truncating large textual result fields.
+
+    Large output remains available through streamed log frames where supported;
+    the final correlated response stays within one ABFP frame.
+    """
+    if not isinstance(data, dict):
+        raise RequestTrackerError("result payload must be a JSON object")
+    result = copy.deepcopy(data)
+
+    def _encode() -> bytes:
+        import json
+        return json.dumps(
+            result, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+        ).encode("utf-8")
+
+    encoded = _encode()
+    for field in ("output", "stdout", "stderr", "error"):
+        if len(encoded) <= max_bytes:
+            break
+        value = result.get(field)
+        if not isinstance(value, str) or not value:
+            continue
+        current = value.encode("utf-8")
+        excess = len(encoded) - max_bytes
+        target = max(0, len(current) - excess - 128)
+        result[field] = current[:target].decode("utf-8", errors="ignore")
+        result[field + "_truncated"] = True
+        encoded = _encode()
+
+    if len(encoded) > max_bytes:
+        raise RequestTrackerError(
+            f"result metadata exceeds ABFP payload limit ({len(encoded)} > {max_bytes})"
+        )
+    return encoded
