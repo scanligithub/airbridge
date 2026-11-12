@@ -195,8 +195,8 @@ class CaptureTclBridgeTests(unittest.TestCase):
 
         request_id = str(uuid.uuid4())
         script = (
-            'set ::AirBridgeSyntaxSmoke "hello from Tcl 8.6"\\n'
-            'puts $::AirBridgeSyntaxSmoke\\n'
+            'set ::AirBridgeSyntaxSmoke "hello from Tcl 8.6"\n'
+            'puts $::AirBridgeSyntaxSmoke\n'
             'set ::AirBridgeSyntaxSmoke'
         )
         script_bytes = script.encode("utf-8")
