@@ -1667,6 +1667,10 @@ class AntigravityIPCServer:
           except Exception:
             task = {"script": raw_body, "hint": "agent_auto.tcl"}
 
+          if not isinstance(task, dict):
+            self._reply_json(400, {"state": "not_submitted", "error": "request body must be a JSON object"})
+            return
+
           if not worker_ref.is_serial_connected():
             self._reply_json(503, {"state": "not_submitted", "error": "serial link is disconnected"})
             return
@@ -1699,9 +1703,6 @@ class AntigravityIPCServer:
             return
           if timeout < 0:
             self._reply_json(400, {"state": "not_submitted", "error": "timeout must be >= 0"})
-            return
-          if not isinstance(task, dict):
-            self._reply_json(400, {"state": "not_submitted", "error": "request body must be a JSON object"})
             return
           keep_open = bool(task.get("keep_open", False))
           try:
@@ -1776,6 +1777,10 @@ class AntigravityIPCServer:
           except Exception:
             task = {"command": raw_body}
 
+          if not isinstance(task, dict):
+            self._reply_json(400, {"state": "not_submitted", "error": "request body must be a JSON object"})
+            return
+
           if not worker_ref.is_serial_connected():
             self._reply_json(503, {"state": "not_submitted", "error": "serial link is disconnected"})
             return
@@ -1804,9 +1809,6 @@ class AntigravityIPCServer:
             return
           if remote_timeout < 0:
             self._reply_json(400, {"state": "not_submitted", "error": "timeout must be >= 0"})
-            return
-          if not isinstance(task, dict):
-            self._reply_json(400, {"state": "not_submitted", "error": "request body must be a JSON object"})
             return
           task["timeout"] = remote_timeout
           is_async = bool(task.get("async", False))
