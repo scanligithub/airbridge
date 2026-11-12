@@ -283,20 +283,21 @@ airbridge_tcl_bridge_test/
 ## 7. 已完成与待实机 / 后续阶段验收
 
 - [x] Session 使用独立目录和随机 startup_nonce。
-- [ ] 新 Capture 启动前扫描主机 B 上全部匹配的旧 Capture，逐一请求优雅关闭并确认退出；当前 P1.6 在发现任何非本 Worker 管理的 Capture.exe 时直接拒绝启动，不会自动关闭或强杀。完整策略属于 P1.7。
+- [x] P1.7 已实现启动前扫描全部 Capture.exe（含手动启动实例）、检查可见窗口、校验 PID 对应映像身份、对可安全请求的窗口发送 WM_CLOSE，并等待进程句柄实际退出；残留进程或新实例出现时阻断启动；
+- [ ] 在主机 B 的真实 Capture 17.2 环境复验 WM_CLOSE、保存提示、多个手动实例及无响应进程；GitHub CI 使用模拟进程后端，未关闭真实 Cadence GUI。
 - [x] Bridge READY 与本次 session_id / startup_nonce 绑定，并校验 runtime_pid 与 Worker 启动的 PID。
 - [x] B 端 RequestBroker 对相同 request_id 去重；相同 Payload 重放缓存结果，不同 Payload 返回冲突。
 - [ ] 主机 A 使用专用 Session ABFP 消息提交 Request；当前 P1.6 仍复用 EDA_TASK_SUBMIT / EDA_TASK_FIN，不新增 SESSION_CREATE / SESSION_EXEC。
 - [ ] A/B 实际物理串口断连、重连及两台 Windows 主机联调；当前 GitHub CI 仅用内存 ABFP 链路模拟。
 - [x] 长任务等待超时返回 UNKNOWN，Capture 仍可能运行时不删除请求文件，不自动重试。
 - [ ] 排队任务取消、运行中脚本真正取消、Broker / Worker 重启和 Capture 崩溃后的完整恢复策略。
-- [ ] Skill 保存后 Exit，B 端确认实际 PID 退出并返回 SESSION_CLOSED；依赖 P1.7 Process Supervisor 与后续 Skill E2E。
+- [ ] Skill 保存后 Exit，B 端确认实际 PID 退出并返回 SESSION_CLOSED；Supervisor 已提供可复用的进程退出等待，但 Session Close 协议与 Skill E2E 尚未实现。
 - [x] Capture Tcl 脚本限制 1 MiB；结果保留默认 24 小时 / 最多 1000 条，并受 ABFP 单帧结果大小限制。
 - [ ] 为 Session 目录和 capAutoLoad hook 配置专用 ACL；当前使用运行用户默认文件权限，尚未实现独立 ACL 策略。
 
 ---
 
-**当前结论：** 用户此前已在真实 Capture 17.2 / Tcl 8.6.0 环境验证 capAutoLoad 自动初始化、after 轮询、同一 Tcl Interpreter 连续请求、跨请求变量/proc 保留、Dbo / 页面操作和原型结果回传。P1.6 又完成了正式 Python CaptureTclAdapter、Session 独立文件队列、READY nonce/PID 校验、原子请求/结果文件、错误/超时 UNKNOWN 语义和 A/B Worker 软件集成，并在 GitHub Actions Run #76 完成 80 项软件测试。**但 P1.6 生成的正式 Bridge 尚未在真实 Capture 17.2 中重新加载和执行验收**；Session Create 专用 ABFP 消息、Process Supervisor、保存后优雅 Exit 与完整 Skill 生命周期仍待后续阶段。
+**当前结论：** 用户此前已在真实 Capture 17.2 / Tcl 8.6.0 环境验证 capAutoLoad 自动初始化、after 轮询、同一 Tcl Interpreter 连续请求、跨请求变量/proc 保留、Dbo / 页面操作和原型结果回传。P1.6 正式 CaptureTclAdapter / Bridge 在 Run #76 完成 80 项软件 CI；P1.7 ProcessSupervisor 在 Run #85 完成 89 项软件 CI。**新版生成 Bridge 尚未在真实 Capture 17.2 中重新加载验收，ProcessSupervisor 也尚未向真实 Capture 发送 WM_CLOSE**；Session Create / Close 专用 ABFP 消息、每 Session FIFO Broker、真实保存提示处理和完整 Skill 生命周期仍待后续阶段。
 
 ## 8. P1.6 正式 Capture Tcl Adapter / Bridge 软件实现
 
@@ -317,7 +318,7 @@ airbridge_tcl_bridge_test/
 - Allegro SKILL 仍由 `legacy-cadence-oneshot` 兼容 Profile 执行；
 - 继续使用既有 EDA_TASK_SUBMIT / EDA_TASK_FIN 和 request_id 关联，不在 P1.6 新增 SESSION_CREATE / SESSION_EXEC 帧；
 - 当前对端 CAPABILITIES 仍返回 `profiles=[]`，不广播未经主机级验证的 Capture Profile；
-- P1.7 Process Supervisor 完成前，如果 B 端发现任何未由当前 Worker 管理的 Capture.exe，P1.6 拒绝另起实例；不自动关闭或强杀用户进程。
+- P1.7 ProcessSupervisor 现在会先扫描所有 Capture.exe（包括手动实例）；对可见非对话框窗口只发送 WM_CLOSE，并等待真实退出；检测到保存/确认对话框、无法识别的窗口、超时或进程仍存活时阻止启动，不自动点击、不强杀。
 
 ### 8.3 软件 CI 证据与限制
 
