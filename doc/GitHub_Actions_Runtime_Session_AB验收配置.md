@@ -65,3 +65,14 @@ CI PASS **不代表**以下内容已经实测：
 - 不启动任意远程 Shell；
 - 不访问用户主机、COM 端口或 Cadence 工程；
 - 不上传设计文件或真实工程数据作为 Action artifact。
+
+## P1.5 软件 CI 实测记录
+
+- GitHub Actions Run：[#62](https://github.com/scanligithub/airbridge/actions/runs/43146376763)
+- 测试提交：`322904a06d25aa522574a50dd885277913e30d73`
+- Protocol / RequestTracker / Runtime Adapter / RequestBroker 单元测试：46 项通过；
+- A/B 生产 SerialWorker 双端软件模拟：11 项通过；
+- HTTP correlated request 集成：9 项通过；
+- **合计 66 项通过，两个 Job 均成功。**
+
+该结果是 GitHub 托管 Windows Runner 上的软件级验收。测试通过内存 ABFP 双向链路模拟两个 Worker，不使用物理 COM 端口，也未启动真实 Capture 或 Allegro。因此不能把此 CI 结果解释为双主机串口实测、Capture 常驻 Tcl Bridge 验收或专业软件 GUI 生命周期验收。
