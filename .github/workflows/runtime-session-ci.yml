@@ -11,6 +11,8 @@ on:
       - "request_tracker.py"
       - "request_broker.py"
       - "runtime_adapter.py"
+      - "capture_tcl_bridge.py"
+      - "test/test_capture_tcl_bridge.py"
       - "test/test_runtime_adapter.py"
       - "test/test_runtime_session_protocol.py"
       - "test/test_runtime_session_ab_simulation.py"
@@ -44,6 +46,12 @@ jobs:
           python --version
           python -m unittest discover -s test -p "test_runtime_session_protocol.py" -v
           python -m unittest discover -s test -p "test_request_tracker.py" -v
+
+      - name: Run Capture Tcl Bridge tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m unittest discover -s test -p "test_capture_tcl_bridge.py" -v
 
       - name: Run Runtime Adapter and Profile tests
         shell: pwsh
