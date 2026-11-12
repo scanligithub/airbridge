@@ -35,6 +35,11 @@ from request_tracker import (
     encode_bounded_json_payload,
 )
 from request_broker import RequestBroker, RequestBrokerError
+from runtime_adapter import (
+    RuntimeExecutionContext,
+    RuntimeExecutionRequest,
+    create_legacy_runtime_registry,
+)
 from shell_engine import shell_engine, ShellEngine
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
@@ -422,6 +427,10 @@ class SerialWorker(threading.Thread):
     self.seq_counter = 0
     self.eda_executor = EDAExecutor()
     self.shell_engine = shell_engine
+    self.runtime_registry = create_legacy_runtime_registry(
+        lambda: self.eda_executor,
+        lambda: self.shell_engine,
+    )
     # 远程 Shell 输出回调：把 stdout/stderr 实时推回对端
     def _shell_output_cb(task_id: str, stream: str, line: str):
       payload = json.dumps({
@@ -467,9 +476,8 @@ class SerialWorker(threading.Thread):
     # A-side HTTP <-> ABFP waiter correlation.
     self.request_tracker = RequestTracker()
 
-    # B-side durable request admission / deduplication. This is a generic
-    # Broker ledger; execution remains delegated to the current legacy engines
-    # until Runtime Adapter registration is introduced in P1.5.
+    # B-side durable request admission / deduplication. The Broker remains
+    # engine-agnostic; actual execution is resolved through runtime profiles.
     self.request_broker = RequestBroker()
 
     # Runtime Session protocol negotiation state. This is transport-level
@@ -1381,6 +1389,17 @@ class SerialWorker(threading.Thread):
     compressed_resp = FSEngine.pack_payload(result)
     self.send_frame(FrameType.FS_RESPONSE, compressed_resp)
 
+  def _ensure_runtime_registry(self):
+    """Return the local generic registry, including for lightweight test workers."""
+    registry = getattr(self, "runtime_registry", None)
+    if registry is None:
+      registry = create_legacy_runtime_registry(
+          lambda: self.eda_executor,
+          lambda: self.shell_engine,
+      )
+      self.runtime_registry = registry
+    return registry
+
   def _exec_eda_async(
       self,
       script: str,
@@ -1393,20 +1412,23 @@ class SerialWorker(threading.Thread):
       request_id: Optional[str] = None,
   ):
     def execute_script() -> Dict[str, Any]:
-      ret, out = self.eda_executor.execute_script(
-          script,
-          hint,
-          log_fn,
-          timeout=timeout,
-          version=version,
-          target_file=target_file,
-          keep_open=keep_open,
+      request = RuntimeExecutionRequest(
+          operation="execute",
+          request_id=request_id,
+          payload={
+              "script": script,
+              "hint": hint,
+              "version": version,
+              "target_file": target_file,
+              "timeout": timeout,
+              "keep_open": keep_open,
+          },
       )
-      return {
-          "success": ret == 0,
-          "returncode": ret,
-          "output": out if isinstance(out, str) else str(out),
-      }
+      return self._ensure_runtime_registry().execute(
+          "legacy-cadence-oneshot",
+          request,
+          RuntimeExecutionContext(log_callback=log_fn),
+      )
 
     if request_id:
       broker_payload = {
@@ -1508,17 +1530,25 @@ class SerialWorker(threading.Thread):
     env = req.get("env") or {}
     safe_env = env if isinstance(env, dict) else {}
 
-    def execute_shell() -> Dict[str, Any]:
-      return self.shell_engine.exec(
-          command=command,
-          shell=shell,
-          cwd=cwd,
-          timeout=timeout,
-          async_mode=async_mode,
-          env=safe_env,
-      )
-
     request_id = req.get("request_id")
+
+    def execute_shell() -> Dict[str, Any]:
+      request = RuntimeExecutionRequest(
+          operation="execute",
+          request_id=request_id,
+          payload={
+              "command": command,
+              "shell": shell,
+              "cwd": cwd,
+              "timeout": timeout,
+              "async": async_mode,
+              "env": safe_env,
+          },
+      )
+      return self._ensure_runtime_registry().execute(
+          "legacy-shell-process",
+          request,
+      )
     if request_id:
       broker_payload = {
           key: value
