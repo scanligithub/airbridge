@@ -255,6 +255,38 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertEqual(result["result"]["stdout"], "hello")
 
 
+    def test_nonzero_eda_returncode_is_persisted_as_failed(self):
+        class FailingEDAExecutor:
+            def execute_script(self, *args, **kwargs):
+                return 1, "script returned nonzero"
+
+        host_a = _new_worker()
+        host_b = _new_worker()
+        host_b.eda_executor = FailingEDAExecutor()
+        _connect_duplex(host_a, host_b)
+
+        request_id = str(uuid.uuid4())
+        host_a.request_tracker.register(request_id, "eda.execute")
+        payload = {
+            "request_id": request_id,
+            "script": "error \"expected\"",
+            "hint": "failure.tcl",
+            "version": "auto",
+            "target_file": "",
+            "timeout": 10,
+            "keep_open": True,
+        }
+        host_a.send_frame(
+            FrameType.EDA_TASK_SUBMIT,
+            json.dumps(payload).encode("utf-8"),
+        )
+
+        result = host_a.request_tracker.wait(request_id, timeout=2.0)
+        self.assertEqual(result["state"], "failed", result)
+        self.assertEqual(result["result"]["returncode"], 1)
+        broker_result = host_b.request_broker.get(request_id)
+        self.assertEqual(broker_result["state"], "failed")
+
     def test_duplicate_eda_frame_replays_cached_result_without_reexecution(self):
         class CountingEDAExecutor:
             def __init__(self):
