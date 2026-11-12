@@ -1,0 +1,176 @@
+# test_runtime_session_ab_simulation.py
+# -*- coding: utf-8 -*-
+"""Software-only A/B handshake acceptance using the production SerialWorker code.
+
+The two peers run as separate SerialWorker objects in this test process. The
+in-memory duplex link transports real ABFP frames through FrameParser and
+dispatches them to the production Runtime Session handlers. No COM port,
+Cadence installation, or physical Windows host is required.
+"""
+import threading
+import unittest
+from types import SimpleNamespace
+
+from airbridge_app import SerialWorker
+from protocol import ABFPFrame, FrameParser, FrameType
+from runtime_session_protocol import (
+    encode_session_message,
+    make_session_capabilities,
+)
+
+
+class _FakeSerialPort:
+    is_open = True
+
+
+class _SignalSink:
+    def emit(self, *args, **kwargs):
+        pass
+
+
+def _new_worker():
+    # Bypass the GUI/EDA/serial-thread startup path. Only initialize the
+    # state consumed by the production Runtime Session methods under test.
+    worker = SerialWorker.__new__(SerialWorker)
+    worker.ser = _FakeSerialPort()
+    worker.lock = threading.Lock()
+    worker.session_protocol_lock = threading.RLock()
+    worker.session_pending_handshakes = {}
+    worker.session_peer_status = {
+        "state": "disconnected",
+        "negotiated": False,
+        "protocol": "runtime-session.v1",
+        "supported_protocols": [],
+        "features": [],
+        "profiles": [],
+        "last_handshake_id": None,
+        "error": None,
+    }
+    worker.session_link_generation = 1
+    worker.parser = FrameParser()
+    worker.seq_counter = 0
+    worker.sig = SimpleNamespace(sig_rx_log=_SignalSink())
+    return worker
+
+
+def _connect_duplex(peer_a, peer_b):
+    """Connect two workers with a fragmented, in-memory ABFP byte stream."""
+    def bind(source, target):
+        def send_frame(frame_type, payload=b""):
+            source.seq_counter = (source.seq_counter + 1) & 0xFFFF
+            wire = ABFPFrame(frame_type, source.seq_counter, payload).pack()
+            # Fragment frames to exercise the streaming parser rather than
+            # passing already-decoded Python objects between the peers.
+            for offset in range(0, len(wire), 7):
+                chunk = wire[offset:offset + 7]
+                for received in target.parser.feed(chunk):
+                    target._handle_incoming_frame(received)
+        source.send_frame = send_frame
+
+    bind(peer_a, peer_b)
+    bind(peer_b, peer_a)
+
+
+class RuntimeSessionABSimulationTests(unittest.TestCase):
+    def test_both_peers_initiate_and_complete_correlated_handshakes(self):
+        host_a = _new_worker()
+        host_b = _new_worker()
+        _connect_duplex(host_a, host_b)
+
+        request_a = host_a.begin_session_negotiation()
+        request_b = host_b.begin_session_negotiation()
+
+        self.assertTrue(request_a["success"], request_a)
+        self.assertTrue(request_b["success"], request_b)
+        self.assertNotEqual(request_a["message_id"], request_b["message_id"])
+
+        result_a = host_a._wait_session_negotiation(
+            request_a["message_id"], timeout=0.1
+        )
+        result_b = host_b._wait_session_negotiation(
+            request_b["message_id"], timeout=0.1
+        )
+
+        self.assertEqual(result_a["state"], "negotiated", result_a)
+        self.assertEqual(result_b["state"], "negotiated", result_b)
+        self.assertEqual(
+            result_a["peer_capabilities"]["features"], ["handshake"]
+        )
+        self.assertEqual(
+            result_b["peer_capabilities"]["features"], ["handshake"]
+        )
+
+        status_a = host_a.get_session_peer_status()
+        status_b = host_b.get_session_peer_status()
+        self.assertTrue(status_a["negotiated"])
+        self.assertTrue(status_b["negotiated"])
+        self.assertEqual(status_a["protocol"], "runtime-session.v1")
+        self.assertEqual(status_b["protocol"], "runtime-session.v1")
+        self.assertFalse(status_a["can_create_session"])
+        self.assertFalse(status_b["can_create_session"])
+        self.assertEqual(status_a["profiles"], [])
+        self.assertEqual(status_b["profiles"], [])
+
+    def test_unmatched_capabilities_correlation_is_ignored(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+
+        request = host.begin_session_negotiation()
+        self.assertTrue(request["success"], request)
+        pending = host.session_pending_handshakes[request["message_id"]]
+
+        unrelated = make_session_capabilities(
+            "00000000-0000-4000-8000-000000000001"
+        )
+        payload = encode_session_message(
+            FrameType.SESSION_CAPABILITIES, unrelated
+        )
+        host._handle_incoming_frame(
+            ABFPFrame(FrameType.SESSION_CAPABILITIES, 1, payload)
+        )
+
+        self.assertFalse(pending["event"].is_set())
+        self.assertEqual(
+            host.get_session_peer_status()["state"], "negotiating"
+        )
+
+        matched = make_session_capabilities(request["message_id"])
+        payload = encode_session_message(
+            FrameType.SESSION_CAPABILITIES, matched
+        )
+        host._handle_incoming_frame(
+            ABFPFrame(FrameType.SESSION_CAPABILITIES, 2, payload)
+        )
+        result = host._wait_session_negotiation(
+            request["message_id"], timeout=0.1
+        )
+        self.assertEqual(result["state"], "negotiated", result)
+
+    def test_link_reset_resolves_pending_waiter_and_rejects_stale_generation(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+
+        old_generation = host.session_link_generation
+        request = host.begin_session_negotiation(
+            expected_generation=old_generation
+        )
+        self.assertTrue(request["success"], request)
+
+        host._reset_session_peer_status("serial link disconnected")
+        result = host._wait_session_negotiation(
+            request["message_id"], timeout=0.1
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["state"], "disconnected")
+        self.assertEqual(result["error"], "serial link disconnected")
+
+        stale = host.begin_session_negotiation(
+            expected_generation=old_generation
+        )
+        self.assertFalse(stale["success"])
+        self.assertEqual(stale["state"], "stale")
+
+
+if __name__ == "__main__":
+    unittest.main()
