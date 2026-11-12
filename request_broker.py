@@ -335,6 +335,8 @@ class RequestBroker:
                 "accepted"
                 if bounded_result.get("status") == "running"
                 and bounded_result.get("async") is True
+                else "failed"
+                if bounded_result.get("success") is False or bounded_result.get("error")
                 else "completed"
             )
             error_text = None
