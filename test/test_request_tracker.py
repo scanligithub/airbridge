@@ -119,6 +119,25 @@ class RequestTrackerTests(unittest.TestCase):
         snapshot = tracker.get(request_id)
         self.assertEqual(snapshot["state"], "not_found")
 
+    def test_pending_record_expires_to_unknown_and_wakes_waiter(self):
+        tracker = RequestTracker(ttl_seconds=1)
+        request_id = str(uuid.uuid4())
+        tracker.register(request_id, "eda.execute")
+        waiter_result = {}
+        waiter = threading.Thread(
+            target=lambda: waiter_result.update(tracker.wait(request_id, 3.0))
+        )
+        waiter.start()
+        time.sleep(1.05)
+
+        snapshot = tracker.get(request_id)
+        waiter.join(timeout=1.0)
+
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(snapshot["state"], "unknown")
+        self.assertIn("status is unknown", snapshot["error"])
+        self.assertEqual(waiter_result["state"], "unknown")
+
     def test_large_text_result_is_truncated_to_abfp_limit(self):
         payload = encode_bounded_json_payload(
             {"request_id": str(uuid.uuid4()), "stdout": "输出内容" * 30000},
