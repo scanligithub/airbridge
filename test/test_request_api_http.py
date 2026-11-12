@@ -24,7 +24,7 @@ class FakeWorker:
     def get_session_peer_status(self):
         return {
             "state": "negotiated",
-            "features": ["handshake", "request.correlation"],
+            "features": ["handshake", "request.correlation", "request.deduplication"],
         }
 
     def send_frame(self, frame_type, payload=b""):
