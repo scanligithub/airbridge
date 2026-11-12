@@ -2,11 +2,11 @@
 
 - 文档编号：AB-ARCH-SESSION-001
 - 版本：1.0
-- 状态：**目标架构设计基线；P1.2 / P1.3 已验收，P1.4 B 端 RequestBroker 去重已接入并进行云端 CI 验收；P1.5–P1.9 待实现**
+- 状态：**目标架构设计基线；P1.2–P1.6 通用软件层与 Capture Adapter 已通过对应 GitHub Actions CI；P1.6 新版 Bridge 的真实 Capture 17.2 实机复验、P1.7 Process Supervisor、P1.8 Skill E2E 与 P1.9 Allegro Adapter 待完成**
 - 日期：2026-11-12
 - 适用范围：AirBridge 主机 A / 主机 B；未来所有通过 Agent Skill 使用远端专业软件的场景
 
-> 本文定义目标架构，不代表当前 main 分支已经实现 Session Broker、Session API 或新的 ABFP 消息。当前可运行的 Capture 文件队列 Bridge 是原型，实测证据见《Capture Tcl Bridge 实测基线》。
+> 本文定义目标架构，不代表当前 main 分支已经实现 Session Create / Close API、统一 Session Request 帧或 Process Supervisor。功能分支已完成 P1.5 Runtime Adapter / Profile 与 P1.6 Capture Tcl Adapter / Bridge 的软件级实现；新版 Bridge 尚待真实 Capture 17.2 实机复验。
 
 ---
 
@@ -247,17 +247,19 @@ Capture 的 Tcl Bridge 使用 after 轮询文件队列是已验证的原型。�
 
 ## 11. 与当前代码的关系
 
-P1.4 后，B 端 RequestBroker 独立负责 Request 幂等、结果持久化和缓存重放。P1.5 将实际 Engine 调用接入 RuntimeAdapterRegistry，由 RuntimeProfile 选择执行适配器：
+P1.4 后，B 端 RequestBroker 独立负责 Request 幂等、结果持久化和缓存重放。P1.5 将实际 Engine 调用接入 RuntimeAdapterRegistry；P1.6 再为 Capture Tcl 引入专用 Adapter：
 
-- legacy-cadence-oneshot → LegacyCadenceOneShotAdapter → 现有 EDAExecutor；
-- legacy-shell-process → LegacyShellProcessAdapter → 现有 ShellEngine；
-- RequestBroker 只调用通用执行回调，不解析 Tcl / SKILL / Shell，也不保存 Runtime Engine 引用；
-- RuntimeExecutionContext 向 Adapter 提供受控日志回调，不暴露 SerialWorker、串口或 Qt 控件；
-- EDAExecutor 仍负责旧的一次性启动、bootstrap、完成标记和进程跟踪；它不是 Capture 常驻 Session Adapter；
-- keep_open=True 仍不代表已有 Capture 能接收第二条 Tcl 请求；
-- 本机 Registry 中存在 Profile，不代表对端主机上一定安装了对应 Runtime。握手的 profiles=[] 保持不变，直至后续阶段具备可验证的主机级发现结果。
+- Tcl EDA_TASK_SUBMIT → RequestBroker → RuntimeAdapterRegistry（capture-tcl-session）→ CaptureTclAdapter → CaptureTclBridgeSession → capAutoLoad Bridge；
+- Allegro SKILL EDA_TASK_SUBMIT → RequestBroker → RuntimeAdapterRegistry（legacy-cadence-oneshot）→ LegacyCadenceOneShotAdapter → EDAExecutor；
+- Shell 请求 → RequestBroker → RuntimeAdapterRegistry（legacy-shell-process）→ LegacyShellProcessAdapter → ShellEngine；
+- RequestBroker 只负责请求去重、结果持久化和重放，不解析 Tcl / SKILL / Shell；
+- Capture Bridge 由 capAutoLoad 自动 source，在 Capture 自己的 Tcl 事件循环内以 after 轮询 Session 独立文件队列；单个 Session 同时只执行一条请求；
+- READY 校验 session_id、随机 startup_nonce、Capture PID 和 Tcl 版本；结果携带 request_id、payload hash、return code、输出、错误信息、PID 和时间；
+- Capture 请求超时 / 进程退出返回 UNKNOWN，Broker 缓存 UNKNOWN，不自动重放可能已产生副作用的脚本；
+- P1.6 在 Process Supervisor 完成前采用保守启动策略：若发现任何不属于当前 Worker 的 Capture.exe，拒绝再启动，不自动关闭或强杀现有进程；
+- 本机 Registry 注册了 Capture Profile，但握手仍保持 profiles=[]；不能据此宣称主机 A 已确认主机 B 的 Capture Profile 可用。
 
-P1.6 将为 Capture 实现独立的 Tcl Adapter / Bridge；P1.7 再将进程冲突扫描、优雅关闭、启动和进程身份校验放入通用 Process Supervisor。
+P1.6 软件 CI 已验证文件队列契约、READY 校验、结果解析、超时 UNKNOWN、Worker Profile 路由与重复请求去重；真实 Capture 17.2 / Tcl 8.6.0 的新版 Bridge 加载与实际 Dbo 命令仍需实机复验。P1.7 将实现进程冲突扫描、优雅关闭、确认退出、启动和进程身份校验。
 
 ## 12. 实施阶段与验收
 
@@ -275,7 +277,7 @@ P1.6 将为 Capture 实现独立的 Tcl Adapter / Bridge；P1.7 再将进程冲�
 
 验收必须包含：同一 Session 多次请求、请求重复投递、A/B 断连恢复、错误回传、长任务等待超时、关闭过程中的保存提示、Broker 重启以及 Capture 非正常退出。
 
-**当前实现边界（2026-11-12）：** P1.2 能力协商、P1.3 A 端 HTTP / ABFP request_id 关联、P1.4 B 端 SQLite RequestBroker 去重 / 结果缓存，以及 P1.5 本机 RuntimeAdapter / RuntimeProfile 注册与执行分派均已通过对应软件 CI 验收。P1.5 验收为 GitHub Actions Run #62（提交 322904a），单元与 A/B 软件模拟合计 66 项测试通过。P1.5 的 legacy-cadence-oneshot 与 legacy-shell-process 只是旧 Engine 兼容适配器；当前对端 CAPABILITIES 仍返回 profiles=[]，不宣称远端 Capture / Allegro Adapter 已安装或可用。Session Create、每 Session FIFO、Capture 长驻 Tcl Bridge 和通用 Process Supervisor 尚未实现，分别留给 P1.6 / P1.7。
+**当前实现边界（2026-11-12）：** P1.2–P1.4 协议协商、Request ID 关联与 B 端 RequestBroker 已通过软件 CI；P1.5 Runtime Adapter / Profile 的 Run #62 通过 66 项；P1.6 Capture Tcl Adapter / Bridge 的 Run #76（提交 9fc895c）通过 80 项测试。P1.6 已实现本机 Capture Profile、capAutoLoad 常驻 Bridge、同一 Interpreter 文件队列、READY nonce/PID 校验、结构化结果和 UNKNOWN 超时处理；但 CI 未启动真实 Capture，故新版 Bridge 的 Capture 17.2 实机复验仍待完成。当前对端 CAPABILITIES 仍返回 profiles=[]；Session Create / Close 专用协议、每 Session FIFO Broker、通用 Process Supervisor、Capture Skill E2E 和 Allegro Adapter 尚未实现，分别留给 P1.7–P1.9。
 
 ---
 
