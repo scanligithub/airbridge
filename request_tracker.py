@@ -31,6 +31,7 @@ class RequestTracker:
         self.max_records = max(1, int(max_records))
         self._lock = threading.RLock()
         self._records: Dict[str, Dict[str, Any]] = {}
+        self._next_sequence = 0
 
     @staticmethod
     def _utc_now() -> str:
@@ -77,12 +78,12 @@ class RequestTracker:
         if overflow > 0:
             completed = sorted(
                 (
-                    (record["_created_monotonic"], request_id)
+                    (record["_created_monotonic"], record["_sequence"], request_id)
                     for request_id, record in self._records.items()
                     if record["state"] != "pending"
                 )
             )
-            for _, request_id in completed[:overflow]:
+            for _, _, request_id in completed[:overflow]:
                 self._records.pop(request_id, None)
 
     def register(self, request_id: str, kind: str) -> Dict[str, Any]:
@@ -99,8 +100,10 @@ class RequestTracker:
                 raise RequestTrackerError(
                     "request tracker is full; all retained records are still pending"
                 )
+            self._next_sequence += 1
             self._records[normalized] = {
                 "request_id": normalized,
+                "_sequence": self._next_sequence,
                 "kind": kind.strip(),
                 "state": "pending",
                 "created_at": self._utc_now(),
