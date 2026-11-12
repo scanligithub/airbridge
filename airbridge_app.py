@@ -10,6 +10,7 @@ import math
 import ntpath
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -17,7 +18,19 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
-from eda_engine import CadenceVersionManager, EDAExecutor
+from eda_engine import (
+    CadenceVersionManager,
+    EDAExecutor,
+    EDALanguage,
+    detect_script_type,
+    find_cap_autoload_dirs,
+)
+from capture_tcl_bridge import (
+    CaptureTclAdapter,
+    CaptureTclBridgeError,
+    CaptureTclBridgeSession,
+    list_running_capture_pids,
+)
 from fs_engine import FSEngine
 from protocol import ABFPFrame, FrameParser, FrameType, MAX_PAYLOAD_LEN
 from runtime_session_protocol import (
@@ -38,6 +51,7 @@ from request_broker import RequestBroker, RequestBrokerError
 from runtime_adapter import (
     RuntimeExecutionContext,
     RuntimeExecutionRequest,
+    RuntimeProfile,
     create_legacy_runtime_registry,
 )
 from shell_engine import shell_engine, ShellEngine
@@ -427,10 +441,25 @@ class SerialWorker(threading.Thread):
     self.seq_counter = 0
     self.eda_executor = EDAExecutor()
     self.shell_engine = shell_engine
+    self._capture_session_lock = threading.RLock()
+    self.capture_tcl_bridge = None
+    self.capture_tcl_adapter = CaptureTclAdapter(self._ensure_capture_tcl_bridge)
     self.runtime_registry = create_legacy_runtime_registry(
         lambda: self.eda_executor,
         lambda: self.shell_engine,
     )
+    self.runtime_registry.register_adapter(self.capture_tcl_adapter)
+    self.runtime_registry.register_profile(
+        RuntimeProfile(
+            profile_id="capture-tcl-session",
+            adapter_id=self.capture_tcl_adapter.adapter_id,
+            display_name="OrCAD Capture persistent Tcl Session",
+            operations=self.capture_tcl_adapter.operations,
+            capabilities=self.capture_tcl_adapter.capabilities,
+            execution_mode="persistent-gui-session",
+        )
+    )
+    self.capture_tcl_adapter_registered = True
     # 远程 Shell 输出回调：把 stdout/stderr 实时推回对端
     def _shell_output_cb(task_id: str, stream: str, line: str):
       payload = json.dumps({
@@ -1389,6 +1418,115 @@ class SerialWorker(threading.Thread):
     compressed_resp = FSEngine.pack_payload(result)
     self.send_frame(FrameType.FS_RESPONSE, compressed_resp)
 
+  def _ensure_capture_tcl_bridge(self, payload: Dict[str, Any], context):
+    """Start or reuse the local Capture Tcl Bridge session.
+
+    Until P1.7 supplies the generic Process Supervisor, this method uses a
+    conservative guard: if any Capture.exe is already running and this Worker
+    does not own the matching live Bridge, it refuses to start a second one.
+    """
+    with self._capture_session_lock:
+      session = getattr(self, "capture_tcl_bridge", None)
+      if session is not None:
+        process = session.process
+        if process is not None and process.poll() is None:
+          timeout = float(payload.get("startup_timeout", 60) or 60)
+          session.wait_ready(timeout_seconds=timeout, expected_pid=process.pid)
+          return session
+        self.capture_tcl_bridge = None
+
+      running_pids = list_running_capture_pids()
+      if running_pids:
+        raise CaptureTclBridgeError(
+            "Capture process conflict: existing Capture.exe PID(s) "
+            + ", ".join(str(pid) for pid in running_pids)
+            + ". P1.7 Process Supervisor must gracefully close all existing "
+            "instances and confirm exit before starting a managed Capture session."
+        )
+
+      requested_version = str(payload.get("version", "auto") or "auto")
+      info, reason = CadenceVersionManager.select_best_installation(
+          requested_version=requested_version,
+          script_content=str(payload.get("script") or payload.get("script_content") or ""),
+          target_file=str(payload.get("target_file") or ""),
+      )
+      if not info or not info.get("capture_exe"):
+        raise CaptureTclBridgeError(
+            f"Capture installation not found for version {requested_version!r}: {reason}"
+        )
+
+      capture_exe = info["capture_exe"]
+      autoload_dirs = find_cap_autoload_dirs(capture_exe, info.get("cdsroot", ""))
+      if not autoload_dirs:
+        raise CaptureTclBridgeError(
+            "Capture capAutoLoad directory not found; persistent Tcl Bridge cannot be initialized"
+        )
+
+      target_file = str(payload.get("target_file") or "").strip()
+      command = [capture_exe]
+      bridge_target = ""
+      if target_file:
+        extension = os.path.splitext(target_file)[1].lower()
+        if not os.path.isfile(target_file):
+          raise CaptureTclBridgeError(f"Capture target file does not exist: {target_file}")
+        if extension == ".dsn":
+          command.append(target_file)
+          bridge_target = target_file
+        elif extension != ".opj":
+          raise CaptureTclBridgeError("Capture target_file must be a .dsn or .opj file")
+
+      local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+      runtime_root = (
+          os.path.join(local_app_data, "AirBridge", "capture_sessions")
+          if local_app_data
+          else os.path.join(self.eda_executor.workspace_dir, "capture_sessions")
+      )
+      session = CaptureTclBridgeSession.create(
+          session_root=runtime_root,
+          autoload_dir=autoload_dirs[0],
+          runtime_version=str(info.get("version", "unknown")),
+          target_file=bridge_target,
+      )
+      env = CadenceVersionManager.build_isolated_env(info.get("cdsroot", ""))
+      try:
+        process = subprocess.Popen(
+            command,
+            cwd=self.eda_executor.workspace_dir,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
+      except Exception as exc:
+        try:
+          session.hook_path.unlink(missing_ok=True)
+        except OSError:
+          pass
+        raise CaptureTclBridgeError(f"cannot launch Capture: {exc}") from exc
+
+      session.attach_process(process)
+      with self.eda_executor.process_lock:
+        self.eda_executor.managed_processes["capture"] = process
+      self.eda_executor.active_process = process
+      self.capture_tcl_bridge = session
+      context.log(
+          f"[Capture Adapter] started Capture {info.get('version', 'unknown')} "
+          f"PID={process.pid}; {reason}"
+      )
+      try:
+        ready = session.wait_ready(
+            timeout_seconds=float(payload.get("startup_timeout", 60) or 60),
+            expected_pid=process.pid,
+        )
+      except CaptureTclBridgeError:
+        # Do not force-kill a GUI that may still be loading or displaying a
+        # modal prompt. Keep the process handle and hook for diagnosis/retry.
+        raise
+      context.log(
+          f"[Capture Adapter] Bridge READY session={session.session_id} "
+          f"PID={ready['runtime_pid']} Tcl={ready['tcl_version']}"
+      )
+      return session
+
   def _ensure_runtime_registry(self):
     """Return the local generic registry, including for lightweight test workers."""
     registry = getattr(self, "runtime_registry", None)
@@ -1424,8 +1562,14 @@ class SerialWorker(threading.Thread):
               "keep_open": keep_open,
           },
       )
+      profile_id = "legacy-cadence-oneshot"
+      if (
+          getattr(self, "capture_tcl_adapter_registered", False)
+          and detect_script_type(script, hint) == EDALanguage.ORCAD_TCL
+      ):
+        profile_id = "capture-tcl-session"
       return self._ensure_runtime_registry().execute(
-          "legacy-cadence-oneshot",
+          profile_id,
           request,
           RuntimeExecutionContext(log_callback=log_fn),
       )
