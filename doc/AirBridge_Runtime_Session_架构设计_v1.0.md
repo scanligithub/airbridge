@@ -2,7 +2,7 @@
 
 - 文档编号：AB-ARCH-SESSION-001
 - 版本：1.0
-- 状态：**设计基线（待实现）**
+- 状态：**目标架构设计基线；P1.2 / P1.3 已验收，P1.4 B 端 RequestBroker 去重已接入并进行云端 CI 验收；P1.5–P1.9 待实现**
 - 日期：2026-11-12
 - 适用范围：AirBridge 主机 A / 主机 B；未来所有通过 Agent Skill 使用远端专业软件的场景
 
@@ -272,6 +272,8 @@ Capture 的 Tcl Bridge 使用 after 轮询文件队列是已验证的原型。�
 | P1.9 | Allegro Adapter 验证 | 不影响既有 SKILL 工作流 |
 
 验收必须包含：同一 Session 多次请求、请求重复投递、A/B 断连恢复、错误回传、长任务等待超时、关闭过程中的保存提示、Broker 重启以及 Capture 非正常退出。
+
+**当前实现边界（2026-11-12）：** P1.2 已完成能力协商；P1.3 已完成 A 端 HTTP / ABFP request_id 结果关联；P1.4 正在将通用 B 端 RequestBroker 接入现有 EDA / Shell 帧，负责 SQLite 去重、缓存结果、冲突检测、容量 / TTL 与 heartbeat stale recovery。P1.4 不提供 Session Create、每 Session FIFO、Runtime Adapter 或 Process Supervisor；这些仍按 P1.5–P1.7 分阶段实现。
 
 ---
 
