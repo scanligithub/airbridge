@@ -256,10 +256,12 @@ P1.4 后，B 端 RequestBroker 独立负责 Request 幂等、结果持久化和�
 - Capture Bridge 由 capAutoLoad 自动 source，在 Capture 自己的 Tcl 事件循环内以 after 轮询 Session 独立文件队列；单个 Session 同时只执行一条请求；
 - READY 校验 session_id、随机 startup_nonce、Capture PID 和 Tcl 版本；结果携带 request_id、payload hash、return code、输出、错误信息、PID 和时间；
 - Capture 请求超时 / 进程退出返回 UNKNOWN，Broker 缓存 UNKNOWN，不自动重放可能已产生副作用的脚本；
-- P1.6 在 Process Supervisor 完成前采用保守启动策略：若发现任何不属于当前 Worker 的 Capture.exe，拒绝再启动，不自动关闭或强杀现有进程；
+- P1.7 新增通用 ProcessSupervisor：枚举所有匹配进程（含手动启动），检查窗口和阻塞提示，验证 PID 对应的映像身份后仅发送 WM_CLOSE，并等待进程句柄实际退出；任何进程残留、扫描期间出现新实例、保存/确认提示或无法识别的窗口都会阻断启动；
+- Worker 的 Capture Tcl Session 启动路径已接入 Supervisor；健康的 Worker-owned Capture Session 仍直接复用，不会先关闭再启动；
+- Allegro ProcessSpec 已定义，但旧 Allegro SKILL 执行路径尚未切换到 Supervisor 管理，留给 P1.9；
 - 本机 Registry 注册了 Capture Profile，但握手仍保持 profiles=[]；不能据此宣称主机 A 已确认主机 B 的 Capture Profile 可用。
 
-P1.6 软件 CI 已验证文件队列契约、READY 校验、结果解析、超时 UNKNOWN、Worker Profile 路由与重复请求去重；真实 Capture 17.2 / Tcl 8.6.0 的新版 Bridge 加载与实际 Dbo 命令仍需实机复验。P1.7 将实现进程冲突扫描、优雅关闭、确认退出、启动和进程身份校验。
+P1.6 软件 CI 已验证文件队列契约、READY 校验、结果解析、超时 UNKNOWN、Worker Profile 路由与重复请求去重；真实 Capture 17.2 / Tcl 8.6.0 的新版 Bridge 加载与实际 Dbo 命令仍需实机复验。P1.7 软件 CI 已验证 ProcessSupervisor 状态机、Windows 进程发现 / 映像路径 / 窗口枚举、WM_CLOSE 策略模拟、超时阻断和新进程竞态；但没有向真实 Capture.exe 发送 WM_CLOSE，也未测试真实保存提示。
 
 ## 12. 实施阶段与验收
 
@@ -277,7 +279,7 @@ P1.6 软件 CI 已验证文件队列契约、READY 校验、结果解析、超�
 
 验收必须包含：同一 Session 多次请求、请求重复投递、A/B 断连恢复、错误回传、长任务等待超时、关闭过程中的保存提示、Broker 重启以及 Capture 非正常退出。
 
-**当前实现边界（2026-11-12）：** P1.2–P1.4 协议协商、Request ID 关联与 B 端 RequestBroker 已通过软件 CI；P1.5 Runtime Adapter / Profile 的 Run #62 通过 66 项；P1.6 Capture Tcl Adapter / Bridge 的 Run #76（提交 9fc895c）通过 80 项测试。P1.6 已实现本机 Capture Profile、capAutoLoad 常驻 Bridge、同一 Interpreter 文件队列、READY nonce/PID 校验、结构化结果和 UNKNOWN 超时处理；但 CI 未启动真实 Capture，故新版 Bridge 的 Capture 17.2 实机复验仍待完成。当前对端 CAPABILITIES 仍返回 profiles=[]；Session Create / Close 专用协议、每 Session FIFO Broker、通用 Process Supervisor、Capture Skill E2E 和 Allegro Adapter 尚未实现，分别留给 P1.7–P1.9。
+**当前实现边界（2026-11-12）：** P1.2–P1.4 协议协商、Request ID 关联与 B 端 RequestBroker 已通过软件 CI；P1.5 Runtime Adapter / Profile 的 Run #62 通过 66 项；P1.6 Capture Tcl Adapter / Bridge 的 Run #76 通过 80 项；P1.7 Process Supervisor 的 Run #85（提交 42ba2e3）通过 89 项测试。P1.6 已实现本机 Capture Profile、capAutoLoad 常驻 Bridge、同一 Interpreter 文件队列、READY nonce/PID 校验、结构化结果和 UNKNOWN 超时处理；新版 Bridge 的 Capture 17.2 实机复验仍待完成。P1.7 已实现通用进程发现、映像身份校验、WM_CLOSE、退出等待与阻断策略，并接入 Capture 启动路径；实际 Capture 进程关闭 / 保存提示尚未实机验收。当前对端 CAPABILITIES 仍返回 profiles=[]；Session Create / Close 专用协议、每 Session FIFO Broker、Allegro ProcessSupervisor 集成、Capture Skill E2E 和 Allegro 专用 Adapter 尚未实现，分别留给 P1.8 / P1.9 及后续协议阶段。
 
 ---
 
