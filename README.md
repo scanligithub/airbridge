@@ -62,3 +62,11 @@ build.bat
 
 - v2.4：远程 Shell
 - v2.3：多版本 Cadence + 大文件吞吐
+
+## 设计文档
+
+- [文档索引](doc/README.md)
+- [通用 Runtime Session 架构设计](doc/AirBridge_Runtime_Session_架构设计_v1.0.md)
+- [Runtime Session Protocol v1](doc/AirBridge_Session_Protocol_v1.0.md)
+- [Capture Tcl Bridge 实测基线](doc/Capture_Tcl_Bridge_实测基线_v1.0.md)
+
