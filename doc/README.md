@@ -14,7 +14,7 @@
 | [Process Supervisor 设计与验收 v1.0](Process_Supervisor_v1.0.md) | Capture / Allegro 进程发现、映像身份校验、WM_CLOSE、退出确认、启动阻断策略 | P1.7 软件 CI PASS；Capture Start Page 的 WM_CLOSE 与真实进程退出 PASS；保存提示、多实例和无响应场景待验收 |
 | [Capture Tcl Bridge 实测基线](Capture_Tcl_Bridge_实测基线_v1.0.md) | Capture 17.2 原型及正式 Bridge 实测、P1.6 capAutoLoad / Session、多请求和错误恢复、P1.7 进程生命周期、DboSession / DboDesign 命令清单 | 2026-11-12 主机 B：正式 Bridge、并发串行、错误恢复、关闭/重启及 Dbo 命令枚举实机 PASS；设计对象深度读取与保存提示边界待验收 |
 | [GitHub Actions Runtime Session CI 验收配置](GitHub_Actions_Runtime_Session_AB验收配置.md) | GitHub 托管 Windows Runner、协议单测、生产 SerialWorker 双端模拟和验收边界 | 云端 CI 配置；物理串口实测不在当前 CI 范围 |
-| [Capture Dbo API Tcl 示例索引 v1.0](Capture_Dbo_API_Tcl_示例索引_v1.0.md) | 从 orcad_tclscripts 整理的 DboSession / Design / Schematic / Page / 属性读取示例、调用约定、副作用分类与最小实测计划 | 源码索引完成；Start Page GetActiveDesign 等运行时行为待分项验收 |
+| [Capture Dbo API Tcl 示例索引 v1.0](Capture_Dbo_API_Tcl_示例索引_v1.0.md) | 从 orcad_tclscripts 整理的 DboSession / Design / Schematic / Page / 属性读取示例、调用约定、副作用分类与最小实测计划 | 源码索引完成；DBO-V01 Start Page GetActiveDesign 实机 PASS；DBO-V02 迭代器待验收 |
 
 ## 现有专业软件生命周期文档
 
