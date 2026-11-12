@@ -96,7 +96,14 @@ class RequestTracker:
             }
             return self._snapshot_locked(self._records[normalized])
 
-    def complete(self, request_id: str, result: Dict[str, Any]) -> bool:
+    def complete(
+        self,
+        request_id: str,
+        result: Dict[str, Any],
+        state: str = "completed",
+    ) -> bool:
+        if state not in ("completed", "accepted"):
+            raise ValueError("state must be 'completed' or 'accepted'")
         try:
             normalized = self.validate_request_id(request_id)
         except RequestTrackerError:
@@ -108,7 +115,7 @@ class RequestTracker:
             record = self._records.get(normalized)
             if record is None or record["state"] != "pending":
                 return False
-            record["state"] = "completed"
+            record["state"] = state
             record["result"] = copy.deepcopy(result)
             record["completed_at"] = self._utc_now()
             record["event"].set()
