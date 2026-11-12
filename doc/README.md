@@ -7,8 +7,8 @@
 | 文档 | 内容 | 状态 |
 |---|---|---|
 | [通用 Runtime Session 架构设计 v1.0](AirBridge_Runtime_Session_架构设计_v1.0.md) | Agent Skill、AirBridge Client、Session Broker、Process Supervisor、Runtime Adapter 的边界与生命周期 | 设计基线，待实现 |
-| [Runtime Session Protocol v1](AirBridge_Session_Protocol_v1.0.md) | Session / Request / Result 数据结构、ABFP 帧、HTTP API、幂等、超时和取消语义 | P1.2–P1.4 已通过对应 CI；P1.5 Adapter / Profile 实现已提交、等待 CI 验收；Session 生命周期 / Capture Bridge / Process Supervisor 待实现 |
-| [Runtime Adapter / Profile 接口设计 v1.0](Runtime_Adapter_Profile_v1.0.md) | 通用 Adapter 接口、Profile Registry、旧版 EDA / Shell 兼容适配器及执行边界 | P1.5 已实现，待本轮 GitHub Actions 验收；不代表 Capture 常驻 Adapter 已实现 |
+| [Runtime Session Protocol v1](AirBridge_Session_Protocol_v1.0.md) | Session / Request / Result 数据结构、ABFP 帧、HTTP API、幂等、超时和取消语义 | P1.2–P1.5 通用软件层 CI PASS；Session 生命周期 / Capture Bridge / Process Supervisor 待实现 |
+| [Runtime Adapter / Profile 接口设计 v1.0](Runtime_Adapter_Profile_v1.0.md) | 通用 Adapter 接口、Profile Registry、旧版 EDA / Shell 兼容适配器及执行边界 | P1.5 GitHub Actions 软件 CI PASS；不代表 Capture 常驻 Adapter 已实现 |
 | [Capture Tcl Bridge 实测基线](Capture_Tcl_Bridge_实测基线_v1.0.md) | Capture 17.2 自动加载、文件队列原型、Dbo/页面操作和 A→B→Capture→B→A 实测证据 | 原型实测通过，正式 Adapter 待实现 |
 | [GitHub Actions Runtime Session CI 验收配置](GitHub_Actions_Runtime_Session_AB验收配置.md) | GitHub 托管 Windows Runner、协议单测、生产 SerialWorker 双端模拟和验收边界 | 云端 CI 配置；物理串口实测不在当前 CI 范围 |
 
