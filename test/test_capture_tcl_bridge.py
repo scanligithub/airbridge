@@ -185,7 +185,6 @@ class CaptureTclBridgeTests(unittest.TestCase):
         self.session.bridge_script_path.write_text(
             self.session.render_tcl_bridge(),
             encoding="utf-8",
-            newline="\\n",
         )
         interpreter.call("source", str(self.session.bridge_script_path))
 
