@@ -20,6 +20,7 @@ from runtime_session_protocol import (
     make_session_capabilities,
 )
 from request_tracker import RequestTracker
+from request_broker import RequestBroker
 
 
 class _FakeSerialPort:
@@ -63,6 +64,7 @@ def _new_worker():
     }
     worker.session_link_generation = 1
     worker.request_tracker = RequestTracker()
+    worker.request_broker = RequestBroker(":memory:")
     worker.parser = FrameParser()
     worker.seq_counter = 0
     worker.sig = SimpleNamespace(sig_rx_log=_SignalSink())
