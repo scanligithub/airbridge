@@ -1,3 +1,12 @@
+> **文档状态更新（2026-11-12）：历史实现记录 / 已被新架构取代。**
+>
+> 本文描述的是旧版一次性启动流程：通过 DSN 命令行参数开图、临时 Tcl 探针和 managed_processes 关闭。该流程不再作为后续 Capture Skill 的目标架构。新的设计基线请先阅读：
+> - [AirBridge 通用 Runtime Session 架构设计 v1.0](AirBridge_Runtime_Session_架构设计_v1.0.md)
+> - [AirBridge Runtime Session Protocol v1](AirBridge_Session_Protocol_v1.0.md)
+> - [Capture Tcl Bridge 实测基线 v1.0](Capture_Tcl_Bridge_实测基线_v1.0.md)
+>
+> 历史实现细节保留供兼容迁移参考；不要把本文中“禁止 Tcl Open / 只通过 DSN 命令行开图 / 仅关闭 managed_processes”当作新架构要求。Capture 17.2 已实测 Tcl Open OPJ、OPage、Dbo Session、capAutoLoad 常驻文件队列 Bridge 和 Exit。详见新的实测基线文档。
+
 # OrCAD Capture 原理图启动、开图与关闭流程
 
 - 文档状态：远程文件选择与动态路径传递已实现；新的选择器流程待主机 A / B 实机复测
