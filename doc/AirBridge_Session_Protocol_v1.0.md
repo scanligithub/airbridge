@@ -2,7 +2,7 @@
 
 - 文档编号：AB-PROTO-SESSION-001
 - 版本：1.0
-- 状态：**P1.2 握手与 P1.3 A 端 HTTP / ABFP Request ID 关联已验收；P1.4 B 端持久化 Request 去重已接入，云端 CI 验收中；Session 生命周期与 Runtime Adapter 待后续阶段**
+- 状态：**P1.2 能力协商、P1.3 A 端 Request ID 关联、P1.4 B 端持久化 Request 去重及 P1.5 本机 Runtime Adapter / Profile 抽象已完成对应软件 CI 验收；Session 生命周期、Capture Tcl Adapter 与 Process Supervisor 待后续阶段**
 - 日期：2026-11-12
 - 关联架构：AirBridge 通用 Runtime Session 架构设计 v1.0
 
@@ -111,7 +111,7 @@ P1.2 已实现。收到 HELLO 的节点会返回 CAPABILITIES；两端在连接�
 }
 ~~~
 
-P1.2 提供 `handshake`，P1.3 增加 `request.correlation`，P1.4 增加 `request.deduplication`；当前 `profiles` 仍为空。这不代表已支持 Session 创建或任何 Capture / Allegro Runtime Adapter。`runtime-session.v1` 标识 Envelope / 协议族版本，实际已实现功能必须以 `features` 为准。Profile 只作为 B 端注册的通用能力描述，A 端不能假设所有主机都安装了某个 Profile。
+P1.2 提供 `handshake`，P1.3 增加 `request.correlation`，P1.4 增加 `request.deduplication`。P1.5 已在每台 AirBridge 主机的本地执行层实现 RuntimeAdapterRegistry，并注册旧版 EDA / Shell 兼容 Profile；但当前 `profiles` 仍为空。这是有意的安全边界：本机注册信息不能证明对端已安装某个 Adapter，也不能证明其专业软件版本、运行环境和执行 Bridge 已就绪。只有后续阶段实现主机级 Profile 发现与实测验证后，才可通过 CAPABILITIES 广播可用 Profile。`runtime-session.v1` 标识 Envelope / 协议族版本，实际已实现通用协议功能以 `features` 为准，具体运行环境能力以经过验证的 Profile 元数据为准。
 
 ### 4.3 SESSION_CREATE（建议 FrameType 0x17）
 
