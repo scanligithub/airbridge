@@ -48,7 +48,7 @@ class RequestTracker:
             raise RequestTrackerError("request_id must be a valid UUID") from exc
         return str(parsed)
 
-    def _prune_locked(self, now: float) -> None:
+    def _prune_locked(self, now: float, reserve_slot: bool = False) -> None:
         stale_pending = [
             record
             for record in self._records.values()
@@ -73,7 +73,7 @@ class RequestTracker:
         for request_id in expired:
             self._records.pop(request_id, None)
 
-        overflow = len(self._records) - self.max_records + 1
+        overflow = len(self._records) - self.max_records + (1 if reserve_slot else 0)
         if overflow > 0:
             completed = sorted(
                 (
@@ -92,7 +92,7 @@ class RequestTracker:
 
         now = time.monotonic()
         with self._lock:
-            self._prune_locked(now)
+            self._prune_locked(now, reserve_slot=True)
             if normalized in self._records:
                 raise RequestTrackerError(f"request_id already registered: {normalized}")
             if len(self._records) >= self.max_records:
@@ -133,6 +133,7 @@ class RequestTracker:
             record["state"] = state
             record["result"] = copy.deepcopy(result)
             record["completed_at"] = self._utc_now()
+            record["_created_monotonic"] = time.monotonic()
             record["event"].set()
             return True
 
@@ -151,6 +152,7 @@ class RequestTracker:
             record["state"] = state
             record["error"] = str(error)
             record["completed_at"] = self._utc_now()
+            record["_created_monotonic"] = time.monotonic()
             record["event"].set()
             return True
 
@@ -162,6 +164,7 @@ class RequestTracker:
                     record["state"] = "unknown"
                     record["error"] = str(error)
                     record["completed_at"] = self._utc_now()
+                    record["_created_monotonic"] = time.monotonic()
                     record["event"].set()
                     count += 1
         return count
