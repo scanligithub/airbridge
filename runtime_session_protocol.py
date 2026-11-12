@@ -87,8 +87,10 @@ def make_session_capabilities(
     return create_envelope(
         {
             "supported_protocols": [SESSION_PROTOCOL_ID],
-            # This build implements handshake only. Session creation and
-            # runtime execution must not be advertised before later phases.
+            # The generic Worker / Broker already implement correlation and
+            # deduplication. Local adapter registration is not proof that a
+            # profile is installed and usable on the peer, so keep wire
+            # profiles empty until host-specific discovery is implemented.
             "features": list(IMPLEMENTED_FEATURES),
             "profiles": [],
             "server_version": server_version,
