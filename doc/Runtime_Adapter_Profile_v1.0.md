@@ -3,8 +3,8 @@
 - 文档编号：AB-RUNTIME-ADAPTER-001
 - 版本：1.0
 - 日期：2026-11-12
-- 对应阶段：P1.5 / P1.6
-- 状态：**P1.5 / P1.6 GitHub Actions 软件 CI PASS**（P1.5 Run #62：66 项；P1.6 Run #76：80 项）；真实串口和新版 Capture Bridge 实机复验仍未完成
+- 对应阶段：P1.5–P1.7
+- 状态：**P1.5–P1.7 GitHub Actions 软件 CI PASS**（P1.5 Run #62：66 项；P1.6 Run #76：80 项；P1.7 Run #85：89 项）；真实串口、新版 Capture Bridge 与 Cadence GUI 进程关闭实机复验仍未完成
 
 ## 1. 目标与边界
 
@@ -174,7 +174,7 @@ Adapter 透传现有 ShellEngine 的结构化结果；同步 / 异步语义、Sh
 ## 8. 后续演进
 
 - P1.6（软件实现与 CI PASS）：CaptureTclAdapter + capAutoLoad Bridge，READY nonce/PID 校验、持久 Interpreter、结构化结果与 UNKNOWN 超时语义；真实 Capture 17.2 实机复验仍待执行。
-- P1.7：Process Supervisor 消费 Profile 的进程匹配 / 独占策略，负责扫描所有冲突进程、优雅关闭并确认退出、启动与身份验证。
+- P1.7（软件实现与 CI PASS）：ProcessSupervisor 消费 app_id / ProcessSpec，扫描全部同名进程（包含手动实例）、校验映像身份、检查阻塞对话框、发送 WM_CLOSE、等待进程退出；若有进程残留或新实例出现则阻止 Capture 启动。Run #85 共 89 项测试通过。真实 Capture GUI 关闭仍待主机 B 实机验收；目前 Worker 启动集成覆盖 Capture，Allegro 旧 SKILL 执行路径尚未迁移。
 - P1.8：Capture Skill E2E。
 - P1.9：新增 Allegro SKILL Adapter / Profile，不改变通用 Broker 契约。
 
@@ -185,4 +185,10 @@ P1.6 的 `CaptureTclAdapter` 不调用 `EDAExecutor.execute_script()` 启动每�
 该 Adapter 当前仅在主机 B 本地 Registry 中注册，**不通过 SESSION_CAPABILITIES 广播**，因为主机 A 还没有主机级 Profile 可用性探测。P1.6 仍复用现有 EDA ABFP 帧，不代表 Session Create、Session FIFO Broker 或统一 SESSION_EXEC 协议已经完成。
 
 P1.6 软件验收见 [GitHub Actions Run #76](https://github.com/scanligithub/airbridge/actions/runs/43148279572)：80 项测试通过。GitHub Runner 使用 Fake Capture Bridge / Python 队列模拟器，没有真实启动 Cadence；新版 Bridge 的 Capture 17.2 实机确认仍是独立验收项。
+
+## 10. P1.7 Process Supervisor 接入
+
+P1.7 的通用实现见 [Process Supervisor 设计与验收 v1.0](Process_Supervisor_v1.0.md)。Capture Session 创建前，Worker 调用 `ProcessSupervisor.ensure_exclusive("capture")`；健康的当前 Worker-owned Session 直接复用，不触发关闭。旧进程（包含手动启动的 Capture.exe）则先做窗口检查，再请求 WM_CLOSE 并等待真实退出。
+
+P1.7 软件验收见 [GitHub Actions Run #85](https://github.com/scanligithub/airbridge/actions/runs/43149369815)：ProcessSupervisor 9 项、全套单元 68 项、A/B Worker 12 项、HTTP 集成 9 项，合计 89 项通过。Windows Runner 实际验证当前 Python 进程发现、映像路径查询和窗口枚举；所有多 Capture 关闭、阻塞对话框与超时场景均使用 FakeProcessBackend。**未对真实 Capture.exe 发送 WM_CLOSE，也未验证保存提示**，因此真实 Cadence GUI 生命周期仍需主机 B 实机验收。
 
