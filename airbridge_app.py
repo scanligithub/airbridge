@@ -18,6 +18,15 @@ from typing import Any, Dict, List, Tuple
 from eda_engine import CadenceVersionManager, EDAExecutor
 from fs_engine import FSEngine
 from protocol import ABFPFrame, FrameParser, FrameType
+from runtime_session_protocol import (
+    CLIENT_VERSION,
+    SESSION_PROTOCOL_ID,
+    SessionProtocolError,
+    decode_session_message,
+    encode_session_message,
+    make_session_capabilities,
+    make_session_hello,
+)
 from shell_engine import shell_engine, ShellEngine
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
@@ -447,7 +456,26 @@ class SerialWorker(threading.Thread):
     self.fs_pending_lock = threading.Lock()
     self.fs_pending_requests: Dict[int, Dict[str, Any]] = {}
 
+    # Runtime Session protocol negotiation state. This is transport-level
+    # capability discovery only; it does not create or manage Runtime Sessions.
+    self.session_protocol_lock = threading.RLock()
+    self.session_pending_handshakes: Dict[str, Dict[str, Any]] = {}
+    self.session_peer_status: Dict[str, Any] = {
+        "state": "disconnected",
+        "negotiated": False,
+        "protocol": SESSION_PROTOCOL_ID,
+        "supported_protocols": [],
+        "features": [],
+        "profiles": [],
+        "last_handshake_id": None,
+        "error": None,
+    }
+    self.session_auto_handshake_lock = threading.Lock()
+    self.session_auto_handshake_thread = None
+
   def connect_serial(self, port: str, baud: int):
+    self._reset_session_peer_status("serial connection is being reinitialized")
+    connected = False
     with self.lock:
       try:
         self.parser = FrameParser()
@@ -459,12 +487,15 @@ class SerialWorker(threading.Thread):
           except Exception:
             pass
         self.sig.sig_connected.emit(True, f"已连接 {port} @ {baud}")
+        connected = True
       except Exception as e:
         self.ser = None
         err_str = str(e)
         if "87" in err_str and baud > 115200:
           err_str += " (主板原生 COM 端口最高仅支持 115200，请调低波特率！)"
         self.sig.sig_connected.emit(False, f"连接失败: {err_str}")
+    if connected:
+      self._start_auto_session_negotiation()
 
   def disconnect_serial(self):
     with self.lock:
@@ -476,6 +507,167 @@ class SerialWorker(threading.Thread):
           pass
         self.ser = None
       self.sig.sig_connected.emit(False, "串口已断开")
+    self._reset_session_peer_status("serial link disconnected")
+
+  def _reset_session_peer_status(self, reason: str):
+    pending = []
+    with self.session_protocol_lock:
+      pending = list(self.session_pending_handshakes.values())
+      self.session_pending_handshakes.clear()
+      self.session_peer_status = {
+          "state": "disconnected",
+          "negotiated": False,
+          "protocol": SESSION_PROTOCOL_ID,
+          "supported_protocols": [],
+          "features": [],
+          "profiles": [],
+          "last_handshake_id": None,
+          "error": reason,
+      }
+    for item in pending:
+      item["response"] = {"state": "disconnected", "error": reason}
+      item["event"].set()
+
+  def get_session_peer_status(self) -> Dict[str, Any]:
+    with self.session_protocol_lock:
+      status = dict(self.session_peer_status)
+      status["supported_protocols"] = list(status.get("supported_protocols", []))
+      status["features"] = list(status.get("features", []))
+      status["profiles"] = list(status.get("profiles", []))
+      status["can_create_session"] = "session.create" in status["features"]
+      return status
+
+  def begin_session_negotiation(self) -> Dict[str, Any]:
+    with self.lock:
+      connected = self.ser is not None and bool(getattr(self.ser, "is_open", False))
+    if not connected:
+      return {"success": False, "state": "disconnected", "error": "serial link is not connected"}
+
+    envelope = make_session_hello(CLIENT_VERSION)
+    message_id = envelope["message_id"]
+    try:
+      payload = encode_session_message(FrameType.SESSION_HELLO, envelope)
+    except SessionProtocolError as exc:
+      return {"success": False, "state": "failed", "error": str(exc)}
+
+    event = threading.Event()
+    with self.session_protocol_lock:
+      self.session_pending_handshakes[message_id] = {
+          "event": event,
+          "response": None,
+      }
+      self.session_peer_status = {
+          "state": "negotiating",
+          "negotiated": False,
+          "protocol": SESSION_PROTOCOL_ID,
+          "supported_protocols": [],
+          "features": [],
+          "profiles": [],
+          "last_handshake_id": message_id,
+          "error": None,
+      }
+    self.send_frame(FrameType.SESSION_HELLO, payload)
+    return {"success": True, "state": "negotiating", "message_id": message_id}
+
+  def _wait_session_negotiation(self, message_id: str, timeout: float) -> Dict[str, Any]:
+    with self.session_protocol_lock:
+      pending = self.session_pending_handshakes.get(message_id)
+    if pending is None:
+      return {"success": False, "state": "unknown", "error": "handshake is no longer pending"}
+
+    if not pending["event"].wait(timeout=max(0.0, timeout)):
+      with self.session_protocol_lock:
+        self.session_pending_handshakes.pop(message_id, None)
+        if self.session_peer_status.get("last_handshake_id") == message_id and self.session_peer_status.get("state") == "negotiating":
+          self.session_peer_status["state"] = "unconfirmed"
+          self.session_peer_status["error"] = "peer did not answer the capability handshake"
+      return self.get_session_peer_status()
+
+    with self.session_protocol_lock:
+      self.session_pending_handshakes.pop(message_id, None)
+      response = pending.get("response")
+    if response and response.get("state") == "disconnected":
+      return {"success": False, **response}
+    return self.get_session_peer_status()
+
+  def _start_auto_session_negotiation(self):
+    with self.session_auto_handshake_lock:
+      if self.session_auto_handshake_thread and self.session_auto_handshake_thread.is_alive():
+        return
+      self.session_auto_handshake_thread = threading.Thread(
+          target=self._auto_negotiate_session_peer,
+          name="AirBridgeSessionNegotiation",
+          daemon=True,
+      )
+      self.session_auto_handshake_thread.start()
+
+  def _auto_negotiate_session_peer(self):
+    for attempt in range(1, 4):
+      submitted = self.begin_session_negotiation()
+      if not submitted.get("success"):
+        return
+      status = self._wait_session_negotiation(submitted["message_id"], timeout=1.0)
+      if status.get("state") == "negotiated":
+        self.sig.sig_rx_log.emit(
+            "INFO",
+            "Runtime Session protocol handshake complete; features=" +
+            ",".join(status.get("features", [])),
+        )
+        return
+      if status.get("state") == "no_common_protocol":
+        self.sig.sig_rx_log.emit("WARN", "对端未声明共同的 Runtime Session 协议版本。")
+        return
+      if attempt < 3:
+        time.sleep(0.25)
+    self.sig.sig_rx_log.emit(
+        "WARN",
+        "Runtime Session 能力协商未得到确认；对端可能是旧版本，也可能是链路暂时无响应。",
+    )
+
+  def _handle_session_hello(self, frame: ABFPFrame):
+    try:
+      hello = decode_session_message(FrameType.SESSION_HELLO, frame.payload)
+      response = make_session_capabilities(hello["message_id"], CLIENT_VERSION)
+      encoded = encode_session_message(FrameType.SESSION_CAPABILITIES, response)
+      self.send_frame(FrameType.SESSION_CAPABILITIES, encoded)
+    except SessionProtocolError as exc:
+      self.sig.sig_rx_log.emit("WARN", f"Runtime Session HELLO 无效: {exc}")
+
+  def _handle_session_capabilities(self, frame: ABFPFrame):
+    try:
+      capabilities = decode_session_message(
+          FrameType.SESSION_CAPABILITIES, frame.payload
+      )
+    except SessionProtocolError as exc:
+      self.sig.sig_rx_log.emit("WARN", f"Runtime Session CAPABILITIES 无效: {exc}")
+      return
+
+    correlation_id = capabilities.get("correlation_id")
+    with self.session_protocol_lock:
+      pending = self.session_pending_handshakes.get(correlation_id)
+      if pending is None:
+        self.sig.sig_rx_log.emit(
+            "WARN", "收到未关联到当前 HELLO 的 Runtime Session CAPABILITIES，已忽略。"
+        )
+        return
+      payload = capabilities["payload"]
+      supported = payload.get("supported_protocols", [])
+      common = SESSION_PROTOCOL_ID in supported
+      state = "negotiated" if common else "no_common_protocol"
+      self.session_peer_status = {
+          "state": state,
+          "negotiated": common,
+          "protocol": SESSION_PROTOCOL_ID,
+          "supported_protocols": list(supported),
+          "features": list(payload.get("features", [])),
+          "profiles": list(payload.get("profiles", [])),
+          "max_frame_payload": payload.get("max_frame_payload"),
+          "peer_version": payload.get("server_version"),
+          "last_handshake_id": correlation_id,
+          "error": None if common else "no common Runtime Session protocol",
+      }
+      pending["response"] = {"state": state, "payload": payload}
+      pending["event"].set()
 
   def send_frame(self, frame_type: int, payload: bytes = b""):
     self.seq_counter = (self.seq_counter + 1) & 0xFFFF
@@ -804,7 +996,13 @@ class SerialWorker(threading.Thread):
         time.sleep(0.003)
 
   def _handle_incoming_frame(self, frame: ABFPFrame):
-    if frame.frame_type == FrameType.ACK:
+    if frame.frame_type == FrameType.SESSION_HELLO:
+      self._handle_session_hello(frame)
+
+    elif frame.frame_type == FrameType.SESSION_CAPABILITIES:
+      self._handle_session_capabilities(frame)
+
+    elif frame.frame_type == FrameType.ACK:
       if self.expected_ack_tag and frame.payload == self.expected_ack_tag:
         self.ack_event.set()
       # 支持流水线滑动窗口的分块 ACK
@@ -1179,7 +1377,9 @@ class AntigravityIPCServer:
         self.wfile.write(body)
 
       def do_GET(self):
-        if self.path == "/api/v1/eda/versions":
+        if self.path == "/api/v1/runtime/capabilities":
+          self._reply_json(200, worker_ref.get_session_peer_status())
+        elif self.path == "/api/v1/eda/versions":
           res = worker_ref.send_fs_request_sync(
               {"action": "eda_versions"}, timeout=10.0
           )
@@ -1191,7 +1391,11 @@ class AntigravityIPCServer:
         content_len = int(self.headers.get("Content-Length", 0))
         raw_body = self.rfile.read(content_len).decode("utf-8", errors="ignore")
 
-        if self.path in ["/api/v1/eda/execute", "/api/eda/exec"]:
+        if self.path == "/api/v1/runtime/negotiate":
+          result = worker_ref.begin_session_negotiation()
+          self._reply_json(202 if result.get("success") else 503, result)
+
+        elif self.path in ["/api/v1/eda/execute", "/api/eda/exec"]:
           try:
             task = (
                 json.loads(raw_body)

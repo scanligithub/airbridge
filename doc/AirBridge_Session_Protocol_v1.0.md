@@ -2,11 +2,11 @@
 
 - 文档编号：AB-PROTO-SESSION-001
 - 版本：1.0
-- 状态：**协议设计基线（未实现）**
+- 状态：**P1.2 已实现 HELLO / CAPABILITIES；Session 生命周期与请求消息待后续阶段实现**
 - 日期：2026-11-12
 - 关联架构：AirBridge 通用 Runtime Session 架构设计 v1.0
 
-> 本文件定义建议的消息语义、JSON Envelope、ABFP 帧分配和北向 HTTP API。当前 main 分支尚未实现本协议；帧编号在代码合并前视为预留建议。
+> 本文件定义消息语义、JSON Envelope、ABFP 帧分配和北向 HTTP API。P1.2 已实现 0x15 / 0x16 能力协商；其他 Session 生命周期和 Request 帧仍为后续实现范围。
 
 ---
 
@@ -72,11 +72,21 @@ Payload 示例：
 
 ~~~json
 {
-  "supported_protocols": ["runtime-session.v1"],
-  "client_version": "airbridge-x.y",
-  "max_frame_payload": 65000
+  "schema_version": 1,
+  "message_id": "UUID",
+  "correlation_id": null,
+  "session_id": null,
+  "request_id": null,
+  "sent_at_utc": "2026-11-12T01:00:00.000Z",
+  "payload": {
+    "supported_protocols": ["runtime-session.v1"],
+    "client_version": "airbridge-v2.4",
+    "max_frame_payload": 65000
+  }
 }
 ~~~
+
+P1.2 已实现。收到 HELLO 的节点会返回 CAPABILITIES；两端在连接建立后也会各自发起一次自动协商，因此不依赖固定的发起端角色。重试在后台线程执行，不占用 HTTP 请求线程。
 
 ### 4.2 SESSION_CAPABILITIES（建议 FrameType 0x16）
 
@@ -84,19 +94,23 @@ B → A。返回支持的协议、Runtime Adapter、Profiles 和限制。
 
 ~~~json
 {
-  "supported_protocols": ["runtime-session.v1"],
-  "profiles": [
-    {
-      "profile_id": "capture-17.2",
-      "adapter_id": "capture-tcl-filequeue",
-      "capabilities": ["execute", "status", "graceful_close"]
-    }
-  ],
-  "max_frame_payload": 65000
+  "schema_version": 1,
+  "message_id": "UUID",
+  "correlation_id": "HELLO.message_id",
+  "session_id": null,
+  "request_id": null,
+  "sent_at_utc": "2026-11-12T01:00:00.000Z",
+  "payload": {
+    "supported_protocols": ["runtime-session.v1"],
+    "features": ["handshake"],
+    "profiles": [],
+    "server_version": "airbridge-v2.4",
+    "max_frame_payload": 65000
+  }
 }
 ~~~
 
-Profile 只作为 B 端注册的通用能力描述。A 端不能假设所有主机都安装了某个 Profile。
+P1.2 当前只声明 `handshake` 功能，`profiles` 为空；这不代表已支持 Session 创建、脚本执行或任何 Capture / Allegro Adapter。`runtime-session.v1` 标识 Envelope / 协议族版本，实际已实现功能必须以 `features` 为准。Profile 只作为 B 端注册的通用能力描述，A 端不能假设所有主机都安装了某个 Profile。
 
 ### 4.3 SESSION_CREATE（建议 FrameType 0x17）
 
@@ -291,12 +305,12 @@ HTTP 客户端自身等待结束应返回 pending / wait timeout，而不是擅�
 - 0x21 FS_RESPONSE
 - 0x30 至 0x35 Shell 消息
 
-建议保留以下 Session 帧号：
+已分配及预留的 Session 帧号：
 
 | 建议值 | 名称 | 方向 |
 |---:|---|---|
-| 0x15 | SESSION_HELLO | A → B |
-| 0x16 | SESSION_CAPABILITIES | B → A |
+| 0x15 | SESSION_HELLO | 双向发起；请求能力协商（P1.2 已实现） |
+| 0x16 | SESSION_CAPABILITIES | 对 HELLO 响应（P1.2 已实现） |
 | 0x17 | SESSION_CREATE | A → B |
 | 0x18 | SESSION_EVENT | B → A |
 | 0x19 | SESSION_EXEC | A → B |
@@ -309,9 +323,9 @@ HTTP 客户端自身等待结束应返回 pending / wait timeout，而不是擅�
 | 0x22 | SESSION_CANCEL | A → B |
 | 0x23 | SESSION_CANCEL_RESULT | B → A |
 
-0x24 暂不分配。上述编号是协议设计建议，代码合并前必须重新检查 A/B 当前分支和所有 FrameType 使用情况。
+0x24 暂不分配。0x15 / 0x16 已写入 `protocol.py`；0x17–0x1F、0x22–0x23 仍是预留编号，尚未接收或处理。
 
-新协议启用前先做能力协商。旧版 B 不支持 runtime-session.v1 时，A 端应明确报告不支持，不能静默发送新帧或把任务误判为成功。
+协商超时只能报告 `unconfirmed`（对端未响应 / 链路无响应），不能仅凭超时断言对端一定是旧版本。收到合法 CAPABILITIES 但没有共同协议时报告 `no_common_protocol`。当前功能列表只有 `handshake`，未声明 `session.create`。
 
 ## 11. HTTP API（主机 A 北向接口）
 
@@ -319,7 +333,9 @@ HTTP 客户端自身等待结束应返回 pending / wait timeout，而不是擅�
 
 | 方法与路径 | 作用 | 推荐状态码 |
 |---|---|---|
-| GET /profiles | 列出 B 端已注册 Runtime Profiles | 200 |
+| GET /capabilities | 查询最近一次对端协议协商状态及功能列表（P1.2 已实现） | 200 |
+| POST /negotiate | 异步触发一次能力协商，立即返回 message_id（P1.2 已实现） | 202 / 503 |
+| GET /profiles | 列出 B 端已注册 Runtime Profiles | 200（待实现） |
 | POST /sessions | 创建 Session | 202 |
 | GET /sessions | 列出当前会话 | 200 |
 | GET /sessions/{session_id} | 查询 Session | 200 / 404 |
@@ -356,9 +372,9 @@ HTTP 提交 Request 示例：
 }
 ~~~
 
-提交接口默认异步返回 202 和 ID。Skill 通过 GET 查询最终状态；可选增加 bounded wait，但不得让 HTTP Handler 长时间阻塞工作线程。
+Session 创建和 Request 提交接口未来默认异步返回 202 和 ID。P1.2 的 negotiate 端点同样立即返回 message_id；Skill 通过 GET capabilities 查询协商结果，不让 HTTP Handler 等待串口响应。
 
-现有 /api/v1/eda/execute、/api/v1/shell/exec 和 FrameType.EDA_* / SHELL_* 在迁移期保持兼容。Session API 稳定后再评估 deprecated 时间表，不在第一阶段删除旧接口。
+实际 P1.2 HTTP 路径为 `/api/v1/runtime/capabilities` 与 `/api/v1/runtime/negotiate`。其他 Session API 尚未实现。现有 /api/v1/eda/execute、/api/v1/shell/exec 和 FrameType.EDA_* / SHELL_* 在迁移期保持兼容。Session API 稳定后再评估 deprecated 时间表，不在第一阶段删除旧接口。
 
 ## 12. 大载荷与文件引用
 
@@ -389,6 +405,16 @@ B 端在执行前校验文件大小和 SHA-256。路径必须属于该 Session �
 - 结果日志应避免输出凭据和不必要的设计数据。
 
 ## 14. 实施与兼容验收
+
+P1.2 已实现内容：
+
+- `FrameType.SESSION_HELLO = 0x15`、`SESSION_CAPABILITIES = 0x16`；
+- 独立 `runtime_session_protocol.py` 负责 Envelope 编解码和结构校验；
+- 串口连接后自动后台协商，支持手动异步重试；
+- `GET /api/v1/runtime/capabilities` 与 `POST /api/v1/runtime/negotiate`；
+- 对端旧版本无响应时标记 `unconfirmed`，不将静默丢帧误判为明确不兼容。
+
+当前实现只证明双方理解 Session v1 Envelope / 握手；不代表 Session Broker、Profile、Session Create、Request 执行已实现。
 
 | 阶段 | 验收 |
 |---|---|
