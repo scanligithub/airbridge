@@ -137,6 +137,42 @@ class RequestTrackerTests(unittest.TestCase):
         self.assertEqual(waiter_result["state"], "unknown")
         self.assertIn("status is unknown", waiter_result["error"])
 
+    def test_get_does_not_evict_terminal_record_at_capacity(self):
+        tracker = RequestTracker(max_records=2)
+        first = str(uuid.uuid4())
+        second = str(uuid.uuid4())
+        third = str(uuid.uuid4())
+
+        tracker.register(first, "eda.execute")
+        tracker.complete(first, {"returncode": 0})
+        tracker.register(second, "shell.exec")
+        tracker.complete(second, {"exit_code": 0})
+
+        # Polling at capacity must not evict a result as a side effect.
+        self.assertEqual(tracker.get(first)["state"], "completed")
+        self.assertEqual(tracker.get(second)["state"], "completed")
+
+        # A new registration may recycle the oldest terminal result.
+        tracker.register(third, "eda.execute")
+        self.assertEqual(tracker.get(first)["state"], "not_found")
+        self.assertEqual(tracker.get(second)["state"], "completed")
+        self.assertEqual(tracker.get(third)["state"], "pending")
+
+    def test_terminal_retention_ttl_starts_when_request_finishes(self):
+        tracker = RequestTracker(ttl_seconds=1)
+        request_id = str(uuid.uuid4())
+        tracker.register(request_id, "eda.execute")
+        time.sleep(0.55)
+        tracker.complete(request_id, {"returncode": 0})
+
+        # The record must remain available for a full retention interval
+        # after completion, rather than expiring at request-start + TTL.
+        time.sleep(0.55)
+        self.assertEqual(tracker.get(request_id)["state"], "completed")
+
+        time.sleep(0.55)
+        self.assertEqual(tracker.get(request_id)["state"], "not_found")
+
     def test_large_text_result_is_truncated_to_abfp_limit(self):
         payload = encode_bounded_json_payload(
             {"request_id": str(uuid.uuid4()), "stdout": "输出内容" * 30000},
