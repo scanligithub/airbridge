@@ -29,6 +29,9 @@ class FrameType:
     EDA_TASK_FIN    = 0x12
     EDA_FORCE_KILL  = 0x13
     EDA_APP_CLOSE   = 0x14  # 独立关闭由 AirBridge 启动的 Capture / Allegro
+    # ---- Runtime Session protocol v1 (P1.2 handshake only) ----
+    SESSION_HELLO        = 0x15  # 协议能力协商请求
+    SESSION_CAPABILITIES = 0x16  # 协议能力协商响应
     FS_REQUEST      = 0x20
     FS_RESPONSE     = 0x21
     # ---- Remote Shell (v2.1) ----
