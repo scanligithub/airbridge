@@ -489,6 +489,13 @@ class ProcessSupervisor:
                     break
 
         remaining = self.backend.discover_processes(spec.image_names)
+        remaining_pids = {process.pid for process in remaining}
+        for outcome in outcomes:
+            if outcome.process.pid not in remaining_pids and outcome.status != "exited":
+                outcome.status = "exited"
+                outcome.message = (
+                    "process exited while graceful supervision was in progress"
+                )
         report.outcomes = outcomes
         report.remaining = remaining
         if remaining:
