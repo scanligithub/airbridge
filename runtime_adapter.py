@@ -10,6 +10,7 @@ import threading
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 
@@ -76,7 +77,7 @@ class RuntimeExecutionRequest:
             raise RuntimeAdapterError("operation must be a non-empty string")
         if not isinstance(self.payload, Mapping):
             raise RuntimeAdapterError("payload must be a mapping")
-        object.__setattr__(self, "payload", dict(self.payload))
+        object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
         if self.request_id is not None:
             if not isinstance(self.request_id, str):
                 raise RuntimeAdapterError("request_id must be a UUID string")
@@ -126,12 +127,25 @@ class RuntimeAdapterRegistry:
     def register_adapter(self, adapter: RuntimeAdapter) -> None:
         if not isinstance(adapter, RuntimeAdapter):
             raise RuntimeAdapterError("adapter must implement RuntimeAdapter")
-        adapter_id = getattr(adapter, "adapter_id", "")
-        operations = getattr(adapter, "operations", ())
-        if not isinstance(adapter_id, str) or not adapter_id.strip():
-            raise RuntimeAdapterError("adapter_id must be a non-empty string")
-        if not operations or any(not isinstance(op, str) or not op.strip() for op in operations):
+           operations = getattr(adapter, "operations", ())
+        capabilities = getattr(adapter, "capabilities", ())
+        for field_name, values in (
+            ("operations", operations),
+            ("capabilities", capabilities),
+        ):
+            if not isinstance(values, (tuple, list)):
+                raise RuntimeAdapterError(f"adapter {field_name} must be a sequence")
+            if any(not isinstance(item, str) or not item.strip() for item in values):
+                raise RuntimeAdapterError(
+                    f"adapter {field_name} must contain non-empty strings"
+                )
+            if len(values) != len(set(values)):
+                raise RuntimeAdapterError(
+                    f"adapter {field_name} must not contain duplicates"
+                )
+        if not operations:
             raise RuntimeAdapterError("adapter must declare supported operations")
+erError("adapter must declare supported operations")
         with self._lock:
             if adapter_id in self._adapters:
                 raise RuntimeAdapterError(f"adapter already registered: {adapter_id}")
