@@ -1403,6 +1403,7 @@ class SerialWorker(threading.Thread):
           keep_open=keep_open,
       )
       return {
+          "success": ret == 0,
           "returncode": ret,
           "output": out if isinstance(out, str) else str(out),
       }
