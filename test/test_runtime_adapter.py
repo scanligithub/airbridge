@@ -96,7 +96,8 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(kwargs["version"], "17.2")
         self.assertEqual(kwargs["target_file"], r"D:\design\demo.dsn")
         self.assertTrue(kwargs["keep_open"])
-        kwargs["log_callback"]("adapter log")
+        self.assertTrue(callable(args[2]))
+        args[2]("adapter log")
         self.assertEqual(messages, ["adapter log"])
 
     def test_legacy_cadence_nonzero_exit_is_structured_as_failure(self):
