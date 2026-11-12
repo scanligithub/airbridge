@@ -49,7 +49,9 @@ CI PASS **不代表**以下内容已经实测：
 - 串口驱动、波特率、电气链路、硬件丢包和真实链路重连；
 - Capture / Allegro 已安装、已启动或能够执行 Tcl / SKILL；
 - 真实远端 Cadence / Shell 进程执行；真实 Capture 17.2 capAutoLoad 是否加载本轮生成的正式 Bridge、真实 Tcl / Dbo 命令执行与 GUI 消息循环行为；
-- Session Create / Close 专用 ABFP 消息、统一 SESSION_EXEC、每 Session FIFO Broker、Process Supervisor、扫描并优雅关闭旧 Capture 实例、保存提示处理和专业软件进程身份管理。
+- 真实 Capture.exe 的 WM_CLOSE、多个实例关闭、保存提示、无响应退出阻断和重启生命周期；P1.7 的这部分目前仅通过 FakeProcessBackend 状态机测试；
+- Session Create / Close 专用 ABFP 消息、统一 SESSION_EXEC、每 Session FIFO Broker、完整 Skill 保存 / Exit 生命周期；
+- Allegro 旧 SKILL 执行路径尚未接入 ProcessSupervisor，留待 P1.9。
 
 由于当前没有可供本项目使用的 Windows 实体机，真实物理链路验收暂不纳入自动 CI；不得把软件模拟 PASS 写成物理 A/B 实测 PASS。后续如果获得实际硬件环境，可另行增加可选的硬件在环验收，而不影响云端 CI。
 
@@ -91,4 +93,17 @@ CI PASS **不代表**以下内容已经实测：
 - **合计 80 项测试通过，两个 Job 均成功。**
 
 P1.6 测试中，A/B 链路由内存 ABFP 双向模拟；Capture Adapter 使用 Fake Capture Bridge；Bridge 文件队列测试使用 Python 确定性模拟器。GitHub Runner 没有运行 Cadence Capture，也没有真实 COM / USB 串口。因此本轮 PASS 只覆盖软件 Adapter、文件协议、READY 校验、请求路由、去重、结果映射和超时状态；不覆盖真实 Capture 17.2 自动加载新版 Bridge、Tcl/Dbo API 执行、GUI 消息循环、工程保存或 Exit 生命周期。以上实机验收仍待主机 B 执行。
+
+## P1.7 Process Supervisor 软件 CI 实测记录
+
+- GitHub Actions Run：[#85](https://github.com/scanligithub/airbridge/actions/runs/43149369815)
+- 测试提交：`42ba2e31c3902ae39abe249187360147b0d15151`
+- Protocol / RequestTracker / ProcessSupervisor / Capture Bridge / Runtime Adapter / RequestBroker 单元测试：68 项通过；
+- A/B 生产 SerialWorker 软件模拟：12 项通过；
+- HTTP correlated request 集成：9 项通过；
+- **合计 89 项通过，两个 Job 均成功。**
+
+ProcessSupervisor 专项测试 9 项，其中 Windows-only Runner 集成测试实际通过 `tasklist` 发现当前 Python 进程、查询 executable path 并调用 EnumWindows 枚举窗口；FakeProcessBackend 测试覆盖多实例优雅关闭、模态提示阻断、超时、无可见主窗口、Allegro/Capture 匹配隔离及关闭期间新进程出现等场景。
+
+该 Run 没有在 Runner 上关闭真实 Capture.exe。它验证了 Win32 发现 / 映像查询 / 窗口枚举 API 可调用，以及 Supervisor 状态机的安全策略；实际 Cadence WM_CLOSE、保存提示和进程退出必须在主机 B 实机验收。
 
