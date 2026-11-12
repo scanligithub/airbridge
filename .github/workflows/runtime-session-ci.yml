@@ -8,8 +8,10 @@ on:
       - "protocol.py"
       - "runtime_session_protocol.py"
       - "airbridge_app.py"
+      - "request_tracker.py"
       - "test/test_runtime_session_protocol.py"
       - "test/test_runtime_session_ab_simulation.py"
+      - "test/test_request_tracker.py"
       - "test/test_request_api_http.py"
       - ".github/workflows/runtime-session-ci.yml"
   workflow_dispatch:
