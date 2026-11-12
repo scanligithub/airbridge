@@ -186,7 +186,7 @@ class RequestBroker:
                     SELECT request_id
                     FROM broker_requests
                     WHERE state IN ('completed', 'accepted', 'failed', 'unknown')
-                    ORDER BY updated_at ASC, request_id ASC
+                    ORDER BY updated_at ASC, rowid ASC
                     LIMIT ?
                 )
                 """,
