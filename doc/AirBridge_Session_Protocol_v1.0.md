@@ -2,7 +2,7 @@
 
 - 文档编号：AB-PROTO-SESSION-001
 - 版本：1.0
-- 状态：**P1.2 握手已实现；P1.3 A 端 HTTP / ABFP Request ID 关联已实现，云端 CI 验收中；Session Broker 与 Session 生命周期待后续阶段**
+- 状态：**P1.2 握手与 P1.3 A 端 HTTP / ABFP Request ID 关联已验收；P1.4 B 端持久化 Request 去重已接入，云端 CI 验收中；Session 生命周期与 Runtime Adapter 待后续阶段**
 - 日期：2026-11-12
 - 关联架构：AirBridge 通用 Runtime Session 架构设计 v1.0
 
@@ -103,7 +103,7 @@ P1.2 已实现。收到 HELLO 的节点会返回 CAPABILITIES；两端在连接�
   "sent_at_utc": "2026-11-12T01:00:00.000Z",
   "payload": {
     "supported_protocols": ["runtime-session.v1"],
-    "features": ["handshake", "request.correlation"],
+    "features": ["handshake", "request.correlation", "request.deduplication"],
     "profiles": [],
     "server_version": "airbridge-v2.4",
     "max_frame_payload": 65000
@@ -111,7 +111,7 @@ P1.2 已实现。收到 HELLO 的节点会返回 CAPABILITIES；两端在连接�
 }
 ~~~
 
-P1.2 提供 `handshake`，P1.3 增加 `request.correlation`；当前 `profiles` 仍为空。这不代表已支持 Session 创建或任何 Capture / Allegro Runtime Adapter。`runtime-session.v1` 标识 Envelope / 协议族版本，实际已实现功能必须以 `features` 为准。Profile 只作为 B 端注册的通用能力描述，A 端不能假设所有主机都安装了某个 Profile。
+P1.2 提供 `handshake`，P1.3 增加 `request.correlation`，P1.4 增加 `request.deduplication`；当前 `profiles` 仍为空。这不代表已支持 Session 创建或任何 Capture / Allegro Runtime Adapter。`runtime-session.v1` 标识 Envelope / 协议族版本，实际已实现功能必须以 `features` 为准。Profile 只作为 B 端注册的通用能力描述，A 端不能假设所有主机都安装了某个 Profile。
 
 ### 4.3 SESSION_CREATE（建议 FrameType 0x17）
 
@@ -381,7 +381,7 @@ Session 创建和 Request 提交接口未来默认异步返回 202 和 ID。P1.2
 - `POST /api/v1/shell/exec`：提交远程 Shell 命令；
 - `GET /api/v1/requests/{request_id}`：按 UUID 查询请求状态和结果。
 
-A 端生成独立 UUID `request_id`，把它作为可选 JSON 字段放入现有 `EDA_TASK_SUBMIT` / `SHELL_EXEC` 帧 Payload；B 端在 `EDA_TASK_FIN` / `SHELL_RESULT` 中原样回显。既有 ABFP FrameType 与 16 位 `seq_id` 均不改变，`seq_id` 仍只用于传输帧编号。A 端只有在最近一次能力协商成功，且对端声明 `request.correlation` 时，才允许新的结构化 HTTP EDA / Shell 请求提交；断线或对端不支持时返回 `not_submitted`，避免将旧版无 ID 响应错误关联。
+A 端生成独立 UUID `request_id`，把它作为可选 JSON 字段放入现有 `EDA_TASK_SUBMIT` / `SHELL_EXEC` 帧 Payload；B 端在 `EDA_TASK_FIN` / `SHELL_RESULT` 中原样回显。既有 ABFP FrameType 与 16 位 `seq_id` 均不改变，`seq_id` 仍只用于传输帧编号。A 端只有在最近一次能力协商成功，且对端同时声明 `request.correlation` 与 `request.deduplication` 时，才允许新的结构化 HTTP EDA / Shell 请求提交；断线或对端不支持时返回 `not_submitted`。调用方可在 POST body 中提供 UUID `request_id`；A 端尚保留该 ID 时再次 POST 会返回 409，并要求改用 GET 查询。A 端进程重启或记录过期后，相同 ID 可重新下发给 B 端 Broker，由 B 端持久化记录决定返回缓存结果、冲突或 UNKNOWN。
 
 HTTP 行为：
 - 请求等待超过 `wait_timeout_ms` 时返回 HTTP 202 和 `state=pending`；这只代表 HTTP 等待结束，不代表远端任务取消。随后可用 GET 请求状态接口轮询。
@@ -391,7 +391,14 @@ HTTP 行为：
 
 A 端请求记录仅保存在内存中，默认最多 500 条、保留 TTL 为 900 秒。等待超时不删除记录；等待记录超过保留期限后转为 `unknown` 并唤醒等待者，终态记录到期后可被回收。串口断开也会将所有 pending 请求置为 `unknown`。重启 A 端进程后不保证恢复这些记录。
 
-P1.3 只实现请求 ID 回显和 A 端结果关联，不实现 B 端 Request 去重、幂等提交、结果持久化或 exactly-once 执行；这些属于后续 Broker 阶段。现有 GUI 发出的无 `request_id` 任务仍保留旧式日志行为。其他 Session API 尚未实现。Session API 稳定后再评估 deprecated 时间表，不在第一阶段删除旧接口。
+P1.4 B 端 RequestBroker 当前行为（云端 CI 验收中）：
+- 使用 SQLite 持久化请求 ID、请求类型、规范化 JSON Payload 的 SHA-256、状态和有界结果；默认数据库路径为 Windows `%LOCALAPPDATA%/AirBridge/runtime_broker.sqlite3`，可用环境变量 `AIRBRIDGE_RUNTIME_DB` 覆盖。
+- 默认最多保留 10000 条请求记录，终态 TTL 为 24 小时；单条缓存结果限制在 64000 字节以内。清理优先回收过期 / 最早的终态记录，不驱逐仍在执行的 RUNNING 请求。
+- Broker 在调用执行函数前原子登记 RUNNING；相同 `request_id`、相同请求类型和相同 Payload hash 的重发：RUNNING 时不启动第二次执行，终态时返回缓存结果；相同 ID 对应不同请求类型或不同 Payload hash 时返回 `REQUEST_ID_CONFLICT`。
+- 正在执行的请求每 30 秒刷新一次 Broker 心跳；默认 120 秒未收到心跳的 RUNNING 记录转成 UNKNOWN，之后不会以同一 ID 自动重放。此策略可避免另一个 Broker 实例把仍在执行的请求误判为中断。
+- Shell 异步请求的 `accepted` 记录缓存后台任务启动回执，不代表 Shell 进程已结束；同一 ID 重发只返回相同回执，不会再次启动命令。
+
+P1.4 仅实现通用 Request 去重和有界结果缓存；当前过渡执行回调仍委托给旧版 EDAExecutor / ShellEngine，尚未引入 Runtime Adapter / Profile，也没有 Session ID、每 Session FIFO 队列、去重窗口外的保护或 exactly-once 保证。若 Broker 在外部副作用执行后、结果落盘前崩溃，恢复状态为 UNKNOWN，系统不会自动重跑。现有 GUI 发出的无 `request_id` 任务仍保留旧式执行路径。其他 Session API 尚未实现。
 
 ## 12. 大载荷与文件引用
 
@@ -440,7 +447,7 @@ P1.3 当前实现内容（云端 CI 验收中）：
 - HTTP 等待超时返回 pending 并可轮询；断线或保留期限到达时返回 unknown；
 - 大型文本结果裁剪到单帧 ABFP Payload 上限。
 
-P1.3 不代表已实现 B 端 Broker、请求去重 / 幂等、持久化结果缓存、Session Create、统一 SESSION_EXEC 或 Capture / Allegro Adapter。
+P1.4 不代表已实现 Session Create、每 Session FIFO 队列、Runtime Adapter / Profile、统一 SESSION_EXEC、Capture Tcl Bridge 或 Process Supervisor；B 端 RequestBroker 当前只覆盖现有 EDA / Shell 请求帧中的 request_id。
 
 | 阶段 | 验收 |
 |---|---|
