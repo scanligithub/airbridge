@@ -48,14 +48,16 @@ CI PASS **不代表**以下内容已经实测：
 - 两台独立 Windows 主机之间的真实 COM/USB/串口物理通信；
 - 串口驱动、波特率、电气链路、硬件丢包和真实链路重连；
 - Capture / Allegro 已安装、已启动或能够执行 Tcl / SKILL；
-- 真实远端 Cadence / Shell 进程执行；Session Create、Runtime Adapter / Profile、Capture Tcl Bridge、Process Supervisor、Session FIFO 队列或专业软件优雅关闭。
+- 真实远端 Cadence / Shell 进程执行；真实 Capture 17.2 capAutoLoad 是否加载本轮生成的正式 Bridge、真实 Tcl / Dbo 命令执行与 GUI 消息循环行为；
+- Session Create / Close 专用 ABFP 消息、统一 SESSION_EXEC、每 Session FIFO Broker、Process Supervisor、扫描并优雅关闭旧 Capture 实例、保存提示处理和专业软件进程身份管理。
 
 由于当前没有可供本项目使用的 Windows 实体机，真实物理链路验收暂不纳入自动 CI；不得把软件模拟 PASS 写成物理 A/B 实测 PASS。后续如果获得实际硬件环境，可另行增加可选的硬件在环验收，而不影响云端 CI。
 
 ## 结果解释
 
 - **Protocol unit tests PASS**：协议 Envelope 与 ABFP 帧契约通过；
-- **A/B simulation PASS**：两个生产 SerialWorker 状态机在模拟链路上完成双向握手，关联及重置行为符合预期；
+- **A/B simulation PASS**：两个生产 SerialWorker 状态机在模拟链路上完成双向握手，关联及重置行为符合预期；P1.6 额外验证 EDA Tcl 请求选择 Capture Session Adapter、结果 PID / Tcl 元数据回传及 request_id 重复投递不重复执行；
+- **Capture Bridge unit PASS**：Python Bridge 客户端、capAutoLoad Tcl 源码生成、请求/结果文件契约、READY nonce/PID 校验、错误与 UNKNOWN 状态映射通过模拟器测试；不等同 Capture 真实 Tcl Interpreter 实机测试；
 - **CI FAIL**：查看对应 Job 日志，按失败测试定位；
 - 新工作流不再依赖 `airbridge-a` / `airbridge-b` 自托管 Runner；此前旧工作流创建的 queued 运行记录可能仍留在 Actions 历史中，不属于新的云端 CI。
 
@@ -76,3 +78,17 @@ CI PASS **不代表**以下内容已经实测：
 - **合计 66 项通过，两个 Job 均成功。**
 
 该结果是 GitHub 托管 Windows Runner 上的软件级验收。测试通过内存 ABFP 双向链路模拟两个 Worker，不使用物理 COM 端口，也未启动真实 Capture 或 Allegro。因此不能把此 CI 结果解释为双主机串口实测、Capture 常驻 Tcl Bridge 验收或专业软件 GUI 生命周期验收。
+
+## P1.6 Capture Tcl Adapter 软件 CI 实测记录
+
+- GitHub Actions Run：[#76](https://github.com/scanligithub/airbridge/actions/runs/43148279572)
+- 测试提交：`9fc895c56c34f9f18c30fb573df8b7aa981485f9`
+- Protocol：10 项；RequestTracker：11 项；Capture Tcl Bridge：12 项；Runtime Adapter：11 项；RequestBroker：15 项；
+- 单元测试合计：59 项通过；
+- A/B 生产 SerialWorker 软件模拟：12 项通过（包含 Capture Profile 路由、PID / Tcl 元数据回传、相同 request_id 去重）；
+- HTTP correlated request 集成：9 项通过；
+- Runtime / Capture Bridge / Worker 模块 `py_compile`：通过；
+- **合计 80 项测试通过，两个 Job 均成功。**
+
+P1.6 测试中，A/B 链路由内存 ABFP 双向模拟；Capture Adapter 使用 Fake Capture Bridge；Bridge 文件队列测试使用 Python 确定性模拟器。GitHub Runner 没有运行 Cadence Capture，也没有真实 COM / USB 串口。因此本轮 PASS 只覆盖软件 Adapter、文件协议、READY 校验、请求路由、去重、结果映射和超时状态；不覆盖真实 Capture 17.2 自动加载新版 Bridge、Tcl/Dbo API 执行、GUI 消息循环、工程保存或 Exit 生命周期。以上实机验收仍待主机 B 执行。
+
