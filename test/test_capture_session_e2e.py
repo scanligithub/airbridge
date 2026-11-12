@@ -47,7 +47,7 @@ class CaptureSessionE2ETests(unittest.TestCase):
 
     def test_submit_uses_unique_request_id_and_startup_grace(self):
         response = {
-            "request_id": "unused",
+            "request_id": None,
             "state": "completed",
             "result": {
                 "success": True,
@@ -101,7 +101,7 @@ class CaptureSessionE2ETests(unittest.TestCase):
                 )
 
         failed_response = {
-            "request_id": "not-used",
+            "request_id": None,
             "state": "failed",
             "result": {"success": False, "request_state": "failed"},
         }
@@ -219,7 +219,7 @@ class CaptureSessionE2ETests(unittest.TestCase):
             e2e, "submit_tcl_request", side_effect=[first, missing_api]
         ):
             uuid_mock.return_value.hex = token
-            with self.assertRaisesRegex(e2e.E2EError, "commands unavailable"):
+            with self.assertRaisesRegex(e2e.E2EError, r"command\(s\) unavailable"):
                 e2e.run_acceptance("http://127.0.0.1:8888", r"D:\\demo.dsn")
 
     def test_run_acceptance_requires_host_b_dsn_path_and_positive_timeout(self):
