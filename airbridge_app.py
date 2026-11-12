@@ -1541,6 +1541,22 @@ class AntigravityIPCServer:
             self._reply_json(503, {"state": "not_submitted", "error": "serial link is disconnected"})
             return
 
+          peer_status = worker_ref.get_session_peer_status()
+          if (
+              peer_status.get("state") != "negotiated"
+              or "request.correlation" not in peer_status.get("features", [])
+          ):
+            self._reply_json(
+                503,
+                {
+                    "state": "not_submitted",
+                    "error": "peer has not confirmed request.correlation capability",
+                    "peer_state": peer_status.get("state"),
+                    "peer_features": peer_status.get("features", []),
+                },
+            )
+            return
+
           script = task.get("script") or task.get("script_content", "")
           hint = task.get("hint") or task.get("script_name", "agent_auto.tcl")
           version = task.get("version", "auto")
@@ -1610,6 +1626,22 @@ class AntigravityIPCServer:
 
           if not worker_ref.is_serial_connected():
             self._reply_json(503, {"state": "not_submitted", "error": "serial link is disconnected"})
+            return
+
+          peer_status = worker_ref.get_session_peer_status()
+          if (
+              peer_status.get("state") != "negotiated"
+              or "request.correlation" not in peer_status.get("features", [])
+          ):
+            self._reply_json(
+                503,
+                {
+                    "state": "not_submitted",
+                    "error": "peer has not confirmed request.correlation capability",
+                    "peer_state": peer_status.get("state"),
+                    "peer_features": peer_status.get("features", []),
+                },
+            )
             return
 
           try:
