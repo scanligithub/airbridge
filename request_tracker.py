@@ -117,8 +117,10 @@ class RequestTracker:
         result: Dict[str, Any],
         state: str = "completed",
     ) -> bool:
-        if state not in ("completed", "accepted"):
-            raise ValueError("state must be 'completed' or 'accepted'")
+        if state not in ("completed", "accepted", "failed", "unknown"):
+            raise ValueError(
+                "state must be 'completed', 'accepted', 'failed', or 'unknown'"
+            )
         try:
             normalized = self.validate_request_id(request_id)
         except RequestTrackerError:
