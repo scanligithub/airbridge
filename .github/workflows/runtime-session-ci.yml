@@ -47,6 +47,12 @@ jobs:
           python -m unittest discover -s test -p "test_runtime_session_protocol.py" -v
           python -m unittest discover -s test -p "test_request_tracker.py" -v
 
+      - name: Compile Runtime and Capture Bridge modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m py_compile runtime_adapter.py capture_tcl_bridge.py airbridge_app.py
+
       - name: Run Capture Tcl Bridge tests
         shell: pwsh
         run: |
