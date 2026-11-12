@@ -141,6 +141,37 @@ class RequestBrokerTests(unittest.TestCase):
         self.assertEqual(second["result"]["error"]["code"], "COMMAND_FAILED")
         self.assertEqual(calls, ["attempted"])
 
+    def test_unknown_executor_result_is_persisted_and_not_replayed(self):
+        request_id = str(uuid.uuid4())
+        calls = []
+
+        def execute():
+            calls.append("attempted")
+            return {
+                "success": False,
+                "request_state": "unknown",
+                "error": {
+                    "code": "CAPTURE_REQUEST_TIMEOUT",
+                    "message": "execution may still be running",
+                },
+            }
+
+        first = self.broker.execute(
+            request_id, "eda.execute", {"script": "after 5000"}, execute
+        )
+        second = self.broker.execute(
+            request_id,
+            "eda.execute",
+            {"script": "after 5000"},
+            lambda: calls.append("must-not-run") or {"success": True},
+        )
+
+        self.assertEqual(first["state"], "unknown")
+        self.assertEqual(second["state"], "unknown")
+        self.assertEqual(second["disposition"], "cached")
+        self.assertEqual(second["result"]["request_state"], "unknown")
+        self.assertEqual(calls, ["attempted"])
+
     def test_duplicate_async_shell_start_returns_cached_acceptance(self):
         request_id = str(uuid.uuid4())
         calls = []
