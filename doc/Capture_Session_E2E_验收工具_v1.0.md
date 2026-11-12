@@ -4,7 +4,7 @@
 - 版本：1.0
 - 日期：2026-11-12
 - 对应阶段：P1.8 验收准备
-- 状态：工具与单元测试已提交；真实 Host A / Host B 验收待执行
+- 状态：**Host-A E2E harness 已实现并通过 GitHub Actions Run #91 的软件 CI；真实 Host A / Host B Capture E2E 待执行**
 
 ## 1. 目的
 
@@ -107,3 +107,14 @@ UNKNOWN 代表请求结果无法确认，不能按“脚本没执行”处理，
 本工具的单元测试由 GitHub Actions 覆盖，证明 HTTP 请求包装、报告解析、PID 一致性判定和错误路径可用。只有在真实主机 A / B 运行成功后，才可将 P1.8 Capture Session E2E 标记为实机 PASS。
 
 Run #90 通过后，测试 harness 本身的 CI PASS 仍不等同真实 Cadence Capture PASS。真实验收结果需记录：日期、主机 A / B 软件版本、Capture 版本、Tcl 版本、Capture PID、两条 request_id、Supervisor 对旧进程的处理结果及最终 JSON 报告。
+
+## 8. Harness 软件 CI 记录
+
+GitHub Actions [Run #91](https://github.com/scanligithub/airbridge/actions/runs/43151264299)，提交 `48cc55597a684296be500d76982dbb74b8201bec`：
+- Host-A Capture Session E2E harness 单元测试：8 项通过；
+- Protocol / RequestTracker / ProcessSupervisor / Capture Bridge / Runtime Adapter / RequestBroker 单元测试：共 77 项；
+- A/B 生产 SerialWorker 模拟：12 项；
+- HTTP correlated request 集成：9 项；
+- **合计 98 项通过、0 项失败，两个 Job 均成功。**
+
+这些测试使用 Mock HTTP / Mock E2E 结果，不访问主机 B、不启动真实 Capture。P1.8 实机验收仍需在主机 A 执行本工具，并把输出 JSON 与实际 Capture PID / Tcl 版本记录到项目验收记录。
