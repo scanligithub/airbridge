@@ -42,7 +42,7 @@ class RuntimeSessionProtocolTests(unittest.TestCase):
         )
 
         self.assertEqual(decoded["correlation_id"], hello["message_id"])
-        self.assertEqual(decoded["payload"]["features"], ["handshake"])
+        self.assertEqual(decoded["payload"]["features"], ["handshake", "request.correlation"])
         self.assertEqual(decoded["payload"]["profiles"], [])
 
     def test_unknown_schema_version_is_rejected(self):
