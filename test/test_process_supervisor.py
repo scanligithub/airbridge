@@ -9,6 +9,7 @@ from process_supervisor import (
     ProcessSupervisorError,
     ProcessSpec,
     ProcessWindow,
+    WindowsProcessBackend,
 )
 
 
@@ -191,6 +192,20 @@ class ProcessSupervisorTests(unittest.TestCase):
 
         self.assertEqual(report.state, "ready")
         self.assertEqual(backend.close_requests, [])
+
+    @unittest.skipUnless(__import__("os").name == "nt", "Windows process backend only")
+    def test_windows_backend_can_discover_current_python_process(self):
+        import os
+
+        backend = WindowsProcessBackend()
+        processes = backend.discover_processes(("python.exe",))
+        current = [process for process in processes if process.pid == os.getpid()]
+        self.assertEqual(len(current), 1)
+        self.assertTrue(current[0].executable_path.lower().endswith("python.exe"))
+        # A headless GitHub runner may have no GUI windows; enumeration itself
+        # must still succeed and return an empty list.
+        windows = backend.list_windows(os.getpid())
+        self.assertIsInstance(windows, list)
 
     def test_unknown_profile_and_invalid_timeouts_are_rejected(self):
         supervisor = ProcessSupervisor(
