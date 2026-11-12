@@ -284,13 +284,13 @@ class CaptureTclBridgeTests(unittest.TestCase):
                 operation="execute",
                 payload={
                     "script": "puts ready",
-                    "target_file": r"D:\\work\\project.opj",
+                    "target_file": "D:/work/project.opj",
                     "timeout": 3,
                 },
             ),
             RuntimeExecutionContext(),
         )
-        self.assertTrue(bridge.script.startswith('Open "D:\\\\work\\\\project.opj"\\n'))
+        self.assertTrue(bridge.script.startswith('Open "D:/work/project.opj"\\n'))
 
     def test_result_retention_prunes_oldest_records_by_ttl_and_capacity(self):
         self.session.results_dir.mkdir(parents=True, exist_ok=True)
