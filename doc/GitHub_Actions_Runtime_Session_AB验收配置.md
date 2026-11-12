@@ -107,3 +107,14 @@ ProcessSupervisor 专项测试 9 项，其中 Windows-only Runner 集成测试�
 
 该 Run 没有在 Runner 上关闭真实 Capture.exe。它验证了 Win32 发现 / 映像查询 / 窗口枚举 API 可调用，以及 Supervisor 状态机的安全策略；实际 Cadence WM_CLOSE、保存提示和进程退出必须在主机 B 实机验收。
 
+## Run #88：P1.6 / P1.7 完整回归与 Tcl 8.6 解释器执行
+
+- GitHub Actions Run：[#88](https://github.com/scanligithub/airbridge/actions/runs/43150162732)
+- 提交：`309a13f582b1d6aa1e58ad043f64fd002459dfe2`
+- 单元层：Protocol 10、RequestTracker 11、ProcessSupervisor 9、Capture Tcl Bridge 13、Runtime Adapter 11、RequestBroker 15，共 **69 项**；
+- A/B 生产 SerialWorker 模拟：12 项；
+- HTTP correlated request：9 项；
+- **总计 90 项通过、0 项失败，两个 Job 均成功。**
+
+新增 Tcl 解释器回归通过 Python 3.12 自带的 Tcl 8.6 解释器直接 source 本轮生成的 bridge.tcl，执行真实 Tcl 命令并验证 READY nonce / PID、文件队列请求认领、脚本返回值、stdout 捕获和结果文件。该测试比 Python 模拟器更接近真实 Tcl 运行时，但不提供 Capture Dbo API、Capture GUI 消息泵或工程对象，因此仍不能替代真实 Capture 17.2 实机验收。
+
