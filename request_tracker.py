@@ -187,18 +187,32 @@ class RequestTracker:
                     "error": "request_id is unknown or expired",
                 }
             event = record["event"]
-            ttl_remaining = max(
-                0.0,
-                self.ttl_seconds - (now - record["_created_monotonic"]),
-            )
+            ttl_deadline = record["_created_monotonic"] + self.ttl_seconds
+            ttl_remaining = max(0.0, ttl_deadline - now)
             requested_wait = (
                 ttl_remaining
                 if timeout is None
                 else max(0.0, float(timeout))
             )
+            wait_for_ttl_deadline = requested_wait >= ttl_remaining
             wait_seconds = min(requested_wait, ttl_remaining)
 
         event.wait(timeout=wait_seconds)
+        if wait_for_ttl_deadline and not event.is_set():
+            # Event.wait may return a fraction early due to OS timer
+            # granularity. If this waiter consumed the entire retention
+            # interval, prune at the exact monotonic deadline so callers
+            # never observe a stale pending state at the expiry boundary.
+            with self._lock:
+                self._prune_locked(max(time.monotonic(), ttl_deadline))
+                record = self._records.get(normalized)
+                if record is None:
+                    return {
+                        "request_id": normalized,
+                        "state": "not_found",
+                        "error": "request_id is unknown or expired",
+                    }
+                return self._snapshot_locked(record)
         return self.get(normalized)
 
     def get(self, request_id: str) -> Dict[str, Any]:
