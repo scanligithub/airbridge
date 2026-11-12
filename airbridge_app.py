@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 from eda_engine import CadenceVersionManager, EDAExecutor
 from fs_engine import FSEngine
-from protocol import ABFPFrame, FrameParser, FrameType
+from protocol import ABFPFrame, FrameParser, FrameType, MAX_PAYLOAD_LEN
 from runtime_session_protocol import (
     CLIENT_VERSION,
     SESSION_PROTOCOL_ID,
