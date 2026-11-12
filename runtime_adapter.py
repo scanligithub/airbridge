@@ -52,7 +52,7 @@ class RuntimeProfile:
             raise RuntimeAdapterError("enabled must be a boolean")
 
     def to_public_dict(self) -> Dict[str, Any]:
-        """Return safe, transportable metadata; never expose local config."""
+        """Return safe metadata without exposing local runtime configuration."""
         return {
             "profile_id": self.profile_id,
             "adapter_id": self.adapter_id,
@@ -77,6 +77,8 @@ class RuntimeExecutionRequest:
             raise RuntimeAdapterError("operation must be a non-empty string")
         if not isinstance(self.payload, Mapping):
             raise RuntimeAdapterError("payload must be a mapping")
+        # A read-only top-level snapshot prevents callers from mutating the
+        # submitted mapping after request construction.
         object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
         if self.request_id is not None:
             if not isinstance(self.request_id, str):
@@ -89,14 +91,13 @@ class RuntimeExecutionRequest:
 
 @dataclass(frozen=True)
 class RuntimeExecutionContext:
-    """Per-call services supplied by AirBridge without leaking worker internals."""
+    """Per-call services supplied without exposing Worker or GUI internals."""
 
     log_callback: Optional[Callable[[str], None]] = None
 
     def log(self, message: str) -> None:
-        callback = self.log_callback
-        if callback is not None:
-            callback(str(message))
+        if self.log_callback is not None:
+            self.log_callback(str(message))
 
 
 class RuntimeAdapter(ABC):
@@ -127,7 +128,12 @@ class RuntimeAdapterRegistry:
     def register_adapter(self, adapter: RuntimeAdapter) -> None:
         if not isinstance(adapter, RuntimeAdapter):
             raise RuntimeAdapterError("adapter must implement RuntimeAdapter")
-           operations = getattr(adapter, "operations", ())
+
+        adapter_id = getattr(adapter, "adapter_id", "")
+        if not isinstance(adapter_id, str) or not adapter_id.strip():
+            raise RuntimeAdapterError("adapter_id must be a non-empty string")
+
+        operations = getattr(adapter, "operations", ())
         capabilities = getattr(adapter, "capabilities", ())
         for field_name, values in (
             ("operations", operations),
@@ -145,7 +151,7 @@ class RuntimeAdapterRegistry:
                 )
         if not operations:
             raise RuntimeAdapterError("adapter must declare supported operations")
-erError("adapter must declare supported operations")
+
         with self._lock:
             if adapter_id in self._adapters:
                 raise RuntimeAdapterError(f"adapter already registered: {adapter_id}")
@@ -154,6 +160,7 @@ erError("adapter must declare supported operations")
     def register_profile(self, profile: RuntimeProfile) -> None:
         if not isinstance(profile, RuntimeProfile):
             raise RuntimeAdapterError("profile must be a RuntimeProfile")
+
         with self._lock:
             if profile.profile_id in self._profiles:
                 raise RuntimeAdapterError(
@@ -164,12 +171,14 @@ erError("adapter must declare supported operations")
                 raise RuntimeAdapterError(
                     f"profile references an unknown adapter: {profile.adapter_id}"
                 )
+
             unsupported = set(profile.operations) - set(adapter.operations)
             if unsupported:
                 raise RuntimeAdapterError(
                     f"profile operations are not supported by adapter "
                     f"{profile.adapter_id}: {sorted(unsupported)}"
                 )
+
             unsupported_capabilities = (
                 set(profile.capabilities) - set(adapter.capabilities)
             )
@@ -210,6 +219,7 @@ erError("adapter must declare supported operations")
     ) -> Dict[str, Any]:
         if not isinstance(request, RuntimeExecutionRequest):
             raise RuntimeAdapterError("request must be a RuntimeExecutionRequest")
+
         profile = self.get_profile(profile_id)
         if not profile.enabled:
             raise RuntimeAdapterError(f"runtime profile is disabled: {profile_id}")
@@ -221,13 +231,9 @@ erError("adapter must declare supported operations")
         with self._lock:
             adapter = self._adapters.get(profile.adapter_id)
         if adapter is None:
-            # Defensive guard in case a registry is changed by a future extension.
             raise RuntimeAdapterError(f"adapter is not registered: {profile.adapter_id}")
 
-        result = adapter.execute(
-            request,
-            context or RuntimeExecutionContext(),
-        )
+        result = adapter.execute(request, context or RuntimeExecutionContext())
         if not isinstance(result, dict):
             raise RuntimeAdapterError("adapter execute() must return a dictionary")
         return dict(result)
@@ -322,6 +328,7 @@ def create_legacy_runtime_registry(
     shell = LegacyShellProcessAdapter(shell_engine_provider)
     registry.register_adapter(cadence)
     registry.register_adapter(shell)
+
     registry.register_profile(
         RuntimeProfile(
             profile_id="legacy-cadence-oneshot",
