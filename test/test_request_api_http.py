@@ -5,6 +5,7 @@ import json
 import urllib.error
 import urllib.request
 import unittest
+import uuid
 
 from airbridge_app import AntigravityIPCServer
 from protocol import FrameType
@@ -178,6 +179,53 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(poll_status, 202, polled)
         self.assertEqual(polled["state"], "accepted")
         self.assertEqual(polled["result"]["status"], "running")
+
+    def test_caller_supplied_request_id_is_honored_and_not_submitted_twice(self):
+        request_id = str(uuid.uuid4())
+        payload = {
+            "request_id": request_id,
+            "script": "puts hello",
+            "hint": "retry-safe.tcl",
+            "timeout": 5,
+        }
+
+        first_status, first = self._request_json(
+            "POST", "/api/v1/eda/execute", payload
+        )
+        self.assertEqual(first_status, 200, first)
+        self.assertEqual(first["request_id"], request_id)
+        self.assertEqual(len(self.worker.frames), 1)
+
+        retry_status, retry = self._request_json(
+            "POST", "/api/v1/eda/execute", payload
+        )
+        self.assertEqual(retry_status, 409, retry)
+        self.assertEqual(retry["state"], "already_registered")
+        self.assertEqual(retry["request_id"], request_id)
+        self.assertEqual(len(self.worker.frames), 1)
+
+        poll_status, polled = self._request_json(
+            "GET", f"/api/v1/requests/{request_id}"
+        )
+        self.assertEqual(poll_status, 200, polled)
+        self.assertEqual(polled["state"], "completed")
+
+    def test_peer_with_correlation_but_without_deduplication_is_rejected(self):
+        self.worker.get_session_peer_status = lambda: {
+            "state": "negotiated",
+            "features": ["handshake", "request.correlation"],
+        }
+        status, body = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "puts hello"},
+        )
+
+        self.assertEqual(status, 503, body)
+        self.assertEqual(body["state"], "not_submitted")
+        self.assertIn("request.deduplication", body["error"])
+        self.assertEqual(len(self.worker.frames), 0)
+        self.assertEqual(len(self.worker.request_tracker._records), 0)
 
     def test_disconnected_link_rejects_without_registering_request(self):
         self.worker.connected = False
