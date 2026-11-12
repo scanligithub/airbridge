@@ -2,11 +2,11 @@
 
 - 文档编号：AB-ARCH-SESSION-001
 - 版本：1.0
-- 状态：**目标架构设计基线；P1.2–P1.6 通用软件层与 Capture Adapter 已通过对应 GitHub Actions CI；P1.6 新版 Bridge 的真实 Capture 17.2 实机复验、P1.7 Process Supervisor、P1.8 Skill E2E 与 P1.9 Allegro Adapter 待完成**
+- 状态：**目标架构设计基线；P1.2–P1.7 通用软件层已通过对应 GitHub Actions CI；P1.6 新版 Bridge 与 P1.7 Capture GUI 进程关闭的真实主机验收、P1.8 Skill E2E、P1.9 Allegro Adapter 待完成**
 - 日期：2026-11-12
 - 适用范围：AirBridge 主机 A / 主机 B；未来所有通过 Agent Skill 使用远端专业软件的场景
 
-> 本文定义目标架构，不代表当前 main 分支已经实现 Session Create / Close API、统一 Session Request 帧或 Process Supervisor。功能分支已完成 P1.5 Runtime Adapter / Profile 与 P1.6 Capture Tcl Adapter / Bridge 的软件级实现；新版 Bridge 尚待真实 Capture 17.2 实机复验。
+> 本文定义目标架构，不代表当前 main 分支已经实现 Session Create / Close API、统一 Session Request 帧或完整的专业软件生命周期。功能分支已完成 P1.5 Runtime Adapter / Profile、P1.6 Capture Tcl Adapter / Bridge、P1.7 Process Supervisor 的软件级实现；新版 Bridge 与真实 Capture GUI 进程关闭仍待主机 B 实机复验。
 
 ---
 
