@@ -140,3 +140,16 @@ Host-A harness 的 8 项测试覆盖 Tcl Probe 生成、结果报告解析、req
 
 Run #92 是 Host-A E2E harness 当前的最新 CI 依据。它仍使用 Mock HTTP / Mock Runtime，不连接真实 Host B 或 Capture 17.2；真实 Capture Session E2E 只有在主机 A 执行脚本并通过两个连续请求的 PID / Tcl 状态检查后才能 PASS。
 
+
+
+---
+
+## P1.9.1 Allegro SKILL Adapter 回归（Run #94）
+
+- 运行：[Runtime Session CI Run #94](https://github.com/scanligithub/airbridge/actions/runs/43158226213)
+- Commit：`7d6ecedee4177d3b1b5d1604b062383ee334ffb7`
+- Protocol Unit Job：81 项通过（包含 Allegro Adapter 新增测试）
+- A/B duplex + HTTP Job：12 项 Worker 模拟 + 9 项 HTTP 集成通过
+- 总计：**102 项通过，0 项失败；两个 Job 均成功**
+
+Run #94 验证软件层 Profile 路由与既有执行器兼容，没有启动或控制真实 Allegro GUI。Host B Allegro 17.2 的 BRD 打开 / 关闭回归仍需单独执行。

@@ -4,7 +4,7 @@
 - 版本：1.0
 - 日期：2026-11-12
 - 对应阶段：P1.5–P1.9.1
-- 状态：**P1.5–P1.7 GitHub Actions 软件 CI PASS；P1.9.1 已实现，当前 CI 验收中**（P1.5 Run #62：66 项；P1.6 Run #76：80 项；P1.7 Run #85：89 项）；真实串口、新版 Capture Bridge 与 Cadence GUI 进程关闭实机复验仍未完成
+- 状态：**P1.5–P1.7 与 P1.9.1 GitHub Actions 软件 CI PASS**（P1.5 Run #62：66 项；P1.6 Run #76：80 项；P1.7 Run #85：89 项；P1.9.1 Run #94：102 项）；真实串口、新版 Capture Bridge 与 Cadence GUI 进程关闭实机复验仍未完成
 
 ## 1. 目标与边界
 
@@ -207,3 +207,6 @@ Allegro Adapter 在调用 EDAExecutor 前验证脚本确属 Allegro SKILL，避�
 **本阶段明确没有做：** 不把 Allegro 生命周期切换到 ProcessSupervisor；不增加 SKILL 常驻 Interpreter / 文件队列；不加入 SESSION_CREATE / CLOSE 或新 ABFP 帧；不自动关闭用户手动启动的 Allegro；不改变保存提示处理。以上需要单独设计和实机验收。
 
 软件测试覆盖专用 Profile 注册、SKILL 参数透传、日志回调、非零退出码、拒绝 Tcl 误路由，以及 Capture / Allegro / fallback 选择。软件 CI 通过不等同于本次新增路由已在 Host B Allegro 17.2 GUI 中实机回归。
+
+
+P1.9.1 软件验收见 [GitHub Actions Run #94](https://github.com/scanligithub/airbridge/actions/runs/43158226213)：Protocol Unit Job 81 项、A/B duplex + HTTP Job 21 项，合计 102 项测试通过、0 项失败。该运行覆盖了 Allegro 专用 Profile 注册、脚本类型校验、参数与日志回调透传、非零退出码及 EDA Profile 选择。它只证明软件层路由与兼容契约，不代表真实 Allegro 17.2 GUI 已在此次提交后重新启动并开板。

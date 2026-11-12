@@ -2,7 +2,7 @@
 
 - 文档编号：AB-ARCH-SESSION-001
 - 版本：1.0
-- 状态：**目标架构设计基线；P1.2–P1.7 通用软件层已通过对应 GitHub Actions CI；P1.6 新版 Bridge 与 P1.7 Capture GUI 进程关闭的真实主机验收、P1.8 Skill E2E、P1.9 Allegro Adapter 生命周期扩展待完成（P1.9.1 Profile 隔离已实现）**
+- 状态：**目标架构设计基线；P1.2–P1.7 通用软件层已通过对应 GitHub Actions CI；P1.6 新版 Bridge 与 P1.7 Capture GUI 进程关闭的真实主机验收、P1.8 Skill E2E、P1.9 Allegro Adapter 生命周期扩展待完成（P1.9.1 Profile 隔离已通过 Run #94 的 102 项软件 CI）**
 - 日期：2026-11-12
 - 适用范围：AirBridge 主机 A / 主机 B；未来所有通过 Agent Skill 使用远端专业软件的场景
 
@@ -298,4 +298,4 @@ P1.6 软件 CI 已验证文件队列契约、READY 校验、结果解析、超�
 
 ### P1.9.1 增量状态（2026-11-12）
 
-Allegro SKILL 已由独立 `AllegroSkillAdapter` / `allegro-skill-oneshot` Profile 接管路由。该适配器只做脚本类型验证和参数/结果适配，实际仍调用既有 EDAExecutor，未改变 Allegro 启动命令、SCR / SKILL 文件生成、BRD 路径 sidecar、交互式 `axlOpenDesign()`、`keep_open` 或独立关闭路径。ProcessSupervisor 对 Allegro 的集成暂缓，不会主动扫描或关闭用户手动启动的 Allegro。软件 CI 和 Host B Allegro 17.2 回归结果需以本阶段验收记录为准。
+Allegro SKILL 已由独立 `AllegroSkillAdapter` / `allegro-skill-oneshot` Profile 接管路由。该适配器只做脚本类型验证和参数/结果适配，实际仍调用既有 EDAExecutor，未改变 Allegro 启动命令、SCR / SKILL 文件生成、BRD 路径 sidecar、交互式 `axlOpenDesign()`、`keep_open` 或独立关闭路径。ProcessSupervisor 对 Allegro 的集成暂缓，不会主动扫描或关闭用户手动启动的 Allegro。软件 CI 已由 [Run #94](https://github.com/scanligithub/airbridge/actions/runs/43158226213) 验收：81 项单元、12 项 A/B Worker 模拟、9 项 HTTP 集成，共 102 项通过、0 项失败。Host B Allegro 17.2 GUI 回归仍待执行。

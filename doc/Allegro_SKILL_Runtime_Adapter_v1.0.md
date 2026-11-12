@@ -4,7 +4,7 @@
 - 版本：1.0
 - 日期：2026-11-12
 - 阶段：P1.9.1
-- 状态：实现与软件 CI 验收中；Host B 真实 Allegro 17.2 回归未执行
+- 状态：**软件 CI PASS（Run #94，102 项）；Host B 真实 Allegro 17.2 回归未执行**
 
 ## 1. 目标
 
@@ -90,3 +90,13 @@ select_eda_profile(script, hint)
 ## 7. 后续决策
 
 P1.9.2 是否将 Allegro 接入 ProcessSupervisor，必须先确认用户手动启动 Allegro 的实例边界与旧关闭行为；不能简单复制 Capture 的“启动前关闭所有同名进程”策略。长期是否实现持久 SKILL Bridge，也应先验证 Allegro 17.2 可用的自动加载入口和脚本接收机制，不假设存在与 Capture Tcl 相同的 capAutoLoad 行为。
+
+
+## 8. P1.9.1 软件验收结果
+
+[GitHub Actions Run #94](https://github.com/scanligithub/airbridge/actions/runs/43158226213) 在提交 `7d6ecedee4177d3b1b5d1604b062383ee334ffb7` 上完成：
+- Protocol Unit Job：81 项测试通过；
+- A/B duplex + HTTP Job：12 项 Worker 模拟 + 9 项 HTTP 集成通过；
+- 两个 Job 均成功，合计 102 项通过、0 项失败。
+
+新增的 4 项覆盖 Allegro Adapter 委托与参数透传、Tcl 拒绝、非零退出码、Capture / Allegro / fallback Profile 分流。此次 CI 不启动真实 Allegro，也不验证 GUI 开板，因此 Host B 最小实机回归仍是下一项验收。
