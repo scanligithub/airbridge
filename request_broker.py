@@ -207,13 +207,6 @@ class RequestBroker:
             raise RequestBrokerError("executor must be callable")
 
         digest = self.payload_digest(payload)
-        payload_json = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
         now = time.time()
 
         with self._lock:
@@ -221,7 +214,7 @@ class RequestBroker:
                 raise RequestBrokerError("request broker is closed")
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                self._prune_locked(now, reserve_slot=True)
+                self._prune_locked(now, reserve_slot=False)
                 row = self._conn.execute(
                     "SELECT * FROM broker_requests WHERE request_id = ?",
                     (normalized_id,),
@@ -229,7 +222,10 @@ class RequestBroker:
 
                 if row is not None:
                     self._conn.execute("COMMIT")
-                    if row["payload_sha256"] != digest:
+                    if (
+                        row["request_kind"] != request_kind.strip()
+                        or row["payload_sha256"] != digest
+                    ):
                         return {
                             "disposition": "conflict",
                             "state": row["state"],
@@ -257,6 +253,9 @@ class RequestBroker:
                         "result": cached_result,
                     }
 
+                # A new admission may recycle the oldest terminal result, but
+                # active RUNNING requests are never evicted.
+                self._prune_locked(now, reserve_slot=True)
                 count = int(
                     self._conn.execute(
                         "SELECT COUNT(*) FROM broker_requests"
