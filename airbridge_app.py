@@ -470,8 +470,7 @@ class SerialWorker(threading.Thread):
         "last_handshake_id": None,
         "error": None,
     }
-    self.session_auto_handshake_lock = threading.Lock()
-    self.session_auto_handshake_thread = None
+    self.session_link_generation = 0
 
   def connect_serial(self, port: str, baud: int):
     self._reset_session_peer_status("serial connection is being reinitialized")
@@ -512,6 +511,7 @@ class SerialWorker(threading.Thread):
   def _reset_session_peer_status(self, reason: str):
     pending = []
     with self.session_protocol_lock:
+      self.session_link_generation += 1
       pending = list(self.session_pending_handshakes.values())
       self.session_pending_handshakes.clear()
       self.session_peer_status = {
@@ -537,12 +537,9 @@ class SerialWorker(threading.Thread):
       status["can_create_session"] = "session.create" in status["features"]
       return status
 
-  def begin_session_negotiation(self) -> Dict[str, Any]:
-    with self.lock:
-      connected = self.ser is not None and bool(getattr(self.ser, "is_open", False))
-    if not connected:
-      return {"success": False, "state": "disconnected", "error": "serial link is not connected"}
-
+  def begin_session_negotiation(
+      self, expected_generation: Optional[int] = None
+  ) -> Dict[str, Any]:
     envelope = make_session_hello(CLIENT_VERSION)
     message_id = envelope["message_id"]
     try:
@@ -551,22 +548,31 @@ class SerialWorker(threading.Thread):
       return {"success": False, "state": "failed", "error": str(exc)}
 
     event = threading.Event()
-    with self.session_protocol_lock:
-      self.session_pending_handshakes[message_id] = {
-          "event": event,
-          "response": None,
-      }
-      self.session_peer_status = {
-          "state": "negotiating",
-          "negotiated": False,
-          "protocol": SESSION_PROTOCOL_ID,
-          "supported_protocols": [],
-          "features": [],
-          "profiles": [],
-          "last_handshake_id": message_id,
-          "error": None,
-      }
-    self.send_frame(FrameType.SESSION_HELLO, payload)
+    with self.lock:
+      connected = self.ser is not None and bool(getattr(self.ser, "is_open", False))
+      if not connected:
+        return {"success": False, "state": "disconnected", "error": "serial link is not connected"}
+      with self.session_protocol_lock:
+        if (
+            expected_generation is not None
+            and expected_generation != self.session_link_generation
+        ):
+          return {"success": False, "state": "stale", "error": "serial link generation changed"}
+        self.session_pending_handshakes[message_id] = {
+            "event": event,
+            "response": None,
+        }
+        self.session_peer_status = {
+            "state": "negotiating",
+            "negotiated": False,
+            "protocol": SESSION_PROTOCOL_ID,
+            "supported_protocols": [],
+            "features": [],
+            "profiles": [],
+            "last_handshake_id": message_id,
+            "error": None,
+        }
+      self.send_frame(FrameType.SESSION_HELLO, payload)
     return {"success": True, "state": "negotiating", "message_id": message_id}
 
   def _wait_session_negotiation(self, message_id: str, timeout: float) -> Dict[str, Any]:
@@ -586,36 +592,52 @@ class SerialWorker(threading.Thread):
     with self.session_protocol_lock:
       self.session_pending_handshakes.pop(message_id, None)
       response = pending.get("response")
-    if response and response.get("state") == "disconnected":
-      return {"success": False, **response}
+    if response:
+      if response.get("state") == "disconnected":
+        return {"success": False, **response}
+      return {
+          "success": response.get("state") == "negotiated",
+          "state": response.get("state"),
+          "message_id": message_id,
+          "peer_capabilities": response.get("payload", {}),
+      }
     return self.get_session_peer_status()
 
   def _start_auto_session_negotiation(self):
-    with self.session_auto_handshake_lock:
-      if self.session_auto_handshake_thread and self.session_auto_handshake_thread.is_alive():
-        return
-      self.session_auto_handshake_thread = threading.Thread(
-          target=self._auto_negotiate_session_peer,
-          name="AirBridgeSessionNegotiation",
-          daemon=True,
-      )
-      self.session_auto_handshake_thread.start()
+    with self.session_protocol_lock:
+      generation = self.session_link_generation
+    threading.Thread(
+        target=self._auto_negotiate_session_peer,
+        args=(generation,),
+        name="AirBridgeSessionNegotiation",
+        daemon=True,
+    ).start()
 
-  def _auto_negotiate_session_peer(self):
+  def _auto_negotiate_session_peer(self, generation: int):
     for attempt in range(1, 4):
-      submitted = self.begin_session_negotiation()
+      with self.session_protocol_lock:
+        if generation != self.session_link_generation:
+          return
+      submitted = self.begin_session_negotiation(expected_generation=generation)
       if not submitted.get("success"):
         return
       status = self._wait_session_negotiation(submitted["message_id"], timeout=1.0)
+      with self.session_protocol_lock:
+        if generation != self.session_link_generation:
+          return
       if status.get("state") == "negotiated":
         self.sig.sig_rx_log.emit(
             "INFO",
             "Runtime Session protocol handshake complete; features=" +
-            ",".join(status.get("features", [])),
+            ",".join(status.get("peer_capabilities", {}).get("features", [])),
         )
         return
-      if status.get("state") == "no_common_protocol":
-        self.sig.sig_rx_log.emit("WARN", "对端未声明共同的 Runtime Session 协议版本。")
+      if status.get("state") in ("no_common_protocol", "handshake_not_supported"):
+        self.sig.sig_rx_log.emit(
+            "WARN", "对端未声明可用的 Runtime Session 握手能力。"
+        )
+        return
+      if status.get("state") == "disconnected":
         return
       if attempt < 3:
         time.sleep(0.25)
@@ -652,20 +674,29 @@ class SerialWorker(threading.Thread):
         return
       payload = capabilities["payload"]
       supported = payload.get("supported_protocols", [])
-      common = SESSION_PROTOCOL_ID in supported
-      state = "negotiated" if common else "no_common_protocol"
-      self.session_peer_status = {
-          "state": state,
-          "negotiated": common,
-          "protocol": SESSION_PROTOCOL_ID,
-          "supported_protocols": list(supported),
-          "features": list(payload.get("features", [])),
-          "profiles": list(payload.get("profiles", [])),
-          "max_frame_payload": payload.get("max_frame_payload"),
-          "peer_version": payload.get("server_version"),
-          "last_handshake_id": correlation_id,
-          "error": None if common else "no common Runtime Session protocol",
-      }
+      features = list(payload.get("features", []))
+      protocol_common = SESSION_PROTOCOL_ID in supported
+      handshake_supported = "handshake" in features
+      common = protocol_common and handshake_supported
+      if common:
+        state = "negotiated"
+      elif not protocol_common:
+        state = "no_common_protocol"
+      else:
+        state = "handshake_not_supported"
+      if self.session_peer_status.get("last_handshake_id") == correlation_id:
+        self.session_peer_status = {
+            "state": state,
+            "negotiated": common,
+            "protocol": SESSION_PROTOCOL_ID,
+            "supported_protocols": list(supported),
+            "features": features,
+            "profiles": list(payload.get("profiles", [])),
+            "max_frame_payload": payload.get("max_frame_payload"),
+            "peer_version": payload.get("server_version"),
+            "last_handshake_id": correlation_id,
+            "error": None if common else state,
+        }
       pending["response"] = {"state": state, "payload": payload}
       pending["event"].set()
 
@@ -678,6 +709,8 @@ class SerialWorker(threading.Thread):
         FrameType.NACK,
         FrameType.FILE_ABORT,
         FrameType.HEARTBEAT,
+        FrameType.SESSION_HELLO,
+        FrameType.SESSION_CAPABILITIES,
     ):
       self.tx_high_queue.put(frame)
     else:
