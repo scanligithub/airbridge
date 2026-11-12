@@ -280,17 +280,19 @@ airbridge_tcl_bridge_test/
 9. Skill 决定何时保存。保存成功后才请求关闭 Session。
 10. Capture Exit 会结束 Tcl Interpreter。关闭流程应先记录 close intent，再安排 Exit，由 B 端 Process Supervisor 确认进程退出后返回 SESSION_CLOSED。
 
-## 7. 正式接入前待验证事项
+## 7. 已完成与待实机 / 后续阶段验收
 
-- [ ] 临时 Bridge 的会话目录改为每个 Session 独立且包含随机 nonce。
-- [ ] Capture 启动前关闭主机 B 上所有匹配的旧 Capture，并确认退出。
-- [ ] Bridge READY 与本次 session_id / startup_nonce 绑定，排除旧 READY 文件。
-- [ ] 请求 ID 去重、相同摘要重试返回缓存结果、不同摘要拒绝。
-- [ ] 主机 A 使用专用 Session ABFP 消息提交 Request，收到结构化结果，而不是通过 Shell 轮询结果文件。
-- [ ] A/B 断连、重连、Broker 重启、Capture 崩溃后的恢复策略。
-- [ ] 长任务、排队取消、等待超时与真正执行取消的区别。
-- [ ] Skill 保存后 Exit，B 端确认实际 PID 退出并返回 SESSION_CLOSED。
-- [ ] ACL、脚本大小、结果大小和保留策略。
+- [x] Session 使用独立目录和随机 startup_nonce。
+- [ ] 新 Capture 启动前扫描主机 B 上全部匹配的旧 Capture，逐一请求优雅关闭并确认退出；当前 P1.6 在发现任何非本 Worker 管理的 Capture.exe 时直接拒绝启动，不会自动关闭或强杀。完整策略属于 P1.7。
+- [x] Bridge READY 与本次 session_id / startup_nonce 绑定，并校验 runtime_pid 与 Worker 启动的 PID。
+- [x] B 端 RequestBroker 对相同 request_id 去重；相同 Payload 重放缓存结果，不同 Payload 返回冲突。
+- [ ] 主机 A 使用专用 Session ABFP 消息提交 Request；当前 P1.6 仍复用 EDA_TASK_SUBMIT / EDA_TASK_FIN，不新增 SESSION_CREATE / SESSION_EXEC。
+- [ ] A/B 实际物理串口断连、重连及两台 Windows 主机联调；当前 GitHub CI 仅用内存 ABFP 链路模拟。
+- [x] 长任务等待超时返回 UNKNOWN，Capture 仍可能运行时不删除请求文件，不自动重试。
+- [ ] 排队任务取消、运行中脚本真正取消、Broker / Worker 重启和 Capture 崩溃后的完整恢复策略。
+- [ ] Skill 保存后 Exit，B 端确认实际 PID 退出并返回 SESSION_CLOSED；依赖 P1.7 Process Supervisor 与后续 Skill E2E。
+- [x] Capture Tcl 脚本限制 1 MiB；结果保留默认 24 小时 / 最多 1000 条，并受 ABFP 单帧结果大小限制。
+- [ ] 为 Session 目录和 capAutoLoad hook 配置专用 ACL；当前使用运行用户默认文件权限，尚未实现独立 ACL 策略。
 
 ---
 
