@@ -1293,7 +1293,14 @@ class SerialWorker(threading.Thread):
       try:
         obj = json.loads(frame.payload.decode("utf-8", errors="replace"))
         request_id = obj.get("request_id")
-        if request_id and self.request_tracker.complete(request_id, obj):
+        response_state = (
+            "accepted"
+            if obj.get("status") == "running" and obj.get("async") is True
+            else "completed"
+        )
+        if request_id and self.request_tracker.complete(
+            request_id, obj, state=response_state
+        ):
           self.sig.sig_rx_log.emit(
               "SHELL",
               f"请求 {request_id} 已返回 task_id={obj.get('task_id', '')}",
@@ -1497,7 +1504,7 @@ class AntigravityIPCServer:
             self._reply_json(400, {"error": str(exc)})
             return
           status_code = (
-              202 if result.get("state") == "pending"
+              202 if result.get("state") in ("pending", "accepted")
               else 404 if result.get("state") == "not_found"
               else 503 if result.get("state") == "unknown"
               else 502 if result.get("state") == "failed"
@@ -1637,8 +1644,6 @@ class AntigravityIPCServer:
             wait_ms = default_wait
           wait_ms = max(0, min(wait_ms, 300000))
           result = worker_ref.request_tracker.wait(request_id, wait_ms / 1000.0)
-          if is_async and result.get("state") == "completed":
-            result["state"] = "accepted"
           status_code = (
               202 if result.get("state") in ("pending", "accepted")
               else 503 if result.get("state") == "unknown"
