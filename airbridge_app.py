@@ -1520,7 +1520,9 @@ class SerialWorker(threading.Thread):
     request_id = req.get("request_id")
     if request_id:
       broker_payload = {
-          key: value for key, value in req.items() if key != "request_id"
+          key: value
+          for key, value in req.items()
+          if key not in ("request_id", "wait_timeout_ms")
       }
       try:
         outcome = self.request_broker.execute(
@@ -1832,11 +1834,14 @@ class AntigravityIPCServer:
             )
             return
           task["request_id"] = request_id
+          remote_task = {
+              key: value for key, value in task.items() if key != "wait_timeout_ms"
+          }
           try:
             worker_ref.request_tracker.register(request_id, "shell.exec")
             worker_ref.send_frame(
                 FrameType.SHELL_EXEC,
-                json.dumps(task, ensure_ascii=False).encode("utf-8"),
+                json.dumps(remote_task, ensure_ascii=False).encode("utf-8"),
             )
           except Exception as exc:
             worker_ref.request_tracker.fail(request_id, str(exc))
