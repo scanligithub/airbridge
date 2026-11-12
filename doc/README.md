@@ -10,7 +10,7 @@
 | [Runtime Session Protocol v1](AirBridge_Session_Protocol_v1.0.md) | Session / Request / Result 数据结构、ABFP 帧、HTTP API、幂等、超时和取消语义 | P1.2–P1.7 已实现软件部分通过 CI；Session Create / Close 专用协议与 FIFO Broker 待实现 |
 | [Runtime Adapter / Profile 接口设计 v1.0](Runtime_Adapter_Profile_v1.0.md) | 通用 Adapter 接口、Profile Registry、旧版 EDA / Shell 兼容适配器及执行边界 | P1.5–P1.7 GitHub Actions 软件 CI PASS；真实 Capture Bridge / GUI 进程关闭实机复验待完成 |
 | [Process Supervisor 设计与验收 v1.0](Process_Supervisor_v1.0.md) | Capture / Allegro 进程发现、映像身份校验、WM_CLOSE、退出确认、启动阻断策略 | P1.7 软件 CI PASS；真实 Capture GUI 关闭与保存提示实机验收待完成 |
-| [Capture Tcl Bridge 实测基线](Capture_Tcl_Bridge_实测基线_v1.0.md) | Capture 17.2 实测原型证据、P1.6 正式 capAutoLoad Bridge、P1.7 ProcessSupervisor 的实现与验收边界 | P1.6 / P1.7 软件 CI PASS；新版 Bridge 和真实 Capture 进程关闭仍待实机验收 |
+| [Capture Tcl Bridge 实测基线](Capture_Tcl_Bridge_实测基线_v1.0.md) | Capture 17.2 实测原型证据、P1.6 capAutoLoad Bridge、P1.7 ProcessSupervisor，以及 Tcl 8.6 解释器执行回归 | P1.6 / P1.7 软件 CI PASS；Capture 17.2 / Dbo / GUI 与真实进程关闭仍待实机验收 |
 | [GitHub Actions Runtime Session CI 验收配置](GitHub_Actions_Runtime_Session_AB验收配置.md) | GitHub 托管 Windows Runner、协议单测、生产 SerialWorker 双端模拟和验收边界 | 云端 CI 配置；物理串口实测不在当前 CI 范围 |
 
 ## 现有专业软件生命周期文档
