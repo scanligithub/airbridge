@@ -6,7 +6,7 @@
 - 日期：2026-11-12
 - 关联架构：AirBridge 通用 Runtime Session 架构设计 v1.0
 
-> 本文件定义消息语义、JSON Envelope、ABFP 帧分配和北向 HTTP API。P1.2 已实现 0x15 / 0x16 能力协商；P1.3 在现有 EDA / Shell 帧的 JSON Payload 中增加 request_id 回显与 A 端 HTTP 结果关联，不新增 ABFP 帧；Session Broker、Session Create 和统一 Session Request 帧仍为后续阶段。
+> 本文件定义消息语义、JSON Envelope、ABFP 帧分配和北向 HTTP API。P1.2 已实现 0x15 / 0x16 能力协商；P1.3 在现有 EDA / Shell 帧的 JSON Payload 中增加 request_id 回显与 A 端 HTTP 结果关联；P1.4 在 B 端增加通用持久化 Request 去重层，不新增 ABFP 帧。Session Create、每 Session FIFO 队列和统一 Session Request 帧仍为后续阶段。
 
 ---
 
