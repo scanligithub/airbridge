@@ -4,7 +4,7 @@
 AirBridge - 物理网闸通用中继器 & EDA 自动化中枢 v2.4
 多版本 Cadence 自适应 + 大文件吞吐 + 远程 Shell (PowerShell/CMD)
 """
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
 import ntpath
@@ -13,7 +13,9 @@ import queue
 import sys
 import threading
 import time
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from eda_engine import CadenceVersionManager, EDAExecutor
 from fs_engine import FSEngine
@@ -26,6 +28,11 @@ from runtime_session_protocol import (
     encode_session_message,
     make_session_capabilities,
     make_session_hello,
+)
+from request_tracker import (
+    RequestTracker,
+    RequestTrackerError,
+    encode_bounded_json_payload,
 )
 from shell_engine import shell_engine, ShellEngine
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
@@ -456,6 +463,10 @@ class SerialWorker(threading.Thread):
     self.fs_pending_lock = threading.Lock()
     self.fs_pending_requests: Dict[int, Dict[str, Any]] = {}
 
+    # A-side HTTP <-> ABFP correlation. This is request/result matching only;
+    # Broker queues, idempotent execution, and Session lifecycle are later phases.
+    self.request_tracker = RequestTracker()
+
     # Runtime Session protocol negotiation state. This is transport-level
     # capability discovery only; it does not create or manage Runtime Sessions.
     self.session_protocol_lock = threading.RLock()
@@ -472,7 +483,12 @@ class SerialWorker(threading.Thread):
     }
     self.session_link_generation = 0
 
+  def is_serial_connected(self) -> bool:
+    with self.lock:
+      return self.ser is not None and bool(getattr(self.ser, "is_open", False))
+
   def connect_serial(self, port: str, baud: int):
+    self.request_tracker.fail_all_pending("serial connection is being reinitialized")
     self._reset_session_peer_status("serial connection is being reinitialized")
     connected = False
     with self.lock:
@@ -507,6 +523,7 @@ class SerialWorker(threading.Thread):
         self.ser = None
       self.sig.sig_connected.emit(False, "串口已断开")
     self._reset_session_peer_status("serial link disconnected")
+    self.request_tracker.fail_all_pending("serial link disconnected")
 
   def _reset_session_peer_status(self, reason: str):
     pending = []
@@ -1164,6 +1181,23 @@ class SerialWorker(threading.Thread):
     elif frame.frame_type == FrameType.EDA_LOG_STREAM:
       self.sig.sig_eda_log.emit(frame.payload.decode("utf-8", errors="ignore"))
 
+    elif frame.frame_type == FrameType.EDA_TASK_FIN:
+      try:
+        result = json.loads(frame.payload.decode("utf-8", errors="replace"))
+        request_id = result.get("request_id")
+        if request_id and self.request_tracker.complete(request_id, result):
+          self.sig.sig_rx_log.emit(
+              "EDA",
+              f"请求 {request_id} 已完成，returncode={result.get('returncode')}",
+          )
+        else:
+          self.sig.sig_rx_log.emit(
+              "EDA",
+              f"收到未关联或重复的 EDA_TASK_FIN: {json.dumps(result, ensure_ascii=False)[:500]}",
+          )
+      except Exception as exc:
+        self.sig.sig_rx_log.emit("ERROR", f"EDA_TASK_FIN 解码失败: {exc}")
+
     elif frame.frame_type == FrameType.EDA_TASK_SUBMIT:
       self.sig.sig_rx_log.emit(
           "EDA", "[任务调度] 收到 Cadence 自动化脚本，启动执行..."
@@ -1184,6 +1218,7 @@ class SerialWorker(threading.Thread):
                 task_data.get("target_file", ""),
                 task_data.get("timeout", 60),
                 task_data.get("keep_open", False),
+                task_data.get("request_id"),
             ),
             daemon=True,
         ).start()
@@ -1257,13 +1292,19 @@ class SerialWorker(threading.Thread):
     elif frame.frame_type == FrameType.SHELL_RESULT:
       try:
         obj = json.loads(frame.payload.decode("utf-8", errors="replace"))
-        self.sig.sig_rx_log.emit(
-            "SHELL",
-            f"任务结果: {json.dumps(obj, ensure_ascii=False)[:500]}",
-        )
-        # 若是同步等待中的结果，也可通过 fs_pending 类似机制唤醒（简化：日志即可）
-      except Exception:
-        pass
+        request_id = obj.get("request_id")
+        if request_id and self.request_tracker.complete(request_id, obj):
+          self.sig.sig_rx_log.emit(
+              "SHELL",
+              f"请求 {request_id} 已返回 task_id={obj.get('task_id', '')}",
+          )
+        else:
+          self.sig.sig_rx_log.emit(
+              "SHELL",
+              f"任务结果: {json.dumps(obj, ensure_ascii=False)[:500]}",
+          )
+      except Exception as exc:
+        self.sig.sig_rx_log.emit("ERROR", f"SHELL_RESULT 解码失败: {exc}")
 
     elif frame.frame_type == FrameType.SHELL_LIST_RESP:
       try:
@@ -1320,19 +1361,36 @@ class SerialWorker(threading.Thread):
       target_file: str = "",
       timeout: int = 60,
       keep_open: bool = False,
+      request_id: Optional[str] = None,
   ):
-    ret, out = self.eda_executor.execute_script(
-        script,
-        hint,
-        log_fn,
-        timeout=timeout,
-        version=version,
-        target_file=target_file,
-        keep_open=keep_open,
-    )
-    self.send_frame(
-        FrameType.EDA_TASK_FIN, json.dumps({"returncode": ret}).encode("utf-8")
-    )
+    try:
+      ret, out = self.eda_executor.execute_script(
+          script,
+          hint,
+          log_fn,
+          timeout=timeout,
+          version=version,
+          target_file=target_file,
+          keep_open=keep_open,
+      )
+    except Exception as exc:
+      ret, out = -1, str(exc)
+
+    response = {"returncode": ret}
+    if request_id:
+      response["request_id"] = request_id
+      response["output"] = out if isinstance(out, str) else str(out)
+      try:
+        encoded = encode_bounded_json_payload(response, MAX_PAYLOAD_LEN)
+      except RequestTrackerError as exc:
+        response["output"] = ""
+        response["output_truncated"] = True
+        response["error"] = str(exc)
+        encoded = encode_bounded_json_payload(response, MAX_PAYLOAD_LEN)
+    else:
+      # Preserve the legacy response shape for GUI-originated one-shot tasks.
+      encoded = json.dumps(response).encode("utf-8")
+    self.send_frame(FrameType.EDA_TASK_FIN, encoded)
 
 
 # ==============================================================================
@@ -1365,11 +1423,22 @@ class SerialWorker(threading.Thread):
         env=env if isinstance(env, dict) else {},
     )
 
-    # 同步结果 或 异步启动回执 都通过 SHELL_RESULT 回传
-    self.send_frame(
-        FrameType.SHELL_RESULT,
-        json.dumps(res, ensure_ascii=False).encode("utf-8"),
-    )
+    # Echo the A-side business ID; the 16-bit ABFP seq_id is transport-only.
+    request_id = req.get("request_id")
+    if request_id:
+      res["request_id"] = request_id
+
+    # Sync result or async-start acknowledgement is returned as one bounded frame.
+    try:
+      response_payload = encode_bounded_json_payload(res, MAX_PAYLOAD_LEN)
+    except RequestTrackerError as exc:
+      bounded = {
+          "success": False,
+          "request_id": request_id,
+          "error": f"result exceeds ABFP frame capacity: {exc}",
+      }
+      response_payload = encode_bounded_json_payload(bounded, MAX_PAYLOAD_LEN)
+    self.send_frame(FrameType.SHELL_RESULT, response_payload)
     if not async_mode:
       # 同步时也把关键信息打到本地日志
       if res.get("success"):
@@ -1410,9 +1479,25 @@ class AntigravityIPCServer:
         self.wfile.write(body)
 
       def do_GET(self):
-        if self.path == "/api/v1/runtime/capabilities":
+        path = urlsplit(self.path).path
+        if path == "/api/v1/runtime/capabilities":
           self._reply_json(200, worker_ref.get_session_peer_status())
-        elif self.path == "/api/v1/eda/versions":
+        elif path.startswith("/api/v1/requests/"):
+          request_id = path.rsplit("/", 1)[-1]
+          try:
+            result = worker_ref.request_tracker.get(request_id)
+          except RequestTrackerError as exc:
+            self._reply_json(400, {"error": str(exc)})
+            return
+          status_code = (
+              202 if result.get("state") == "pending"
+              else 404 if result.get("state") == "not_found"
+              else 503 if result.get("state") == "unknown"
+              else 502 if result.get("state") == "failed"
+              else 200
+          )
+          self._reply_json(status_code, result)
+        elif path == "/api/v1/eda/versions":
           res = worker_ref.send_fs_request_sync(
               {"action": "eda_versions"}, timeout=10.0
           )
@@ -1438,14 +1523,20 @@ class AntigravityIPCServer:
           except Exception:
             task = {"script": raw_body, "hint": "agent_auto.tcl"}
 
+          if not worker_ref.is_serial_connected():
+            self._reply_json(503, {"state": "not_submitted", "error": "serial link is disconnected"})
+            return
+
           script = task.get("script") or task.get("script_content", "")
           hint = task.get("hint") or task.get("script_name", "agent_auto.tcl")
           version = task.get("version", "auto")
           target_file = task.get("target_file", "")
           timeout = int(task.get("timeout", 60))
           keep_open = bool(task.get("keep_open", False))
+          request_id = str(uuid.uuid4())
 
           submit_payload = {
+              "request_id": request_id,
               "script": script,
               "hint": hint,
               "version": version,
@@ -1453,13 +1544,30 @@ class AntigravityIPCServer:
               "timeout": timeout,
               "keep_open": keep_open,
           }
-          worker_ref.send_frame(
-              FrameType.EDA_TASK_SUBMIT,
-              json.dumps(submit_payload).encode("utf-8"),
+          try:
+            worker_ref.request_tracker.register(request_id, "eda.execute")
+            worker_ref.send_frame(
+                FrameType.EDA_TASK_SUBMIT,
+                json.dumps(submit_payload, ensure_ascii=False).encode("utf-8"),
+            )
+          except (RequestTrackerError, Exception) as exc:
+            worker_ref.request_tracker.fail(request_id, str(exc))
+            self._reply_json(503, {"request_id": request_id, "state": "not_submitted", "error": str(exc)})
+            return
+
+          try:
+            wait_ms = int(task.get("wait_timeout_ms", min(max(timeout + 10, 5) * 1000, 300000)))
+          except (TypeError, ValueError):
+            wait_ms = min(max(timeout + 10, 5) * 1000, 300000)
+          wait_ms = max(0, min(wait_ms, 300000))
+          result = worker_ref.request_tracker.wait(request_id, wait_ms / 1000.0)
+          status_code = (
+              200 if result.get("state") == "completed"
+              else 503 if result.get("state") == "unknown"
+              else 502 if result.get("state") == "failed"
+              else 202
           )
-          self._reply_json(
-              200, {"status": "submitted", "hint": hint, "version": version}
-          )
+          self._reply_json(status_code, result)
 
         elif self.path == "/api/v1/eda/versions":
           res = worker_ref.send_fs_request_sync(
@@ -1478,17 +1586,43 @@ class AntigravityIPCServer:
             task = json.loads(raw_body) if raw_body.strip() else {}
           except Exception:
             task = {"command": raw_body}
-          # 通过串口把命令发到对端（主机 B）执行
-          worker_ref.send_frame(
-              FrameType.SHELL_EXEC,
-              json.dumps(task, ensure_ascii=False).encode("utf-8"),
+
+          if not worker_ref.is_serial_connected():
+            self._reply_json(503, {"state": "not_submitted", "error": "serial link is disconnected"})
+            return
+
+          request_id = str(uuid.uuid4())
+          task["request_id"] = request_id
+          try:
+            worker_ref.request_tracker.register(request_id, "shell.exec")
+            worker_ref.send_frame(
+                FrameType.SHELL_EXEC,
+                json.dumps(task, ensure_ascii=False).encode("utf-8"),
+            )
+          except Exception as exc:
+            worker_ref.request_tracker.fail(request_id, str(exc))
+            self._reply_json(503, {"request_id": request_id, "state": "not_submitted", "error": str(exc)})
+            return
+
+          is_async = bool(task.get("async", False))
+          default_wait = 10000 if is_async else min(
+              max(int(task.get("timeout", 60)) + 10, 5) * 1000, 300000
           )
-          # 异步模式立即返回；同步模式当前简化为“已提交”，结果走日志/后续轮询
-          self._reply_json(200, {
-              "status": "submitted",
-              "async": bool(task.get("async", False)),
-              "hint": "结果将通过 SHELL_RESULT / 控制台日志回传；异步任务可用 /api/v1/shell/tasks 查询",
-          })
+          try:
+            wait_ms = int(task.get("wait_timeout_ms", default_wait))
+          except (TypeError, ValueError):
+            wait_ms = default_wait
+          wait_ms = max(0, min(wait_ms, 300000))
+          result = worker_ref.request_tracker.wait(request_id, wait_ms / 1000.0)
+          if is_async and result.get("state") == "completed":
+            result["state"] = "accepted"
+          status_code = (
+              202 if result.get("state") in ("pending", "accepted")
+              else 503 if result.get("state") == "unknown"
+              else 502 if result.get("state") == "failed"
+              else 200
+          )
+          self._reply_json(status_code, result)
 
         elif self.path in ("/api/v1/shell/kill", "/api/shell/kill"):
           try:
@@ -1539,7 +1673,8 @@ class AntigravityIPCServer:
 
     def serve():
       try:
-        s = HTTPServer(("127.0.0.1", self.port), Handler)
+        s = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
+        s.daemon_threads = True
         s.serve_forever()
       except Exception:
         pass
