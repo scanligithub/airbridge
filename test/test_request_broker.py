@@ -114,6 +114,33 @@ class RequestBrokerTests(unittest.TestCase):
         self.assertEqual(first_result["state"], "completed")
         self.assertEqual(calls, ["first"])
 
+    def test_executor_failure_is_cached_as_failed_not_completed(self):
+        request_id = str(uuid.uuid4())
+        calls = []
+
+        def execute():
+            calls.append("attempted")
+            return {
+                "success": False,
+                "error": {"code": "COMMAND_FAILED", "message": "exit code 1"},
+            }
+
+        first = self.broker.execute(
+            request_id, "shell.exec", {"command": "false"}, execute
+        )
+        second = self.broker.execute(
+            request_id,
+            "shell.exec",
+            {"command": "false"},
+            lambda: calls.append("must-not-run") or {"success": True},
+        )
+
+        self.assertEqual(first["state"], "failed")
+        self.assertEqual(second["state"], "failed")
+        self.assertEqual(second["disposition"], "cached")
+        self.assertEqual(second["result"]["error"]["code"], "COMMAND_FAILED")
+        self.assertEqual(calls, ["attempted"])
+
     def test_duplicate_async_shell_start_returns_cached_acceptance(self):
         request_id = str(uuid.uuid4())
         calls = []
