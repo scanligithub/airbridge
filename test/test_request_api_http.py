@@ -21,6 +21,12 @@ class FakeWorker:
     def is_serial_connected(self):
         return self.connected
 
+    def get_session_peer_status(self):
+        return {
+            "state": "negotiated",
+            "features": ["handshake", "request.correlation"],
+        }
+
     def send_frame(self, frame_type, payload=b""):
         self.frames.append((frame_type, payload))
         if not self.auto_complete:
@@ -185,6 +191,23 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(body["state"], "not_submitted")
         self.assertEqual(len(self.worker.request_tracker._records), 0)
         self.assertEqual(len(self.worker.frames), 0)
+
+    def test_peer_without_result_correlation_is_rejected_before_submission(self):
+        self.worker.get_session_peer_status = lambda: {
+            "state": "negotiated",
+            "features": ["handshake"],
+        }
+        status, body = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "puts hello"},
+        )
+
+        self.assertEqual(status, 503, body)
+        self.assertEqual(body["state"], "not_submitted")
+        self.assertIn("request.correlation", body["error"])
+        self.assertEqual(len(self.worker.frames), 0)
+        self.assertEqual(len(self.worker.request_tracker._records), 0)
 
     def test_invalid_shell_timeout_is_rejected_before_frame_submission(self):
         status, body = self._request_json(
