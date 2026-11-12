@@ -29,8 +29,8 @@ from capture_tcl_bridge import (
     CaptureTclAdapter,
     CaptureTclBridgeError,
     CaptureTclBridgeSession,
-    list_running_capture_pids,
 )
+from process_supervisor import ProcessSupervisor, ProcessSupervisorError
 from fs_engine import FSEngine
 from protocol import ABFPFrame, FrameParser, FrameType, MAX_PAYLOAD_LEN
 from runtime_session_protocol import (
@@ -441,6 +441,7 @@ class SerialWorker(threading.Thread):
     self.seq_counter = 0
     self.eda_executor = EDAExecutor()
     self.shell_engine = shell_engine
+    self.process_supervisor = ProcessSupervisor()
     self._capture_session_lock = threading.RLock()
     self.capture_tcl_bridge = None
     self.capture_tcl_adapter = CaptureTclAdapter(self._ensure_capture_tcl_bridge)
@@ -1435,13 +1436,31 @@ class SerialWorker(threading.Thread):
           return session
         self.capture_tcl_bridge = None
 
-      running_pids = list_running_capture_pids()
-      if running_pids:
+      close_timeout = float(payload.get("process_close_timeout", 60) or 60)
+      supervisor = getattr(self, "process_supervisor", None)
+      if supervisor is None:
+        supervisor = ProcessSupervisor()
+        self.process_supervisor = supervisor
+      try:
+        process_report = supervisor.ensure_exclusive(
+            "capture",
+            timeout_seconds=close_timeout,
+        )
+      except ProcessSupervisorError as exc:
+        report = getattr(exc, "report", None)
+        if report is not None:
+          for outcome in report.outcomes:
+            context.log(
+                f"[Process Supervisor] PID={outcome.process.pid} "
+                f"status={outcome.status}: {outcome.message}"
+            )
         raise CaptureTclBridgeError(
-            "Capture process conflict: existing Capture.exe PID(s) "
-            + ", ".join(str(pid) for pid in running_pids)
-            + ". P1.7 Process Supervisor must gracefully close all existing "
-            "instances and confirm exit before starting a managed Capture session."
+            f"Capture startup blocked by Process Supervisor: {exc}"
+        ) from exc
+      for outcome in process_report.outcomes:
+        context.log(
+            f"[Process Supervisor] PID={outcome.process.pid} "
+            f"status={outcome.status}: {outcome.message}"
         )
 
       requested_version = str(payload.get("version", "auto") or "auto")
