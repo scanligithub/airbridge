@@ -1478,7 +1478,7 @@ class SerialWorker(threading.Thread):
       stream_log(f"[EDA Close] 关闭 {application} 时发生异常: {exc}")
 
   def _handle_shell_exec(self, req: Dict[str, Any]):
-    """在本机（通常是主机 B）执行远程 Shell 请求，并回传结果。"""
+    """Execute a remote Shell request through the generic B-side request broker."""
     command = req.get("command") or req.get("cmd") or ""
     shell = req.get("shell", "powershell")
     cwd = req.get("cwd", "")
@@ -1488,20 +1488,66 @@ class SerialWorker(threading.Thread):
       timeout = 60
     async_mode = bool(req.get("async", False))
     env = req.get("env") or {}
+    safe_env = env if isinstance(env, dict) else {}
 
-    res = self.shell_engine.exec(
-        command=command,
-        shell=shell,
-        cwd=cwd,
-        timeout=timeout,
-        async_mode=async_mode,
-        env=env if isinstance(env, dict) else {},
-    )
+    def execute_shell() -> Dict[str, Any]:
+      return self.shell_engine.exec(
+          command=command,
+          shell=shell,
+          cwd=cwd,
+          timeout=timeout,
+          async_mode=async_mode,
+          env=safe_env,
+      )
 
-    # Echo the A-side business ID; the 16-bit ABFP seq_id is transport-only.
     request_id = req.get("request_id")
     if request_id:
+      broker_payload = {
+          key: value for key, value in req.items() if key != "request_id"
+      }
+      try:
+        outcome = self.request_broker.execute(
+            request_id,
+            "shell.exec",
+            broker_payload,
+            execute_shell,
+        )
+      except Exception as exc:
+        outcome = {
+            "disposition": "unknown",
+            "state": "unknown",
+            "error": {
+                "code": "BROKER_STORAGE_ERROR",
+                "message": str(exc),
+            },
+        }
+
+      if outcome.get("disposition") == "in_progress":
+        # A duplicate frame must not launch a second process. The original
+        # request thread will deliver its result when execution returns.
+        return
+
+      if outcome.get("error"):
+        res = {
+            "success": False,
+            "request_state": "failed",
+            "error": outcome["error"],
+        }
+      else:
+        res = dict(outcome.get("result") or {})
+        if outcome.get("state") == "unknown":
+          res["request_state"] = "unknown"
+          res.setdefault("success", False)
+        elif outcome.get("state") == "failed":
+          res["request_state"] = "failed"
+          res.setdefault("success", False)
       res["request_id"] = request_id
+    else:
+      # Legacy uncorrelated GUI request: keep the previous direct behavior.
+      try:
+        res = execute_shell()
+      except Exception as exc:
+        res = {"success": False, "error": str(exc)}
 
     # Sync result or async-start acknowledgement is returned as one bounded frame.
     try:
@@ -1510,12 +1556,14 @@ class SerialWorker(threading.Thread):
       bounded = {
           "success": False,
           "request_id": request_id,
-          "error": f"result exceeds ABFP frame capacity: {exc}",
+          "error": {
+              "code": "RESULT_ENCODING_ERROR",
+              "message": f"result exceeds ABFP frame capacity: {exc}",
+          },
       }
       response_payload = encode_bounded_json_payload(bounded, MAX_PAYLOAD_LEN)
     self.send_frame(FrameType.SHELL_RESULT, response_payload)
     if not async_mode:
-      # 同步时也把关键信息打到本地日志
       if res.get("success"):
         self.sig.sig_rx_log.emit(
             "SHELL",
