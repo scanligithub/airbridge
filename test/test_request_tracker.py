@@ -87,6 +87,21 @@ class RequestTrackerTests(unittest.TestCase):
         with self.assertRaises(RequestTrackerError):
             tracker.register("not-a-uuid", "eda.execute")
 
+    def test_acceptance_is_terminal_for_http_ack_but_distinct_from_completion(self):
+        tracker = RequestTracker()
+        request_id = str(uuid.uuid4())
+        tracker.register(request_id, "shell.exec")
+        self.assertTrue(
+            tracker.complete(
+                request_id,
+                {"status": "running", "async": True},
+                state="accepted",
+            )
+        )
+        snapshot = tracker.get(request_id)
+        self.assertEqual(snapshot["state"], "accepted")
+        self.assertEqual(snapshot["result"]["status"], "running")
+
     def test_tracker_does_not_evict_pending_records_when_full(self):
         tracker = RequestTracker(max_records=1)
         tracker.register(str(uuid.uuid4()), "eda.execute")
