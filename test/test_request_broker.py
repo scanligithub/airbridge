@@ -140,6 +140,35 @@ class RequestBrokerTests(unittest.TestCase):
         self.assertEqual(second["result"]["task_id"], "shell-1")
         self.assertEqual(calls, ["started"])
 
+    def test_completed_result_survives_broker_restart(self):
+        request_id = str(uuid.uuid4())
+        calls = []
+
+        first = self.broker.execute(
+            request_id,
+            "eda.execute",
+            {"script": "puts durable"},
+            lambda: calls.append("first") or {"returncode": 0, "output": "cached"},
+        )
+        self.assertEqual(first["state"], "completed")
+
+        self.broker.close()
+        recovered = RequestBroker(self.db_path, ttl_seconds=30, max_records=20)
+        try:
+            duplicate = recovered.execute(
+                request_id,
+                "eda.execute",
+                {"script": "puts durable"},
+                lambda: calls.append("second") or {"returncode": 99},
+            )
+            self.assertEqual(duplicate["disposition"], "cached")
+            self.assertEqual(duplicate["state"], "completed")
+            self.assertEqual(duplicate["result"]["output"], "cached")
+            self.assertEqual(calls, ["first"])
+        finally:
+            recovered.close()
+        self.broker = RequestBroker(self.db_path, ttl_seconds=30, max_records=20)
+
     def test_broker_restart_recovers_running_request_as_unknown(self):
         request_id = str(uuid.uuid4())
         payload = {"script": "puts may-have-run"}
