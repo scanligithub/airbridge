@@ -2,7 +2,7 @@
 
 - 文档编号：AB-PROTO-SESSION-001
 - 版本：1.0
-- 状态：**P1.2–P1.6 当前实现均已通过 GitHub Actions 软件 CI（P1.6 Run #76，80 项测试通过）；Session Create / Close 专用消息、Process Supervisor 与真实 Capture 17.2 实机复验仍待完成**
+- 状态：**P1.2–P1.7 当前实现均已通过 GitHub Actions 软件 CI（P1.7 Run #85，89 项测试通过）；Session Create / Close 专用消息、每 Session FIFO Broker 与真实 Capture 17.2 实机验收仍待完成**
 - 日期：2026-11-12
 - 关联架构：AirBridge 通用 Runtime Session 架构设计 v1.0
 
