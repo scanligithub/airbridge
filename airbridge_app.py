@@ -1700,8 +1700,29 @@ class AntigravityIPCServer:
           if timeout < 0:
             self._reply_json(400, {"state": "not_submitted", "error": "timeout must be >= 0"})
             return
+          if not isinstance(task, dict):
+            self._reply_json(400, {"state": "not_submitted", "error": "request body must be a JSON object"})
+            return
           keep_open = bool(task.get("keep_open", False))
-          request_id = str(uuid.uuid4())
+          try:
+            request_id = worker_ref.request_tracker.validate_request_id(
+                task.get("request_id") or str(uuid.uuid4())
+            )
+          except RequestTrackerError as exc:
+            self._reply_json(400, {"state": "not_submitted", "error": str(exc)})
+            return
+          existing = worker_ref.request_tracker.get(request_id)
+          if existing.get("state") != "not_found":
+            self._reply_json(
+                409,
+                {
+                    "request_id": request_id,
+                    "state": "already_registered",
+                    "existing_state": existing.get("state"),
+                    "hint": "query GET /api/v1/requests/{request_id} instead of resubmitting",
+                },
+            )
+            return
 
           submit_payload = {
               "request_id": request_id,
@@ -1784,9 +1805,30 @@ class AntigravityIPCServer:
           if remote_timeout < 0:
             self._reply_json(400, {"state": "not_submitted", "error": "timeout must be >= 0"})
             return
+          if not isinstance(task, dict):
+            self._reply_json(400, {"state": "not_submitted", "error": "request body must be a JSON object"})
+            return
           task["timeout"] = remote_timeout
           is_async = bool(task.get("async", False))
-          request_id = str(uuid.uuid4())
+          try:
+            request_id = worker_ref.request_tracker.validate_request_id(
+                task.get("request_id") or str(uuid.uuid4())
+            )
+          except RequestTrackerError as exc:
+            self._reply_json(400, {"state": "not_submitted", "error": str(exc)})
+            return
+          existing = worker_ref.request_tracker.get(request_id)
+          if existing.get("state") != "not_found":
+            self._reply_json(
+                409,
+                {
+                    "request_id": request_id,
+                    "state": "already_registered",
+                    "existing_state": existing.get("state"),
+                    "hint": "query GET /api/v1/requests/{request_id} instead of resubmitting",
+                },
+            )
+            return
           task["request_id"] = request_id
           try:
             worker_ref.request_tracker.register(request_id, "shell.exec")
