@@ -9,9 +9,11 @@ on:
       - "runtime_session_protocol.py"
       - "airbridge_app.py"
       - "request_tracker.py"
+      - "request_broker.py"
       - "test/test_runtime_session_protocol.py"
       - "test/test_runtime_session_ab_simulation.py"
       - "test/test_request_tracker.py"
+      - "test/test_request_broker.py"
       - "test/test_request_api_http.py"
       - ".github/workflows/runtime-session-ci.yml"
   workflow_dispatch:
@@ -40,6 +42,12 @@ jobs:
           python --version
           python -m unittest discover -s test -p "test_runtime_session_protocol.py" -v
           python -m unittest discover -s test -p "test_request_tracker.py" -v
+
+      - name: Run durable request broker tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m unittest discover -s test -p "test_request_broker.py" -v
 
   ab-duplex-simulation:
     name: A/B duplex handshake simulation
