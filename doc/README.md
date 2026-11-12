@@ -9,6 +9,7 @@
 | [通用 Runtime Session 架构设计 v1.0](AirBridge_Runtime_Session_架构设计_v1.0.md) | Agent Skill、AirBridge Client、Session Broker、Process Supervisor、Runtime Adapter 的边界与生命周期 | 设计基线，待实现 |
 | [Runtime Session Protocol v1](AirBridge_Session_Protocol_v1.0.md) | Session / Request / Result 数据结构、ABFP 帧、HTTP API、幂等、超时和取消语义 | P1.2 握手与能力协商已实现；生命周期和 Request 阶段待实现 |
 | [Capture Tcl Bridge 实测基线](Capture_Tcl_Bridge_实测基线_v1.0.md) | Capture 17.2 自动加载、文件队列原型、Dbo/页面操作和 A→B→Capture→B→A 实测证据 | 原型实测通过，正式 Adapter 待实现 |
+| [GitHub Actions Runtime Session A/B 验收配置](GitHub_Actions_Runtime_Session_AB验收配置.md) | A/B 两台 Windows 主机的 self-hosted runner 标签、Workflow 步骤和验收状态解释 | Workflow 已建立；实机 runner 待注册 |
 
 ## 现有专业软件生命周期文档
 
