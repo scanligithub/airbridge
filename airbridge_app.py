@@ -1410,7 +1410,10 @@ class SerialWorker(threading.Thread):
     command = req.get("command") or req.get("cmd") or ""
     shell = req.get("shell", "powershell")
     cwd = req.get("cwd", "")
-    timeout = int(req.get("timeout", 60) or 60)
+    try:
+      timeout = int(req.get("timeout", 60) or 60)
+    except (TypeError, ValueError):
+      timeout = 60
     async_mode = bool(req.get("async", False))
     env = req.get("env") or {}
 
@@ -1531,7 +1534,14 @@ class AntigravityIPCServer:
           hint = task.get("hint") or task.get("script_name", "agent_auto.tcl")
           version = task.get("version", "auto")
           target_file = task.get("target_file", "")
-          timeout = int(task.get("timeout", 60))
+          try:
+            timeout = int(task.get("timeout", 60))
+          except (TypeError, ValueError):
+            self._reply_json(400, {"state": "not_submitted", "error": "timeout must be an integer"})
+            return
+          if timeout < 0:
+            self._reply_json(400, {"state": "not_submitted", "error": "timeout must be >= 0"})
+            return
           keep_open = bool(task.get("keep_open", False))
           request_id = str(uuid.uuid4())
 
@@ -1550,7 +1560,7 @@ class AntigravityIPCServer:
                 FrameType.EDA_TASK_SUBMIT,
                 json.dumps(submit_payload, ensure_ascii=False).encode("utf-8"),
             )
-          except (RequestTrackerError, Exception) as exc:
+          except Exception as exc:
             worker_ref.request_tracker.fail(request_id, str(exc))
             self._reply_json(503, {"request_id": request_id, "state": "not_submitted", "error": str(exc)})
             return
@@ -1605,8 +1615,16 @@ class AntigravityIPCServer:
             return
 
           is_async = bool(task.get("async", False))
+          try:
+            remote_timeout = int(task.get("timeout", 60) or 60)
+          except (TypeError, ValueError):
+            self._reply_json(400, {"request_id": request_id, "state": "not_submitted", "error": "timeout must be an integer"})
+            return
+          if remote_timeout < 0:
+            self._reply_json(400, {"request_id": request_id, "state": "not_submitted", "error": "timeout must be >= 0"})
+            return
           default_wait = 10000 if is_async else min(
-              max(int(task.get("timeout", 60)) + 10, 5) * 1000, 300000
+              max(remote_timeout + 10, 5) * 1000, 300000
           )
           try:
             wait_ms = int(task.get("wait_timeout_ms", default_wait))
