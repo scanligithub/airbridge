@@ -9,6 +9,7 @@ Cadence installation, or physical Windows host is required.
 """
 import json
 import threading
+import uuid
 import unittest
 from types import SimpleNamespace
 
