@@ -379,23 +379,7 @@ proc ::ABBridge::execute_request {{request_path}} {{
     set payload_sha256 ""
     if {{[dict exists $request payload_sha256]}} {{ set payload_sha256 [dict get $request payload_sha256] }}
 
-    set record [list \\
-        schema 1 \\
-        session_id $session_id \\
-        startup_nonce $startup_nonce \\
-        request_id $request_id \\
-        payload_sha256 $payload_sha256 \\
-        status $status \\
-        return_code $return_code \\
-        result $result \\
-        stdout $stdout \\
-        stderr $stderr \\
-        error_info $error_info \\
-        error_code $error_code \\
-        runtime_pid [pid] \\
-        tcl_version $::tcl_version \\
-        started_at_ms $started_ms \\
-        completed_at_ms $completed_ms]
+    set record [list schema 1 session_id $session_id startup_nonce $startup_nonce request_id $request_id payload_sha256 $payload_sha256 status $status return_code $return_code result $result stdout $stdout stderr $stderr error_info $error_info error_code $error_code runtime_pid [pid] tcl_version $::tcl_version started_at_ms $started_ms completed_at_ms $completed_ms]
     catch {{::ABBridge::write_record $result_path $record}}
     catch {{file delete -force $running_path}}
 }}
@@ -435,14 +419,7 @@ close $lock_fp
 if {{$lock_pid ne "[pid]"}} {{ return }}
 
 catch {{file delete -force {q_hook}}}
-::ABBridge::write_record $::ABBridge::ready_path [list \\
-    schema 1 \\
-    session_id $::ABBridge::session_id \\
-    startup_nonce $::ABBridge::startup_nonce \\
-    runtime_pid [pid] \\
-    tcl_version $::tcl_version \\
-    runtime_version {_tcl_quote(self.runtime_version)} \\
-    ready_at_ms [clock milliseconds]]
+::ABBridge::write_record $::ABBridge::ready_path [list schema 1 session_id $::ABBridge::session_id startup_nonce $::ABBridge::startup_nonce runtime_pid [pid] tcl_version $::tcl_version runtime_version {_tcl_quote(self.runtime_version)} ready_at_ms [clock milliseconds]]
 ::ABBridge::poll
 '''
 
