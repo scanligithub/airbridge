@@ -106,7 +106,7 @@ UNKNOWN 代表请求结果无法确认，不能按“脚本没执行”处理，
 
 本工具的单元测试由 GitHub Actions 覆盖，证明 HTTP 请求包装、报告解析、PID 一致性判定和错误路径可用。只有在真实主机 A / B 运行成功后，才可将 P1.8 Capture Session E2E 标记为实机 PASS。
 
-Run #90 通过后，测试 harness 本身的 CI PASS 仍不等同真实 Cadence Capture PASS。真实验收结果需记录：日期、主机 A / B 软件版本、Capture 版本、Tcl 版本、Capture PID、两条 request_id、Supervisor 对旧进程的处理结果及最终 JSON 报告。
+Run #91 通过后，测试 harness 本身的 CI PASS 仍不等同真实 Cadence Capture PASS。真实验收结果需记录：日期、主机 A / B 软件版本、Capture 版本、Tcl 版本、Capture PID、两条 request_id、Supervisor 对旧进程的处理结果及最终 JSON 报告。
 
 ## 8. Harness 软件 CI 记录
 
