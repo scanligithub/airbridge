@@ -2,7 +2,7 @@
 
 - 文档编号：AB-ARCH-SESSION-001
 - 版本：1.0
-- 状态：**目标架构设计基线；P1.2–P1.7 通用软件层已通过对应 GitHub Actions CI；P1.6 新版 Bridge 与 P1.7 Capture GUI 进程关闭的真实主机验收、P1.8 Skill E2E、P1.9 Allegro Adapter 待完成**
+- 状态：**目标架构设计基线；P1.2–P1.7 通用软件层已通过对应 GitHub Actions CI；P1.6 新版 Bridge 与 P1.7 Capture GUI 进程关闭的真实主机验收、P1.8 Skill E2E、P1.9 Allegro Adapter 生命周期扩展待完成（P1.9.1 Profile 隔离已实现）**
 - 日期：2026-11-12
 - 适用范围：AirBridge 主机 A / 主机 B；未来所有通过 Agent Skill 使用远端专业软件的场景
 
@@ -258,7 +258,7 @@ P1.4 后，B 端 RequestBroker 独立负责 Request 幂等、结果持久化和�
 - Capture 请求超时 / 进程退出返回 UNKNOWN，Broker 缓存 UNKNOWN，不自动重放可能已产生副作用的脚本；
 - P1.7 新增通用 ProcessSupervisor：枚举所有匹配进程（含手动启动），检查窗口和阻塞提示，验证 PID 对应的映像身份后仅发送 WM_CLOSE，并等待进程句柄实际退出；任何进程残留、扫描期间出现新实例、保存/确认提示或无法识别的窗口都会阻断启动；
 - Worker 的 Capture Tcl Session 启动路径已接入 Supervisor；健康的 Worker-owned Capture Session 仍直接复用，不会先关闭再启动；
-- Allegro ProcessSpec 已定义，但旧 Allegro SKILL 执行路径尚未切换到 Supervisor 管理，留给 P1.9；
+- Allegro ProcessSpec 已定义；P1.9.1 已将 Allegro SKILL 独立路由到专用 Adapter / Profile，但仍沿用已验证的 EDAExecutor 启动与关闭逻辑，尚未接入 ProcessSupervisor；
 - 本机 Registry 注册了 Capture Profile，但握手仍保持 profiles=[]；不能据此宣称主机 A 已确认主机 B 的 Capture Profile 可用。
 
 P1.6 软件 CI 已验证文件队列契约、READY 校验、结果解析、超时 UNKNOWN、Worker Profile 路由与重复请求去重；真实 Capture 17.2 / Tcl 8.6.0 的新版 Bridge 加载与实际 Dbo 命令仍需实机复验。P1.7 软件 CI 已验证 ProcessSupervisor 状态机、Windows 进程发现 / 映像路径 / 窗口枚举、WM_CLOSE 策略模拟、超时阻断和新进程竞态；但没有向真实 Capture.exe 发送 WM_CLOSE，也未测试真实保存提示。
@@ -275,7 +275,8 @@ P1.6 软件 CI 已验证文件队列契约、READY 校验、结果解析、超�
 | P1.6 | Capture Tcl Adapter 集成 | capAutoLoad READY、同 PID 连续请求、错误回传 |
 | P1.7 | 通用 Process Supervisor | 先关闭全部冲突实例，确认退出后再启动 |
 | P1.8 | Capture Skill 端到端验收 | 打开工程、页面操作、保存、Exit、进程退出 |
-| P1.9 | Allegro Adapter 验证 | 不影响既有 SKILL 工作流 |
+| P1.9.1 | Allegro SKILL Adapter / Profile 隔离 | 专用路由、类型校验、参数与结果兼容；不改变既有 SKILL 工作流 |
+| P1.9.2 | Allegro ProcessSupervisor / Session 生命周期评估 | 先明确手动实例边界、优雅关闭和 GUI 兼容性，再决定是否实施 |
 
 验收必须包含：同一 Session 多次请求、请求重复投递、A/B 断连恢复、错误回传、长任务等待超时、关闭过程中的保存提示、Broker 重启以及 Capture 非正常退出。
 
@@ -293,3 +294,8 @@ P1.6 软件 CI 已验证文件队列契约、READY 校验、结果解析、超�
 6. 新实例启动前，必须先优雅关闭所有匹配的旧进程并确认退出。
 7. Capture Bridge 通过 capAutoLoad 自动初始化；文件队列是当前已验证的 Adapter 原型。
 8. 本文为设计基线，代码实现和版本兼容仍需逐阶段验收。
+
+
+### P1.9.1 增量状态（2026-11-12）
+
+Allegro SKILL 已由独立 `AllegroSkillAdapter` / `allegro-skill-oneshot` Profile 接管路由。该适配器只做脚本类型验证和参数/结果适配，实际仍调用既有 EDAExecutor，未改变 Allegro 启动命令、SCR / SKILL 文件生成、BRD 路径 sidecar、交互式 `axlOpenDesign()`、`keep_open` 或独立关闭路径。ProcessSupervisor 对 Allegro 的集成暂缓，不会主动扫描或关闭用户手动启动的 Allegro。软件 CI 和 Host B Allegro 17.2 回归结果需以本阶段验收记录为准。

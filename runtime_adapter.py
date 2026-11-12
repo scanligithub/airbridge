@@ -282,6 +282,60 @@ class LegacyCadenceOneShotAdapter(RuntimeAdapter):
         }
 
 
+class AllegroSkillAdapter(RuntimeAdapter):
+    """Explicit Allegro SKILL adapter retaining the proven legacy execution path."""
+
+    adapter_id = "allegro-skill-legacy"
+    operations = ("execute",)
+    capabilities = ("skill.execute", "one-shot-process", "gui.keep-open", "board.open")
+
+    def __init__(self, engine_provider: Callable[[], Any]):
+        self._engine_provider = engine_provider
+
+    def execute(
+        self,
+        request: RuntimeExecutionRequest,
+        context: RuntimeExecutionContext,
+    ) -> Dict[str, Any]:
+        payload = request.payload
+        script = payload.get("script") or payload.get("script_content", "")
+        hint = payload.get("hint") or payload.get("script_name", "agent_auto.il")
+        if not isinstance(script, str) or not script.strip():
+            raise RuntimeAdapterError("Allegro SKILL script must be a non-empty string")
+        if not isinstance(hint, str) or not hint.strip():
+            raise RuntimeAdapterError("Allegro SKILL filename hint must be a non-empty string")
+
+        # Lazy import keeps generic adapter imports independent from EDA modules.
+        from eda_engine import EDALanguage, detect_script_type
+        if detect_script_type(script, hint) != EDALanguage.ALLEGRO_SKILL:
+            raise RuntimeAdapterError(
+                "allegro-skill-oneshot accepts Allegro SKILL scripts only"
+            )
+
+        engine = self._engine_provider()
+        if engine is None or not callable(getattr(engine, "execute_script", None)):
+            raise RuntimeAdapterError("Allegro execution engine is unavailable")
+        try:
+            timeout = int(payload.get("timeout", 60))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeAdapterError("Allegro timeout must be an integer") from exc
+
+        returncode, output = engine.execute_script(
+            script,
+            hint,
+            context.log,
+            timeout=timeout,
+            version=payload.get("version", "auto"),
+            target_file=payload.get("target_file", ""),
+            keep_open=bool(payload.get("keep_open", False)),
+        )
+        return {
+            "success": returncode == 0,
+            "returncode": returncode,
+            "output": output if isinstance(output, str) else str(output),
+        }
+
+
 class LegacyShellProcessAdapter(RuntimeAdapter):
     """Compatibility adapter around the existing per-request ShellEngine."""
 
@@ -318,15 +372,32 @@ class LegacyShellProcessAdapter(RuntimeAdapter):
         return result
 
 
+def select_eda_profile(
+    script: str,
+    filename_hint: str,
+    capture_session_enabled: bool = False,
+) -> str:
+    """Resolve a script to its explicit local EDA Runtime Profile."""
+    from eda_engine import EDALanguage, detect_script_type
+    language = detect_script_type(script, filename_hint)
+    if language == EDALanguage.ALLEGRO_SKILL:
+        return "allegro-skill-oneshot"
+    if language == EDALanguage.ORCAD_TCL and capture_session_enabled:
+        return "capture-tcl-session"
+    return "legacy-cadence-oneshot"
+
+
 def create_legacy_runtime_registry(
     eda_engine_provider: Callable[[], Any],
     shell_engine_provider: Callable[[], Any],
 ) -> RuntimeAdapterRegistry:
-    """Create the compatibility profiles used until dedicated adapters land."""
+    """Create the legacy-compatible Cadence and Shell profiles."""
     registry = RuntimeAdapterRegistry()
     cadence = LegacyCadenceOneShotAdapter(eda_engine_provider)
+    allegro = AllegroSkillAdapter(eda_engine_provider)
     shell = LegacyShellProcessAdapter(shell_engine_provider)
     registry.register_adapter(cadence)
+    registry.register_adapter(allegro)
     registry.register_adapter(shell)
 
     registry.register_profile(
@@ -337,6 +408,16 @@ def create_legacy_runtime_registry(
             operations=("execute",),
             capabilities=cadence.capabilities,
             execution_mode="one-shot-process",
+        )
+    )
+    registry.register_profile(
+        RuntimeProfile(
+            profile_id="allegro-skill-oneshot",
+            adapter_id=allegro.adapter_id,
+            display_name="Allegro SKILL one-shot compatibility",
+            operations=("execute",),
+            capabilities=allegro.capabilities,
+            execution_mode="one-shot-gui",
         )
     )
     registry.register_profile(

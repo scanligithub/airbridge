@@ -3,8 +3,8 @@
 - 文档编号：AB-RUNTIME-ADAPTER-001
 - 版本：1.0
 - 日期：2026-11-12
-- 对应阶段：P1.5–P1.7
-- 状态：**P1.5–P1.7 GitHub Actions 软件 CI PASS**（P1.5 Run #62：66 项；P1.6 Run #76：80 项；P1.7 Run #85：89 项）；真实串口、新版 Capture Bridge 与 Cadence GUI 进程关闭实机复验仍未完成
+- 对应阶段：P1.5–P1.9.1
+- 状态：**P1.5–P1.7 与 P1.9.1 GitHub Actions 软件 CI PASS**（P1.5 Run #62：66 项；P1.6 Run #76：80 项；P1.7 Run #85：89 项）；真实串口、新版 Capture Bridge 与 Cadence GUI 进程关闭实机复验仍未完成
 
 ## 1. 目标与边界
 
@@ -15,7 +15,7 @@ P1.5 建立 AirBridge 通用执行层与具体 Runtime Engine 之间的稳定边
 - RuntimeExecutionRequest / RuntimeExecutionContext 通用执行上下文；
 - RuntimeProfile 声明式配置对象；
 - RuntimeAdapterRegistry 注册、校验、解析 Profile 并执行请求；
-- 两个兼容适配器，包装当前 EDAExecutor 与 ShellEngine；
+- Cadence 兼容 Adapter、Allegro SKILL 专用 Adapter、Shell Adapter，分别包装当前 EDAExecutor 与 ShellEngine；
 - 在 SerialWorker 的现有执行路径中通过 Profile Registry 调用适配器，保持已有 ABFP 帧、HTTP 路由和 RequestBroker 幂等语义不变。
 
 本阶段不实现：
@@ -123,7 +123,8 @@ Profile 只声明可执行范围和能力；它不在本阶段保存 Cadence 安
 
 | profile_id | adapter_id | operation | execution_mode | 说明 |
 |---|---|---|---|---|
-| legacy-cadence-oneshot | legacy-cadence-eda | execute | one-shot-process | 用于 Allegro SKILL 等保留旧执行路径的 EDA 请求 |
+| allegro-skill-oneshot | allegro-skill-legacy | execute | one-shot-gui | 只接受 Allegro SKILL；保留既有 EDAExecutor 启动与 GUI 行为 |
+| legacy-cadence-oneshot | legacy-cadence-eda | execute | one-shot-process | 未匹配到专用 Profile 时的兼容 fallback |
 | capture-tcl-session | capture-tcl-session | execute | persistent-gui-session | Capture Tcl 专用 Adapter；复用一份 Capture PID / Tcl Interpreter，通过 capAutoLoad Bridge 串行执行请求 |
 | legacy-shell-process | legacy-shell-process | execute | process-per-request | 包装现有 ShellEngine；保留同步、异步启动与现有输出回调 |
 
@@ -135,7 +136,7 @@ Profile 只声明可执行范围和能力；它不在本阶段保存 Cadence 安
 
 ### EDA
 
-现有 EDA_TASK_SUBMIT → RequestBroker（eda.execute）→ RuntimeAdapterRegistry。Tcl 请求选择 `capture-tcl-session` → CaptureTclAdapter → CaptureTclBridgeSession → capAutoLoad Bridge；Allegro SKILL 请求选择 `legacy-cadence-oneshot` → LegacyCadenceOneShotAdapter → EDAExecutor。
+现有 EDA_TASK_SUBMIT → RequestBroker（eda.execute）→ RuntimeAdapterRegistry。Tcl 请求选择 `capture-tcl-session` → CaptureTclAdapter → CaptureTclBridgeSession → capAutoLoad Bridge；Allegro SKILL 请求选择 `allegro-skill-oneshot` → AllegroSkillAdapter → EDAExecutor；未匹配脚本保留 `legacy-cadence-oneshot` 兼容 fallback。
 
 Adapter 将旧执行器结果统一为：
 - success：returncode == 0；
@@ -192,3 +193,17 @@ P1.7 的通用实现见 [Process Supervisor 设计与验收 v1.0](Process_Superv
 
 P1.7 软件验收见 [GitHub Actions Run #85](https://github.com/scanligithub/airbridge/actions/runs/43149369815)：ProcessSupervisor 9 项、全套单元 68 项、A/B Worker 12 项、HTTP 集成 9 项，合计 89 项通过。Windows Runner 实际验证当前 Python 进程发现、映像路径查询和窗口枚举；所有多 Capture 关闭、阻塞对话框与超时场景均使用 FakeProcessBackend。**未对真实 Capture.exe 发送 WM_CLOSE，也未验证保存提示**，因此真实 Cadence GUI 生命周期仍需主机 B 实机验收。
 
+
+
+## 11. P1.9.1 Allegro SKILL Adapter / Profile 隔离
+
+新增 `AllegroSkillAdapter`（`allegro-skill-legacy`）和 `allegro-skill-oneshot` Profile。Worker 使用 `select_eda_profile()` 按 `detect_script_type()` 结果分流：
+- Allegro SKILL → `allegro-skill-oneshot`；
+- Capture Tcl 且 Capture Session Adapter 已注册 → `capture-tcl-session`；
+- 其他兼容请求 → `legacy-cadence-oneshot`。
+
+Allegro Adapter 在调用 EDAExecutor 前验证脚本确属 Allegro SKILL，避免 Tcl 请求误入 Allegro 执行路径。它把 timeout、version、target_file、keep_open 和日志回调原样交给现有 EDAExecutor，返回形状保持 `success / returncode / output`。因此本阶段不改变远程选择 BRD、SKILL 启动、`axlOpenDesign()` 自动开板、GUI 保持运行和独立关闭行为。
+
+**本阶段明确没有做：** 不把 Allegro 生命周期切换到 ProcessSupervisor；不增加 SKILL 常驻 Interpreter / 文件队列；不加入 SESSION_CREATE / CLOSE 或新 ABFP 帧；不自动关闭用户手动启动的 Allegro；不改变保存提示处理。以上需要单独设计和实机验收。
+
+软件测试覆盖专用 Profile 注册、SKILL 参数透传、日志回调、非零退出码、拒绝 Tcl 误路由，以及 Capture / Allegro / fallback 选择。软件 CI 通过不等同于本次新增路由已在 Host B Allegro 17.2 GUI 中实机回归。

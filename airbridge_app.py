@@ -53,6 +53,7 @@ from runtime_adapter import (
     RuntimeExecutionRequest,
     RuntimeProfile,
     create_legacy_runtime_registry,
+    select_eda_profile,
 )
 from shell_engine import shell_engine, ShellEngine
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
@@ -1581,12 +1582,13 @@ class SerialWorker(threading.Thread):
               "keep_open": keep_open,
           },
       )
-      profile_id = "legacy-cadence-oneshot"
-      if (
-          getattr(self, "capture_tcl_adapter_registered", False)
-          and detect_script_type(script, hint) == EDALanguage.ORCAD_TCL
-      ):
-        profile_id = "capture-tcl-session"
+      profile_id = select_eda_profile(
+          script,
+          hint,
+          capture_session_enabled=getattr(
+              self, "capture_tcl_adapter_registered", False
+          ),
+      )
       return self._ensure_runtime_registry().execute(
           profile_id,
           request,

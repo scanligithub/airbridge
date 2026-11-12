@@ -12,6 +12,7 @@ from runtime_adapter import (
     RuntimeExecutionRequest,
     RuntimeProfile,
     create_legacy_runtime_registry,
+    select_eda_profile,
 )
 
 
@@ -55,7 +56,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         profiles = self.registry.describe_profiles()
         self.assertEqual(
             [item["profile_id"] for item in profiles],
-            ["legacy-cadence-oneshot", "legacy-shell-process"],
+            ["allegro-skill-oneshot", "legacy-cadence-oneshot", "legacy-shell-process"],
         )
         self.assertEqual(
             profiles[0]["operations"],
@@ -99,6 +100,91 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertTrue(callable(args[2]))
         args[2]("adapter log")
         self.assertEqual(messages, ["adapter log"])
+
+    def test_allegro_skill_adapter_delegates_legacy_runtime_without_behavior_change(self):
+        messages = []
+        script = """procedure(AirBridgeTestSkill()
+    axlVersion('version)
+    printf("Allegro SKILL check")
+)
+AirBridgeTestSkill()
+"""
+        brd_path = r"E:\board\demo.brd"
+        request = RuntimeExecutionRequest(
+            operation="execute",
+            request_id=str(uuid.uuid4()),
+            payload={
+                "script": script,
+                "hint": "builtin_test.il",
+                "timeout": 23,
+                "version": "17.2",
+                "target_file": brd_path,
+                "keep_open": True,
+            },
+        )
+        result = self.registry.execute(
+            "allegro-skill-oneshot",
+            request,
+            RuntimeExecutionContext(log_callback=messages.append),
+        )
+        self.assertEqual(result, {
+            "success": True,
+            "returncode": 0,
+            "output": "eda output",
+        })
+        args, kwargs = self.eda_engine.calls[0]
+        self.assertEqual(args[0], script)
+        self.assertEqual(args[1], "builtin_test.il")
+        self.assertEqual(kwargs["timeout"], 23)
+        self.assertEqual(kwargs["version"], "17.2")
+        self.assertEqual(kwargs["target_file"], brd_path)
+        self.assertTrue(kwargs["keep_open"])
+        self.assertTrue(callable(args[2]))
+        args[2]("allegro log")
+        self.assertEqual(messages, ["allegro log"])
+
+    def test_allegro_adapter_rejects_tcl_before_engine_call(self):
+        with self.assertRaisesRegex(RuntimeAdapterError, "SKILL scripts only"):
+            self.registry.execute(
+                "allegro-skill-oneshot",
+                RuntimeExecutionRequest(
+                    operation="execute",
+                    payload={"script": "puts hello", "hint": "task.tcl"},
+                ),
+            )
+        self.assertEqual(self.eda_engine.calls, [])
+
+    def test_allegro_adapter_reports_nonzero_exit(self):
+        self.eda_engine = FakeEDAEngine(returncode=4, output="SKILL failed")
+        result = self.registry.execute(
+            "allegro-skill-oneshot",
+            RuntimeExecutionRequest(
+                operation="execute",
+                payload={
+                    "script": "procedure(ABTest() axlVersion('version))",
+                    "hint": "ABTest.il",
+                },
+            ),
+        )
+        self.assertFalse(result["success"])
+        self.assertEqual(result["returncode"], 4)
+        self.assertEqual(result["output"], "SKILL failed")
+
+    def test_eda_profile_selection_routes_capture_allegro_and_legacy(self):
+        skill = "procedure(ABTest() axlVersion('version))"
+        tcl = "puts hello"
+        self.assertEqual(
+            select_eda_profile(skill, "ABTest.il", capture_session_enabled=True),
+            "allegro-skill-oneshot",
+        )
+        self.assertEqual(
+            select_eda_profile(tcl, "probe.tcl", capture_session_enabled=True),
+            "capture-tcl-session",
+        )
+        self.assertEqual(
+            select_eda_profile(tcl, "probe.tcl", capture_session_enabled=False),
+            "legacy-cadence-oneshot",
+        )
 
     def test_legacy_cadence_nonzero_exit_is_structured_as_failure(self):
         self.eda_engine = FakeEDAEngine(returncode=3, output="script error")
