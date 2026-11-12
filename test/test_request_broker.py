@@ -201,7 +201,7 @@ class RequestBrokerTests(unittest.TestCase):
             self.assertEqual(result["disposition"], "cached")
             self.assertEqual(result["state"], "unknown")
             self.assertEqual(
-                result["result"]["error"]["code"], "BROKER_RESTART_RECOVERY"
+                result["result"]["error"]["code"], "BROKER_HEARTBEAT_TIMEOUT"
             )
             self.assertEqual(calls, [])
         finally:
