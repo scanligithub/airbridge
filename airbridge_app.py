@@ -1601,6 +1601,16 @@ class AntigravityIPCServer:
             self._reply_json(503, {"state": "not_submitted", "error": "serial link is disconnected"})
             return
 
+          try:
+            remote_timeout = int(task.get("timeout", 60) or 60)
+          except (TypeError, ValueError):
+            self._reply_json(400, {"state": "not_submitted", "error": "timeout must be an integer"})
+            return
+          if remote_timeout < 0:
+            self._reply_json(400, {"state": "not_submitted", "error": "timeout must be >= 0"})
+            return
+          task["timeout"] = remote_timeout
+          is_async = bool(task.get("async", False))
           request_id = str(uuid.uuid4())
           task["request_id"] = request_id
           try:
@@ -1614,15 +1624,6 @@ class AntigravityIPCServer:
             self._reply_json(503, {"request_id": request_id, "state": "not_submitted", "error": str(exc)})
             return
 
-          is_async = bool(task.get("async", False))
-          try:
-            remote_timeout = int(task.get("timeout", 60) or 60)
-          except (TypeError, ValueError):
-            self._reply_json(400, {"request_id": request_id, "state": "not_submitted", "error": "timeout must be an integer"})
-            return
-          if remote_timeout < 0:
-            self._reply_json(400, {"request_id": request_id, "state": "not_submitted", "error": "timeout must be >= 0"})
-            return
           default_wait = 10000 if is_async else min(
               max(remote_timeout + 10, 5) * 1000, 300000
           )
