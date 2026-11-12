@@ -112,10 +112,10 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertEqual(result_a["state"], "negotiated", result_a)
         self.assertEqual(result_b["state"], "negotiated", result_b)
         self.assertEqual(
-            result_a["peer_capabilities"]["features"], ["handshake", "request.correlation"]
+            result_a["peer_capabilities"]["features"], ["handshake", "request.correlation", "request.deduplication"]
         )
         self.assertEqual(
-            result_b["peer_capabilities"]["features"], ["handshake", "request.correlation"]
+            result_b["peer_capabilities"]["features"], ["handshake", "request.correlation", "request.deduplication"]
         )
 
         status_a = host_a.get_session_peer_status()
