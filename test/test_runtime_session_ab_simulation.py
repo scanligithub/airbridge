@@ -7,6 +7,7 @@ in-memory duplex link transports real ABFP frames through FrameParser and
 dispatches them to the production Runtime Session handlers. No COM port,
 Cadence installation, or physical Windows host is required.
 """
+import json
 import threading
 import unittest
 from types import SimpleNamespace
@@ -249,6 +250,75 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertEqual(result["state"], "completed")
         self.assertEqual(result["result"]["task_id"], "shell-test")
         self.assertEqual(result["result"]["stdout"], "hello")
+
+
+    def test_http_eda_request_id_round_trips_through_both_workers(self):
+        class FakeEDAExecutor:
+            def execute_script(self, *args, **kwargs):
+                return 0, "fake Capture Tcl output"
+
+        host_a = _new_worker()
+        host_b = _new_worker()
+        host_b.eda_executor = FakeEDAExecutor()
+        _connect_duplex(host_a, host_b)
+
+        request_id = str(uuid.uuid4())
+        host_a.request_tracker.register(request_id, "eda.execute")
+        payload = {
+            "request_id": request_id,
+            "script": "puts \"fake\"",
+            "hint": "ci.tcl",
+            "timeout": 10,
+        }
+        host_a.send_frame(
+            FrameType.EDA_TASK_SUBMIT,
+            json.dumps(payload).encode("utf-8"),
+        )
+
+        result = host_a.request_tracker.wait(request_id, timeout=1.0)
+        self.assertEqual(result["state"], "completed", result)
+        self.assertEqual(result["result"]["request_id"], request_id)
+        self.assertEqual(result["result"]["returncode"], 0)
+        self.assertEqual(
+            result["result"]["output"], "fake Capture Tcl output"
+        )
+
+    def test_http_shell_request_id_round_trips_through_both_workers(self):
+        class FakeShellEngine:
+            def exec(self, **kwargs):
+                return {
+                    "success": True,
+                    "task_id": "shell-ci",
+                    "exit_code": 0,
+                    "stdout": "hello from remote shell",
+                    "stderr": "",
+                }
+
+        host_a = _new_worker()
+        host_b = _new_worker()
+        host_b.shell_engine = FakeShellEngine()
+        _connect_duplex(host_a, host_b)
+
+        request_id = str(uuid.uuid4())
+        host_a.request_tracker.register(request_id, "shell.exec")
+        payload = {
+            "request_id": request_id,
+            "command": "Write-Output hello",
+            "shell": "powershell",
+            "timeout": 10,
+            "async": False,
+        }
+        host_a.send_frame(
+            FrameType.SHELL_EXEC,
+            json.dumps(payload).encode("utf-8"),
+        )
+
+        result = host_a.request_tracker.wait(request_id, timeout=1.0)
+        self.assertEqual(result["state"], "completed", result)
+        self.assertEqual(result["result"]["request_id"], request_id)
+        self.assertTrue(result["result"]["success"])
+        self.assertEqual(result["result"]["task_id"], "shell-ci")
+        self.assertEqual(result["result"]["stdout"], "hello from remote shell")
 
 
 if __name__ == "__main__":
