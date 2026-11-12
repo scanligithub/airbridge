@@ -21,6 +21,8 @@ from runtime_session_protocol import (
 )
 from request_tracker import RequestTracker
 from request_broker import RequestBroker
+from runtime_adapter import RuntimeProfile, create_legacy_runtime_registry
+from capture_tcl_bridge import CaptureTclAdapter
 
 
 class _FakeSerialPort:
@@ -460,6 +462,93 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertEqual(engine.calls, 1)
         self.assertEqual(responses[1]["task_id"], "shell-deduped")
         self.assertEqual(responses[1]["request_id"], request_id)
+
+    def test_correlated_eda_tcl_uses_capture_session_adapter_not_oneshot_engine(self):
+        class FakeLegacyEDAExecutor:
+            def __init__(self):
+                self.calls = 0
+
+            def execute_script(self, *args, **kwargs):
+                self.calls += 1
+                return 0, "legacy one-shot should not be called"
+
+        class FakeCaptureBridge:
+            session_id = str(uuid.uuid4())
+            target_file = ""
+
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, script, request_id, timeout_seconds):
+                self.calls.append((script, request_id, timeout_seconds))
+                return {
+                    "success": True,
+                    "request_state": "completed",
+                    "returncode": 0,
+                    "output": "persistent Capture result",
+                    "stdout": "Capture stdout",
+                    "stderr": "",
+                    "capture_pid": 7476,
+                    "tcl_version": "8.6.0",
+                    "session_id": self.session_id,
+                    "request_id": request_id,
+                    "payload_sha256": "a" * 64,
+                }
+
+        host_a = _new_worker()
+        host_b = _new_worker()
+        legacy_eda = FakeLegacyEDAExecutor()
+        capture_bridge = FakeCaptureBridge()
+        host_b.eda_executor = legacy_eda
+        host_b.runtime_registry = create_legacy_runtime_registry(
+            lambda: host_b.eda_executor,
+            lambda: host_b.shell_engine,
+        )
+        capture_adapter = CaptureTclAdapter(
+            lambda _payload, _context: capture_bridge
+        )
+        host_b.runtime_registry.register_adapter(capture_adapter)
+        host_b.runtime_registry.register_profile(
+            RuntimeProfile(
+                profile_id="capture-tcl-session",
+                adapter_id=capture_adapter.adapter_id,
+                display_name="Capture Tcl Session test",
+                operations=capture_adapter.operations,
+                capabilities=capture_adapter.capabilities,
+                execution_mode="persistent-gui-session",
+            )
+        )
+        host_b.capture_tcl_adapter_registered = True
+        _connect_duplex(host_a, host_b)
+
+        request_id = str(uuid.uuid4())
+        host_a.request_tracker.register(request_id, "eda.execute")
+        payload = {
+            "request_id": request_id,
+            "script": "puts [pid]",
+            "hint": "persistent.tcl",
+            "version": "17.2",
+            "target_file": "",
+            "timeout": 5,
+            "keep_open": True,
+        }
+        frame_payload = json.dumps(payload).encode("utf-8")
+        host_a.send_frame(FrameType.EDA_TASK_SUBMIT, frame_payload)
+        result = host_a.request_tracker.wait(request_id, timeout=2.0)
+
+        self.assertEqual(result["state"], "completed", result)
+        self.assertEqual(
+            result["result"]["output"],
+            "persistent Capture result",
+        )
+        self.assertEqual(result["result"]["capture_pid"], 7476)
+        self.assertEqual(len(capture_bridge.calls), 1)
+        self.assertEqual(legacy_eda.calls, 0)
+
+        host_a.send_frame(FrameType.EDA_TASK_SUBMIT, frame_payload)
+        cached = host_b.request_broker.get(request_id)
+        self.assertEqual(cached["state"], "completed")
+        self.assertEqual(len(capture_bridge.calls), 1)
 
     def test_http_eda_request_id_round_trips_through_both_workers(self):
         class FakeEDAExecutor:
