@@ -297,7 +297,7 @@ airbridge_tcl_bridge_test/
 
 ---
 
-**当前结论：** 用户此前已在真实 Capture 17.2 / Tcl 8.6.0 环境验证 capAutoLoad 自动初始化、after 轮询、同一 Tcl Interpreter 连续请求、跨请求变量/proc 保留、Dbo / 页面操作和原型结果回传。P1.6 正式 CaptureTclAdapter / Bridge 在 Run #76 完成 80 项软件 CI；P1.7 ProcessSupervisor 在 Run #85 完成 89 项软件 CI。**新版生成 Bridge 尚未在真实 Capture 17.2 中重新加载验收，ProcessSupervisor 也尚未向真实 Capture 发送 WM_CLOSE**；Session Create / Close 专用 ABFP 消息、每 Session FIFO Broker、真实保存提示处理和完整 Skill 生命周期仍待后续阶段。
+**当前结论：** 用户此前已在真实 Capture 17.2 / Tcl 8.6.0 环境验证 capAutoLoad 自动初始化、after 轮询、同一 Tcl Interpreter 连续请求、跨请求变量/proc 保留、Dbo / 页面操作和原型结果回传。P1.6 / P1.7 先后通过 Run #76（80 项）和 Run #85（89 项）；后续完整回归 Run #88（提交 309a13f）进一步将生成式 bridge.tcl source 到 Windows Runner 的标准 Tcl 8.6 解释器中，实际执行了一条文件队列请求并校验结果文件和 stdout，整套 CI 共 90 项通过。**但新版生成 Bridge 尚未在真实 Capture 17.2 中重新加载验收，ProcessSupervisor 也尚未向真实 Capture 发送 WM_CLOSE**；Capture 专有 Dbo / 页面 / 工程保存与退出、Session Create / Close 专用 ABFP 消息、每 Session FIFO Broker、真实保存提示处理和完整 Skill 生命周期仍待后续阶段。
 
 ## 8. P1.6 正式 Capture Tcl Adapter / Bridge 软件实现
 
@@ -329,4 +329,8 @@ GitHub Actions [Run #76](https://github.com/scanligithub/airbridge/actions/runs/
 - 合计 **80 项通过，两个 Job 均成功**。
 
 本轮 Capture Bridge 测试使用 Python 文件队列模拟器；A/B 测试使用内存 ABFP 双向链路和 Fake Capture Bridge。它们验证 Adapter、文件协议、状态、去重、结果映射和 Worker 路由，不执行真实 Cadence API，也不证明生成 Tcl 在 Capture 17.2 上实际运行。因此需要下一步在真实 B 主机进行 Capture 17.2 / Tcl 8.6.0 实机复验。
+
+补充回归 [GitHub Actions Run #88](https://github.com/scanligithub/airbridge/actions/runs/43150162732)，提交 `309a13f582b1d6aa1e58ad043f64fd002459dfe2)：新增 `test_generated_bridge_executes_in_standard_tcl_interpreter`，使用 Windows Runner 随 Python 3.12 安装的 Tcl 8.6 解释器直接 source 生成的 `bridge.tcl`，等待 after 轮询，执行 Tcl 脚本并验证 READY nonce / PID、返回值、stdout 和 result 文件。该回归将 Capture Bridge 单元测试增至 13 项；完整单元层 69 项、A/B Worker 模拟 12 项、HTTP 集成 9 项，合计 **90 项通过，两个 Job 均成功**。
+
+标准 Tcl 8.6 解释器测试证明生成 Tcl 的语法和基础文件队列执行闭环可运行；它不包含 Capture 专有命令 / Dbo API、Capture GUI 消息循环和真实工程对象。因此新版 Bridge 仍必须在真实 Capture 17.2 / Tcl 8.6.0 中加载与验证。
 
