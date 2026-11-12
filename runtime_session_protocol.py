@@ -15,7 +15,7 @@ from protocol import FrameType, MAX_PAYLOAD_LEN
 SCHEMA_VERSION = 1
 SESSION_PROTOCOL_ID = "runtime-session.v1"
 CLIENT_VERSION = "airbridge-v2.4"
-IMPLEMENTED_FEATURES = ("handshake",)
+IMPLEMENTED_FEATURES = ("handshake", "request.correlation")
 
 
 class SessionProtocolError(ValueError):
