@@ -100,7 +100,7 @@ class ProcessSupervisorTests(unittest.TestCase):
 
         self.assertEqual(report.state, "closed_existing")
         self.assertEqual({p.pid for p in report.discovered}, {101, 202})
-        self.assertEqual({process.pid for process, _ in backend.close_requests}, {101, 202})
+        self.assertEqual({pid for pid, _ in backend.close_requests}, {101, 202})
         self.assertEqual({pid for pid, _ in backend.wait_calls}, {101, 202})
         self.assertEqual(report.remaining, [])
         self.assertTrue(all(o.status == "exited" for o in report.outcomes))
@@ -141,7 +141,7 @@ class ProcessSupervisorTests(unittest.TestCase):
             supervisor.ensure_exclusive("capture", timeout_seconds=0.1)
 
         self.assertEqual(
-            [(process.pid, hwnds) for process, hwnds in backend.close_requests],
+            [(pid, hwnds) for pid, hwnds in backend.close_requests],
             [(404, (4001,))],
         )
         self.assertEqual(len(backend.wait_calls), 1)
