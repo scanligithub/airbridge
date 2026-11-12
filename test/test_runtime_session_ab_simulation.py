@@ -69,7 +69,10 @@ def _new_worker():
     worker.request_broker = RequestBroker(":memory:")
     worker.parser = FrameParser()
     worker.seq_counter = 0
-    worker.sig = SimpleNamespace(sig_rx_log=_SignalSink())
+    worker.sig = SimpleNamespace(
+        sig_rx_log=_SignalSink(),
+        sig_eda_log=_SignalSink(),
+    )
     return worker
 
 
