@@ -167,6 +167,67 @@ class CaptureTclBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(CaptureTclBridgeError, "PID mismatch"):
             self.session.wait_ready(timeout_seconds=0.2, expected_pid=7476)
 
+    def test_generated_bridge_executes_in_standard_tcl_interpreter(self):
+        try:
+            import tkinter
+            interpreter = tkinter.Tcl()
+        except Exception as exc:
+            self.skipTest(f"Python Tcl interpreter unavailable: {exc}")
+
+        try:
+            tcl_version = float(interpreter.eval("info tclversion"))
+        except Exception as exc:
+            self.skipTest(f"cannot query Tcl interpreter version: {exc}")
+        if tcl_version < 8.6:
+            self.skipTest(f"Tcl 8.6+ required, found {tcl_version}")
+
+        self.session.poll_interval_ms = 50
+        self.session.bridge_script_path.write_text(
+            self.session.render_tcl_bridge(),
+            encoding="utf-8",
+            newline="\\n",
+        )
+        interpreter.call("source", str(self.session.bridge_script_path))
+
+        ready = _decode_record(self.session.ready_path)
+        self.assertEqual(ready["session_id"], self.session.session_id)
+        self.assertEqual(ready["startup_nonce"], self.session.startup_nonce)
+        self.assertEqual(ready["runtime_pid"], str(interpreter.eval("pid")))
+
+        request_id = str(uuid.uuid4())
+        script = (
+            'set ::AirBridgeSyntaxSmoke "hello from Tcl 8.6"\\n'
+            'puts $::AirBridgeSyntaxSmoke\\n'
+            'set ::AirBridgeSyntaxSmoke'
+        )
+        script_bytes = script.encode("utf-8")
+        payload_hash = __import__("hashlib").sha256(script_bytes).hexdigest()
+        request = {
+            "schema": "1",
+            "session_id": self.session.session_id,
+            "startup_nonce": self.session.startup_nonce,
+            "request_id": request_id,
+            "payload_sha256": payload_hash,
+            "script_b64": base64.b64encode(script_bytes).decode("ascii"),
+        }
+        request_path = self.session.requests_dir / f"{request_id}.req"
+        request_path.write_text(_encode_record(request), encoding="ascii")
+
+        interpreter.eval(
+            "after 250 {set ::AirBridgeSyntaxSmokeDone 1}; "
+            "vwait ::AirBridgeSyntaxSmokeDone"
+        )
+
+        result_path = self.session.results_dir / f"{request_id}.result"
+        self.assertTrue(result_path.is_file(), "Tcl Bridge did not emit a result file")
+        result = self.session._read_result(request_id, payload_hash)
+        self.assertIsNotNone(result)
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["output"], "hello from Tcl 8.6")
+        self.assertIn("hello from Tcl 8.6", result["stdout"])
+        self.assertEqual(result["capture_pid"], int(interpreter.eval("pid")))
+        self.assertEqual(result["session_id"], self.session.session_id)
+
     def test_request_round_trip_uses_atomic_file_queue_and_returns_runtime_metadata(self):
         simulator = FakeBridgeSimulator(self.session)
         simulator.start()
