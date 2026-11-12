@@ -46,9 +46,13 @@ class FakeWorker:
                 "stdout": "fake HTTP shell result",
                 "stderr": "",
             }
+            response_state = "completed"
             if data.get("async"):
                 result.update({"status": "running", "async": True})
-            self.request_tracker.complete(request_id, result)
+                response_state = "accepted"
+            self.request_tracker.complete(
+                request_id, result, state=response_state
+            )
 
 
 class CorrelatedRequestHTTPTests(unittest.TestCase):
@@ -161,6 +165,13 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(status, 202, body)
         self.assertEqual(body["state"], "accepted")
         self.assertEqual(body["result"]["status"], "running")
+
+        poll_status, polled = self._request_json(
+            "GET", f"/api/v1/requests/{body['request_id']}"
+        )
+        self.assertEqual(poll_status, 202, polled)
+        self.assertEqual(polled["state"], "accepted")
+        self.assertEqual(polled["result"]["status"], "running")
 
     def test_disconnected_link_rejects_without_registering_request(self):
         self.worker.connected = False
