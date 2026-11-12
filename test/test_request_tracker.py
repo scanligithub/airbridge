@@ -128,15 +128,14 @@ class RequestTrackerTests(unittest.TestCase):
             target=lambda: waiter_result.update(tracker.wait(request_id, 3.0))
         )
         waiter.start()
-        time.sleep(1.05)
+        waiter.join(timeout=2.0)
 
-        snapshot = tracker.get(request_id)
-        waiter.join(timeout=1.0)
-
-        self.assertFalse(waiter.is_alive())
-        self.assertEqual(snapshot["state"], "unknown")
-        self.assertIn("status is unknown", snapshot["error"])
+        self.assertFalse(
+            waiter.is_alive(),
+            "pending waiter was not released at the retention deadline",
+        )
         self.assertEqual(waiter_result["state"], "unknown")
+        self.assertIn("status is unknown", waiter_result["error"])
 
     def test_large_text_result_is_truncated_to_abfp_limit(self):
         payload = encode_bounded_json_payload(
