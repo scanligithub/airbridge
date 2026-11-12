@@ -6,7 +6,7 @@
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
-| [通用 Runtime Session 架构设计 v1.0](AirBridge_Runtime_Session_架构设计_v1.0.md) | Agent Skill、AirBridge Client、Session Broker、Process Supervisor、Runtime Adapter 的边界与生命周期 | 设计基线，待实现 |
+| [通用 Runtime Session 架构设计 v1.0](AirBridge_Runtime_Session_架构设计_v1.0.md) | Agent Skill、AirBridge Client、Session Broker、Process Supervisor、Runtime Adapter 的边界与生命周期 | P1.2–P1.6 通用软件部分已分阶段实现并通过 CI；Session 生命周期 / Process Supervisor 待后续阶段 |
 | [Runtime Session Protocol v1](AirBridge_Session_Protocol_v1.0.md) | Session / Request / Result 数据结构、ABFP 帧、HTTP API、幂等、超时和取消语义 | P1.2–P1.6 已实现的软件部分通过 CI；Session Create / Close 专用协议与 FIFO Broker 待实现 |
 | [Runtime Adapter / Profile 接口设计 v1.0](Runtime_Adapter_Profile_v1.0.md) | 通用 Adapter 接口、Profile Registry、旧版 EDA / Shell 兼容适配器及执行边界 | P1.5 / P1.6 GitHub Actions 软件 CI PASS；真实 Capture Bridge 实机复验待完成 |
 | [Capture Tcl Bridge 实测基线](Capture_Tcl_Bridge_实测基线_v1.0.md) | Capture 17.2 实测原型证据、P1.6 正式 capAutoLoad Bridge / Adapter 的软件实现及验收边界 | P1.6 软件 CI PASS；新版生成 Bridge 仍待真实 Capture 17.2 复验 |
