@@ -28,7 +28,8 @@
 - seq_id：16 位传输帧序号；
 - 现有 EDA 消息：0x10 至 0x14；
 - 现有 RFS 消息：0x20、0x21；
-- 现有 Shell 消息：0x30 至 0x35。
+- 现有 Shell 消息：0x30 至 0x35；
+- P1.2 Runtime Session 握手：0x15、0x16。
 
 **ABFP seq_id 只用于传输帧，不得作为 Session ID 或 Request ID。** 业务关联 ID 必须使用独立 UUID 字符串。
 
@@ -64,9 +65,9 @@
 
 ## 4. Session 消息
 
-### 4.1 SESSION_HELLO（建议 FrameType 0x15）
+### 4.1 SESSION_HELLO（FrameType 0x15）
 
-A → B。交换协议能力和最低版本。
+任一端 → 对端。连接建立后，A/B 两端均可主动发送 HELLO；接收端必须返回 CAPABILITIES。
 
 Payload 示例：
 
@@ -88,9 +89,9 @@ Payload 示例：
 
 P1.2 已实现。收到 HELLO 的节点会返回 CAPABILITIES；两端在连接建立后也会各自发起一次自动协商，因此不依赖固定的发起端角色。重试在后台线程执行，不占用 HTTP 请求线程。自动重试绑定当前串口连接代次；断开 / 重连会使旧握手失效，防止旧线程在新链路上继续重试。
 
-### 4.2 SESSION_CAPABILITIES（建议 FrameType 0x16）
+### 4.2 SESSION_CAPABILITIES（FrameType 0x16）
 
-B → A。返回支持的协议、Runtime Adapter、Profiles 和限制。
+接收 HELLO 的一端 → 发起端。通过 correlation_id 引用原 HELLO 的 message_id，返回协议、功能、Profiles 和限制。
 
 ~~~json
 {
@@ -309,8 +310,8 @@ HTTP 客户端自身等待结束应返回 pending / wait timeout，而不是擅�
 
 | 建议值 | 名称 | 方向 |
 |---:|---|---|
-| 0x15 | SESSION_HELLO | 双向发起；请求能力协商（P1.2 已实现） |
-| 0x16 | SESSION_CAPABILITIES | 对 HELLO 响应（P1.2 已实现） |
+| 0x15 | SESSION_HELLO | 任一端 → 对端；请求能力协商（P1.2 已实现） |
+| 0x16 | SESSION_CAPABILITIES | 接收端 → 发起端；对 HELLO 响应（P1.2 已实现） |
 | 0x17 | SESSION_CREATE | A → B |
 | 0x18 | SESSION_EVENT | B → A |
 | 0x19 | SESSION_EXEC | A → B |
@@ -418,7 +419,7 @@ P1.2 已实现内容：
 
 | 阶段 | 验收 |
 |---|---|
-| Frame 协商 | 新旧版本明确识别 Session 能力 |
+| Frame 协商 | 新版双方协商成功；旧版 / 无响应只报告 `unconfirmed`，不误判为确定版本 |
 | Session Create | 旧 Capture 全部退出后创建新进程；READY 匹配 PID 与 nonce |
 | Request | 一个 Session 连续执行多条不同请求 |
 | Result | 完整结构化结果通过 ABFP 返回并关联原 request_id |
