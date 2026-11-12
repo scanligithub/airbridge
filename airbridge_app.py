@@ -13,7 +13,7 @@ import queue
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from eda_engine import CadenceVersionManager, EDAExecutor
 from fs_engine import FSEngine
@@ -703,7 +703,7 @@ class SerialWorker(threading.Thread):
   def send_frame(self, frame_type: int, payload: bytes = b""):
     self.seq_counter = (self.seq_counter + 1) & 0xFFFF
     frame = ABFPFrame(frame_type, self.seq_counter, payload)
-    # 高优先级控制帧（ACK/NACK/ABORT/HEARTBEAT）入高优队列，防止被大文件数据包队头阻塞
+    # 高优先级控制帧（ACK/NACK/ABORT/HEARTBEAT/Session 握手）入高优队列，防止被大文件数据包队头阻塞
     if frame_type in (
         FrameType.ACK,
         FrameType.NACK,
