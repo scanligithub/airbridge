@@ -365,7 +365,9 @@ tclscripts/capDB/capLibPropUtil.tcl
 
 ### DBO-V01：Start Page 下 GetActiveDesign 的实际返回
 
-**优先级：P0 / 下一条验证。**
+<badge>实机 PASS · 2026-11-12</badge>
+
+**优先级：P0 / 已完成。**
 
 前置条件：Capture 17.2 已启动，处于 Start Page，没有打开 DSN/OPJ；不传 target_file。
 
@@ -390,6 +392,34 @@ tclscripts/capDB/capLibPropUtil.tcl
 | Session 全局变量不存在或为空 | 说明 Start Page 初始化时机可能早于 Dbo Session 全局变量就绪，不能继续调用 |
 
 此项只有实际在 Capture 17.2 Start Page 状态下运行，才可以标记为实测。
+
+
+### DBO-V01 实机记录（2026-11-12）
+
+**结论：PASS。** Capture 17.2 启动后停留在 Start Page，未打开 DSN / OPJ；通过主机 A 的 AirBridge HTTP API 发起 Tcl 只读探测，未传 `target_file`。
+
+| 字段 | 实测值 | 结论 |
+|---|---|---|
+| Request ID | `03eaf572-db9d-40ec-a654-9044e0fe2bab` | 完整请求记录 |
+| Session ID | `52c6e80b-d4cf-47aa-9143-f5e36815c152` | Runtime Session |
+| Capture PID | `3776` | 与 Tcl `pid` 一致 |
+| Tcl 版本 | `8.6` | Capture Interpreter |
+| request state | `completed` | 请求完成 |
+| result.success | `true` | Adapter 执行成功 |
+| returncode | `0` | Tcl 执行无错误 |
+| duration_ms | `11` | Tcl 执行耗时 |
+| session_variable_exists | `1` | 当前 Session 全局变量存在 |
+| session_pointer_nonempty | `1` | Session 指针非空 |
+| session_wrapper_rc | `0` | `DboSession -this` 成功 |
+| active_design_method_registered | `1` | 相关 wrapper 命令已注册；仅作诊断信息 |
+| active_design_rc | `0` | `$lSession GetActiveDesign` 成功 |
+| active_design_value | `NULL` | 无活动 Design |
+| active_design_is_null | `1` | 与官方示例的 NULL 判断一致 |
+| stderr | 空 | 无错误输出 |
+
+**正式结论：** 在被测 Capture 17.2 / Tcl 8.6 环境中，Start Page 状态下 Dbo Session 已初始化且可正常绑定；调用 `GetActiveDesign` 不需要打开工程，正常返回 `NULL`，而不是抛出异常。此行为可作为 AirBridge 判断“Capture 已启动但当前没有活动 Design”的只读状态探针。
+
+本次没有打开工程、调用路径加载接口、修改对象、保存或关闭 Capture。该结果只证明本次 17.2 实测环境，不自动推广到其他 Capture/SPB 版本。
 
 ### DBO-V02：当前 Session 的 Open Design / Open Library 枚举
 
@@ -507,8 +537,8 @@ tclscripts/capDB/capLibPropUtil.tcl
 
 ## 9. 下一步执行顺序
 
-1. 先完成 DBO-V01：Start Page 下 GetActiveDesign 返回行为；
-2. 再完成 DBO-V02：枚举当前 Session 已打开的 Design / Library；
+1. DBO-V01：Start Page 下 GetActiveDesign 返回行为（**2026-11-12 实机 PASS**）；
+2. 当前进入 DBO-V02：验证 Start Page 下空 Design / Library 集合的迭代器创建、NULL 终止和资源释放；
 3. 在用户手动打开的测试工程中完成 DBO-V03：读取 Design 名称；
 4. 最后再决定是否开展 DBO-V04：读取 Part Instance Effective Properties。
 
