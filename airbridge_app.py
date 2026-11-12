@@ -1375,7 +1375,7 @@ class SerialWorker(threading.Thread):
       keep_open: bool = False,
       request_id: Optional[str] = None,
   ):
-    try:
+    def execute_script() -> Dict[str, Any]:
       ret, out = self.eda_executor.execute_script(
           script,
           hint,
@@ -1385,24 +1385,84 @@ class SerialWorker(threading.Thread):
           target_file=target_file,
           keep_open=keep_open,
       )
-    except Exception as exc:
-      ret, out = -1, str(exc)
+      return {
+          "returncode": ret,
+          "output": out if isinstance(out, str) else str(out),
+      }
 
-    response = {"returncode": ret}
     if request_id:
+      broker_payload = {
+          "script": script,
+          "hint": hint,
+          "version": version,
+          "target_file": target_file,
+          "timeout": timeout,
+          "keep_open": keep_open,
+      }
+      try:
+        outcome = self.request_broker.execute(
+            request_id,
+            "eda.execute",
+            broker_payload,
+            execute_script,
+        )
+      except Exception as exc:
+        outcome = {
+            "disposition": "unknown",
+            "state": "unknown",
+            "error": {
+                "code": "BROKER_STORAGE_ERROR",
+                "message": str(exc),
+            },
+        }
+
+      if outcome.get("disposition") == "in_progress":
+        # The original worker owns execution and will publish the single result.
+        return
+
+      if outcome.get("error"):
+        response = {
+            "returncode": -1,
+            "request_state": "failed",
+            "error": outcome["error"],
+        }
+      else:
+        response = dict(outcome.get("result") or {})
+        if outcome.get("state") == "unknown":
+          response["request_state"] = "unknown"
+          response.setdefault("returncode", -1)
+        elif outcome.get("state") == "failed":
+          response["request_state"] = "failed"
+          response.setdefault("returncode", -1)
+
       response["request_id"] = request_id
-      response["output"] = out if isinstance(out, str) else str(out)
       try:
         encoded = encode_bounded_json_payload(response, MAX_PAYLOAD_LEN)
       except RequestTrackerError as exc:
-        response["output"] = ""
-        response["output_truncated"] = True
-        response["error"] = str(exc)
-        encoded = encode_bounded_json_payload(response, MAX_PAYLOAD_LEN)
-    else:
-      # Preserve the legacy response shape for GUI-originated one-shot tasks.
-      encoded = json.dumps(response).encode("utf-8")
-    self.send_frame(FrameType.EDA_TASK_FIN, encoded)
+        fallback = {
+            "request_id": request_id,
+            "returncode": -1,
+            "request_state": "failed",
+            "error": {
+                "code": "RESULT_ENCODING_ERROR",
+                "message": str(exc),
+            },
+        }
+        encoded = encode_bounded_json_payload(fallback, MAX_PAYLOAD_LEN)
+      self.send_frame(FrameType.EDA_TASK_FIN, encoded)
+      return
+
+    # Legacy GUI-originated one-shot task: preserve the old response shape.
+    try:
+      result = execute_script()
+      response = {"returncode": result["returncode"]}
+    except Exception as exc:
+      response = {"returncode": -1}
+      log_fn(f"[AirBridge] EDA execution failed: {exc}")
+    self.send_frame(
+        FrameType.EDA_TASK_FIN,
+        json.dumps(response).encode("utf-8"),
+    )
 
 
 # ==============================================================================
