@@ -255,6 +255,180 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertEqual(result["result"]["stdout"], "hello")
 
 
+    def test_duplicate_eda_frame_replays_cached_result_without_reexecution(self):
+        class CountingEDAExecutor:
+            def __init__(self):
+                self.calls = 0
+                self.lock = threading.Lock()
+
+            def execute_script(self, *args, **kwargs):
+                with self.lock:
+                    self.calls += 1
+                return 0, "single side effect"
+
+        host_a = _new_worker()
+        host_b = _new_worker()
+        executor = CountingEDAExecutor()
+        host_b.eda_executor = executor
+        _connect_duplex(host_a, host_b)
+
+        responses = []
+        response_condition = threading.Condition()
+        send_to_a = host_b.send_frame
+
+        def capture_eda_result(frame_type, payload=b""):
+            if frame_type == FrameType.EDA_TASK_FIN:
+                with response_condition:
+                    responses.append(json.loads(payload.decode("utf-8")))
+                    response_condition.notify_all()
+            send_to_a(frame_type, payload)
+
+        host_b.send_frame = capture_eda_result
+        request_id = str(uuid.uuid4())
+        host_a.request_tracker.register(request_id, "eda.execute")
+        request_payload = {
+            "request_id": request_id,
+            "script": "puts side-effect",
+            "hint": "dedupe.tcl",
+            "version": "auto",
+            "target_file": "",
+            "timeout": 10,
+            "keep_open": True,
+        }
+        frame_payload = json.dumps(request_payload).encode("utf-8")
+
+        host_a.send_frame(FrameType.EDA_TASK_SUBMIT, frame_payload)
+        with response_condition:
+            self.assertTrue(
+                response_condition.wait_for(lambda: len(responses) >= 1, timeout=2.0)
+            )
+
+        host_a.send_frame(FrameType.EDA_TASK_SUBMIT, frame_payload)
+        with response_condition:
+            self.assertTrue(
+                response_condition.wait_for(lambda: len(responses) >= 2, timeout=2.0)
+            )
+
+        self.assertEqual(executor.calls, 1)
+        self.assertEqual(responses[0]["returncode"], 0)
+        self.assertEqual(responses[1]["output"], "single side effect")
+        self.assertEqual(responses[0]["request_id"], request_id)
+        self.assertEqual(responses[1]["request_id"], request_id)
+
+    def test_same_eda_request_id_with_changed_payload_returns_conflict(self):
+        class CountingEDAExecutor:
+            def __init__(self):
+                self.calls = 0
+
+            def execute_script(self, *args, **kwargs):
+                self.calls += 1
+                return 0, "first payload only"
+
+        host_a = _new_worker()
+        host_b = _new_worker()
+        executor = CountingEDAExecutor()
+        host_b.eda_executor = executor
+        _connect_duplex(host_a, host_b)
+
+        responses = []
+        condition = threading.Condition()
+        send_to_a = host_b.send_frame
+
+        def capture(frame_type, payload=b""):
+            if frame_type == FrameType.EDA_TASK_FIN:
+                with condition:
+                    responses.append(json.loads(payload.decode("utf-8")))
+                    condition.notify_all()
+            send_to_a(frame_type, payload)
+
+        host_b.send_frame = capture
+        request_id = str(uuid.uuid4())
+        host_a.request_tracker.register(request_id, "eda.execute")
+
+        first = {
+            "request_id": request_id,
+            "script": "puts one",
+            "hint": "same-id.tcl",
+            "version": "auto",
+            "target_file": "",
+            "timeout": 10,
+            "keep_open": True,
+        }
+        second = dict(first, script="puts different")
+        host_a.send_frame(
+            FrameType.EDA_TASK_SUBMIT, json.dumps(first).encode("utf-8")
+        )
+        with condition:
+            self.assertTrue(condition.wait_for(lambda: len(responses) >= 1, timeout=2.0))
+        host_a.send_frame(
+            FrameType.EDA_TASK_SUBMIT, json.dumps(second).encode("utf-8")
+        )
+        with condition:
+            self.assertTrue(condition.wait_for(lambda: len(responses) >= 2, timeout=2.0))
+
+        self.assertEqual(executor.calls, 1)
+        self.assertEqual(
+            responses[1]["error"]["code"], "REQUEST_ID_CONFLICT"
+        )
+        self.assertEqual(responses[1]["request_state"], "failed")
+
+    def test_duplicate_shell_frame_does_not_start_a_second_process(self):
+        class CountingShellEngine:
+            def __init__(self):
+                self.calls = 0
+
+            def exec(self, **kwargs):
+                self.calls += 1
+                return {
+                    "success": True,
+                    "task_id": "shell-deduped",
+                    "exit_code": 0,
+                    "stdout": "one launch",
+                    "stderr": "",
+                }
+
+        host_a = _new_worker()
+        host_b = _new_worker()
+        engine = CountingShellEngine()
+        host_b.shell_engine = engine
+        _connect_duplex(host_a, host_b)
+
+        responses = []
+        condition = threading.Condition()
+        send_to_a = host_b.send_frame
+
+        def capture(frame_type, payload=b""):
+            if frame_type == FrameType.SHELL_RESULT:
+                with condition:
+                    responses.append(json.loads(payload.decode("utf-8")))
+                    condition.notify_all()
+            send_to_a(frame_type, payload)
+
+        host_b.send_frame = capture
+        request_id = str(uuid.uuid4())
+        host_a.request_tracker.register(request_id, "shell.exec")
+        payload = {
+            "request_id": request_id,
+            "command": "echo one",
+            "shell": "cmd",
+            "cwd": "",
+            "timeout": 10,
+            "async": False,
+            "env": {},
+        }
+        frame_payload = json.dumps(payload).encode("utf-8")
+
+        host_a.send_frame(FrameType.SHELL_EXEC, frame_payload)
+        with condition:
+            self.assertTrue(condition.wait_for(lambda: len(responses) >= 1, timeout=2.0))
+        host_a.send_frame(FrameType.SHELL_EXEC, frame_payload)
+        with condition:
+            self.assertTrue(condition.wait_for(lambda: len(responses) >= 2, timeout=2.0))
+
+        self.assertEqual(engine.calls, 1)
+        self.assertEqual(responses[1]["task_id"], "shell-deduped")
+        self.assertEqual(responses[1]["request_id"], request_id)
+
     def test_http_eda_request_id_round_trips_through_both_workers(self):
         class FakeEDAExecutor:
             def execute_script(self, *args, **kwargs):
