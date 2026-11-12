@@ -1,0 +1,188 @@
+# request_tracker.py
+# -*- coding: utf-8 -*-
+"""Bounded, thread-safe correlation of HTTP requests and ABFP responses.
+
+This layer correlates one A-side HTTP request with one legacy ABFP response.
+It does not implement Runtime Session queues, idempotent execution, or
+exactly-once delivery; those belong to later Broker/Request phases.
+"""
+import copy
+import threading
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+
+class RequestTrackerError(ValueError):
+    """Invalid, duplicate, or capacity-limited request registration."""
+
+
+class RequestTracker:
+    DEFAULT_TTL_SECONDS = 900
+    DEFAULT_MAX_RECORDS = 500
+
+    def __init__(
+        self,
+        ttl_seconds: int = DEFAULT_TTL_SECONDS,
+        max_records: int = DEFAULT_MAX_RECORDS,
+    ):
+        self.ttl_seconds = max(1, int(ttl_seconds))
+        self.max_records = max(1, int(max_records))
+        self._lock = threading.RLock()
+        self._records: Dict[str, Dict[str, Any]] = {}
+
+    @staticmethod
+    def _utc_now() -> str:
+        return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
+            "+00:00", "Z"
+        )
+
+    @staticmethod
+    def validate_request_id(request_id: Any) -> str:
+        if not isinstance(request_id, str):
+            raise RequestTrackerError("request_id must be a UUID string")
+        try:
+            parsed = uuid.UUID(request_id)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise RequestTrackerError("request_id must be a valid UUID") from exc
+        return str(parsed)
+
+    def _prune_locked(self, now: float) -> None:
+        expired = [
+            request_id
+            for request_id, record in self._records.items()
+            if record["state"] != "pending"
+            and now - record["_created_monotonic"] >= self.ttl_seconds
+        ]
+        for request_id in expired:
+            self._records.pop(request_id, None)
+
+        overflow = len(self._records) - self.max_records + 1
+        if overflow > 0:
+            completed = sorted(
+                (
+                    (record["_created_monotonic"], request_id)
+                    for request_id, record in self._records.items()
+                    if record["state"] != "pending"
+                )
+            )
+            for _, request_id in completed[:overflow]:
+                self._records.pop(request_id, None)
+
+    def register(self, request_id: str, kind: str) -> Dict[str, Any]:
+        normalized = self.validate_request_id(request_id)
+        if not isinstance(kind, str) or not kind.strip():
+            raise RequestTrackerError("request kind must be a non-empty string")
+
+        now = time.monotonic()
+        with self._lock:
+            self._prune_locked(now)
+            if normalized in self._records:
+                raise RequestTrackerError(f"request_id already registered: {normalized}")
+            if len(self._records) >= self.max_records:
+                raise RequestTrackerError(
+                    "request tracker is full; all retained records are still pending"
+                )
+            self._records[normalized] = {
+                "request_id": normalized,
+                "kind": kind.strip(),
+                "state": "pending",
+                "created_at": self._utc_now(),
+                "_created_monotonic": now,
+                "event": threading.Event(),
+                "result": None,
+                "error": None,
+            }
+            return self._snapshot_locked(self._records[normalized])
+
+    def complete(self, request_id: str, result: Dict[str, Any]) -> bool:
+        try:
+            normalized = self.validate_request_id(request_id)
+        except RequestTrackerError:
+            return False
+        if not isinstance(result, dict):
+            result = {"value": result}
+
+        with self._lock:
+            record = self._records.get(normalized)
+            if record is None or record["state"] != "pending":
+                return False
+            record["state"] = "completed"
+            record["result"] = copy.deepcopy(result)
+            record["completed_at"] = self._utc_now()
+            record["event"].set()
+            return True
+
+    def fail(self, request_id: str, error: str, state: str = "failed") -> bool:
+        if state not in ("failed", "unknown"):
+            raise ValueError("state must be 'failed' or 'unknown'")
+        try:
+            normalized = self.validate_request_id(request_id)
+        except RequestTrackerError:
+            return False
+
+        with self._lock:
+            record = self._records.get(normalized)
+            if record is None or record["state"] != "pending":
+                return False
+            record["state"] = state
+            record["error"] = str(error)
+            record["completed_at"] = self._utc_now()
+            record["event"].set()
+            return True
+
+    def fail_all_pending(self, error: str) -> int:
+        count = 0
+        with self._lock:
+            for record in self._records.values():
+                if record["state"] == "pending":
+                    record["state"] = "unknown"
+                    record["error"] = str(error)
+                    record["completed_at"] = self._utc_now()
+                    record["event"].set()
+                    count += 1
+        return count
+
+    def wait(self, request_id: str, timeout: Optional[float]) -> Dict[str, Any]:
+        normalized = self.validate_request_id(request_id)
+        with self._lock:
+            record = self._records.get(normalized)
+            if record is None:
+                return {
+                    "request_id": normalized,
+                    "state": "not_found",
+                    "error": "request_id is unknown or expired",
+                }
+            event = record["event"]
+
+        event.wait(timeout=None if timeout is None else max(0.0, float(timeout)))
+        return self.get(normalized)
+
+    def get(self, request_id: str) -> Dict[str, Any]:
+        normalized = self.validate_request_id(request_id)
+        with self._lock:
+            record = self._records.get(normalized)
+            if record is None:
+                return {
+                    "request_id": normalized,
+                    "state": "not_found",
+                    "error": "request_id is unknown or expired",
+                }
+            return self._snapshot_locked(record)
+
+    @staticmethod
+    def _snapshot_locked(record: Dict[str, Any]) -> Dict[str, Any]:
+        snapshot = {
+            "request_id": record["request_id"],
+            "kind": record["kind"],
+            "state": record["state"],
+            "created_at": record["created_at"],
+        }
+        if record.get("completed_at"):
+            snapshot["completed_at"] = record["completed_at"]
+        if record.get("result") is not None:
+            snapshot["result"] = copy.deepcopy(record["result"])
+        if record.get("error"):
+            snapshot["error"] = record["error"]
+        return snapshot
