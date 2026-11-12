@@ -185,12 +185,17 @@ class RequestBrokerTests(unittest.TestCase):
         request_id = str(uuid.uuid4())
         started = threading.Event()
         release = threading.Event()
+        def execute_long():
+            started.set()
+            self.assertTrue(release.wait(timeout=2.0))
+            return {"returncode": 0}
+
         thread = threading.Thread(
             target=lambda: broker.execute(
                 request_id,
                 "eda.execute",
                 {"script": "long"},
-                lambda: started.set() and release.wait(2.0) and {"returncode": 0},
+                execute_long,
             )
         )
         thread.start()
