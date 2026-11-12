@@ -161,8 +161,51 @@ class WindowsProcessBackend(ProcessBackend):
             raise ProcessSupervisorError(
                 "WindowsProcessBackend is available only on Windows"
             )
+        from ctypes import wintypes
+
         self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self._user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+        self._kernel32.OpenProcess.argtypes = [
+            wintypes.DWORD, wintypes.BOOL, wintypes.DWORD
+        ]
+        self._kernel32.OpenProcess.restype = wintypes.HANDLE
+        self._kernel32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        self._kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        self._kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self._kernel32.CloseHandle.restype = wintypes.BOOL
+        self._kernel32.WaitForSingleObject.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD
+        ]
+        self._kernel32.WaitForSingleObject.restype = wintypes.DWORD
+
+        self._user32.EnumWindows.argtypes = [
+            ctypes.c_void_p, wintypes.LPARAM
+        ]
+        self._user32.EnumWindows.restype = wintypes.BOOL
+        self._user32.GetWindowThreadProcessId.argtypes = [
+            wintypes.HWND, ctypes.POINTER(wintypes.DWORD)
+        ]
+        self._user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        self._user32.GetWindowTextW.argtypes = [
+            wintypes.HWND, wintypes.LPWSTR, ctypes.c_int
+        ]
+        self._user32.GetWindowTextW.restype = ctypes.c_int
+        self._user32.GetClassNameW.argtypes = [
+            wintypes.HWND, wintypes.LPWSTR, ctypes.c_int
+        ]
+        self._user32.GetClassNameW.restype = ctypes.c_int
+        self._user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        self._user32.IsWindowVisible.restype = wintypes.BOOL
+        self._user32.PostMessageW.argtypes = [
+            wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
+        ]
+        self._user32.PostMessageW.restype = wintypes.BOOL
 
     def _query_executable_path(self, pid: int) -> str:
         process = self._kernel32.OpenProcess(0x1000, False, int(pid))
