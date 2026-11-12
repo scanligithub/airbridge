@@ -14,8 +14,8 @@ https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflow
 ### 第一层：协议、A 端跟踪器与 B 端 Broker 单元测试
 
 - 在 GitHub 托管 Windows 2025 虚拟机上运行；
-- 执行 `test/test_runtime_session_protocol.py`、`test/test_request_tracker.py` 和 `test/test_request_broker.py`；
-- 覆盖 JSON Envelope、UUID、schema、载荷上限、ABFP 帧编解码、A 端 waiter 状态 / TTL、B 端 SQLite 去重、相同 ID 不同 Payload 冲突、并发重复登记、Broker 重启恢复、心跳检测、容量限制和结果缓存裁剪。
+- 执行 `test/test_runtime_session_protocol.py`、`test/test_request_tracker.py`、`test/test_request_broker.py` 和 `test/test_runtime_adapter.py`；
+- 覆盖 JSON Envelope、UUID、schema、载荷上限、ABFP 帧编解码、A 端 waiter 状态 / TTL、B 端 SQLite 去重、相同 ID 不同 Payload 冲突、并发重复登记、Broker 重启恢复、心跳检测、容量限制和结果缓存裁剪；并验证 RuntimeAdapter / RuntimeProfile 注册、能力子集约束、只读 Request Payload、Profile 分派、禁用 / 未知 Profile 拒绝，以及 EDA / Shell 兼容适配器的参数与结果透传。
 
 ### 第二层：A/B 双端软件模拟
 
