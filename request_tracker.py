@@ -49,6 +49,21 @@ class RequestTracker:
         return str(parsed)
 
     def _prune_locked(self, now: float) -> None:
+        stale_pending = [
+            record
+            for record in self._records.values()
+            if record["state"] == "pending"
+            and now - record["_created_monotonic"] >= self.ttl_seconds
+        ]
+        for record in stale_pending:
+            record["state"] = "unknown"
+            record["error"] = (
+                "request result retention deadline elapsed; remote execution status is unknown"
+            )
+            record["completed_at"] = self._utc_now()
+            record["_created_monotonic"] = now
+            record["event"].set()
+
         expired = [
             request_id
             for request_id, record in self._records.items()
