@@ -168,7 +168,9 @@ class RequestTracker:
 
     def wait(self, request_id: str, timeout: Optional[float]) -> Dict[str, Any]:
         normalized = self.validate_request_id(request_id)
+        now = time.monotonic()
         with self._lock:
+            self._prune_locked(now)
             record = self._records.get(normalized)
             if record is None:
                 return {
@@ -177,8 +179,18 @@ class RequestTracker:
                     "error": "request_id is unknown or expired",
                 }
             event = record["event"]
+            ttl_remaining = max(
+                0.0,
+                self.ttl_seconds - (now - record["_created_monotonic"]),
+            )
+            requested_wait = (
+                ttl_remaining
+                if timeout is None
+                else max(0.0, float(timeout))
+            )
+            wait_seconds = min(requested_wait, ttl_remaining)
 
-        event.wait(timeout=None if timeout is None else max(0.0, float(timeout)))
+        event.wait(timeout=wait_seconds)
         return self.get(normalized)
 
     def get(self, request_id: str) -> Dict[str, Any]:
