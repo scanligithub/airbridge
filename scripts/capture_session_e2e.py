@@ -19,6 +19,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 REQUIRED_FEATURES = ("request.correlation", "request.deduplication")
 REQUIRED_CAPTURE_COMMANDS = ("GetActivePMDesign", "GetActivePage", "OPage")
+DEFAULT_STARTUP_GRACE_SECONDS = 120
 
 
 class E2EError(RuntimeError):
@@ -182,7 +183,12 @@ def submit_tcl_request(
     timeout_seconds: int,
 ) -> Dict[str, Any]:
     request_id = str(uuid.uuid4())
-    wait_timeout_ms = (timeout_seconds + 30) * 1000
+    # The first request can spend up to 60s closing old Capture processes
+    # and another 60s waiting for the fresh capAutoLoad Bridge READY signal.
+    # Keep that startup grace separate from the Tcl execution timeout.
+    wait_timeout_ms = (
+        timeout_seconds + DEFAULT_STARTUP_GRACE_SECONDS + 15
+    ) * 1000
     payload = {
         "request_id": request_id,
         "script": script,
@@ -198,12 +204,17 @@ def submit_tcl_request(
         "POST",
         url,
         payload,
-        timeout=timeout_seconds + 40,
+        timeout=timeout_seconds + DEFAULT_STARTUP_GRACE_SECONDS + 25,
     )
     if body.get("request_id") not in (None, request_id):
         raise E2EError("HTTP result request_id does not match submitted UUID")
 
-    deadline = time.monotonic() + timeout_seconds + 35
+    deadline = (
+        time.monotonic()
+        + timeout_seconds
+        + DEFAULT_STARTUP_GRACE_SECONDS
+        + 20
+    )
     result = wait_for_request(base_url, request_id, status, body, deadline)
     if result.get("state") != "completed":
         raise E2EError(
