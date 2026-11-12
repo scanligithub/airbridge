@@ -143,7 +143,7 @@ class RuntimeAdapterTests(unittest.TestCase):
             RuntimeExecutionRequest(operation="execute", payload={"script": "puts 1"}),
         )
         self.assertEqual(result["output"], "replacement engine")
-        self.assertEqual(replacement.calls.__len__(), 1)
+        self.assertEqual(len(replacement.calls), 1)
 
     def test_unknown_profile_and_unsupported_operation_are_rejected(self):
         request = RuntimeExecutionRequest(operation="execute", payload={})
@@ -203,6 +203,24 @@ class RuntimeAdapterTests(unittest.TestCase):
                 )
             )
 
+
+    def test_request_payload_is_a_read_only_snapshot(self):
+        source = {"value": 1}
+        request = RuntimeExecutionRequest(
+            operation="execute",
+            payload=source,
+        )
+        source["value"] = 2
+        self.assertEqual(request.payload["value"], 1)
+        with self.assertRaises(TypeError):
+            request.payload["value"] = 3
+
+    def test_registry_rejects_duplicate_adapter_capabilities(self):
+        adapter = _DuplicateCapabilityAdapter()
+        registry = RuntimeAdapterRegistry()
+        with self.assertRaises(RuntimeAdapterError):
+            registry.register_adapter(adapter)
+
     def test_request_requires_json_object_and_valid_uuid_when_present(self):
         with self.assertRaises(RuntimeAdapterError):
             RuntimeExecutionRequest(operation="execute", payload=[])
@@ -212,6 +230,15 @@ class RuntimeAdapterTests(unittest.TestCase):
                 payload={},
                 request_id="not-a-uuid",
             )
+
+
+class _DuplicateCapabilityAdapter(RuntimeAdapter):
+    adapter_id = "duplicate-capability-adapter"
+    operations = ("execute",)
+    capabilities = ("test.execute", "test.execute")
+
+    def execute(self, request, context):
+        return {"success": True}
 
 
 class _TestAdapter(RuntimeAdapter):
