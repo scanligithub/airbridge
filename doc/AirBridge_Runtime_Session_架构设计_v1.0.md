@@ -275,7 +275,7 @@ P1.6 将为 Capture 实现独立的 Tcl Adapter / Bridge；P1.7 再将进程冲�
 
 验收必须包含：同一 Session 多次请求、请求重复投递、A/B 断连恢复、错误回传、长任务等待超时、关闭过程中的保存提示、Broker 重启以及 Capture 非正常退出。
 
-**当前实现边界（2026-11-12）：** P1.2 能力协商、P1.3 A 端 HTTP / ABFP request_id 关联、P1.4 B 端 SQLite RequestBroker 去重 / 结果缓存，以及 P1.5 本机 RuntimeAdapter / RuntimeProfile 注册与执行分派已实现并通过相应阶段的软件 CI 验收。P1.5 的 legacy-cadence-oneshot 与 legacy-shell-process 只是旧 Engine 兼容适配器；当前对端 CAPABILITIES 仍返回 profiles=[]，不宣称远端 Capture / Allegro Adapter 已安装或可用。Session Create、每 Session FIFO、Capture 长驻 Tcl Bridge 和通用 Process Supervisor 尚未实现，分别留给 P1.6 / P1.7。
+**当前实现边界（2026-11-12）：** P1.2 能力协商、P1.3 A 端 HTTP / ABFP request_id 关联、P1.4 B 端 SQLite RequestBroker 去重 / 结果缓存已完成相应软件 CI 验收；P1.5 本机 RuntimeAdapter / RuntimeProfile 注册与执行分派已经实现，正在等待本轮 GitHub Actions 验收。P1.5 的 legacy-cadence-oneshot 与 legacy-shell-process 只是旧 Engine 兼容适配器；当前对端 CAPABILITIES 仍返回 profiles=[]，不宣称远端 Capture / Allegro Adapter 已安装或可用。Session Create、每 Session FIFO、Capture 长驻 Tcl Bridge 和通用 Process Supervisor 尚未实现，分别留给 P1.6 / P1.7。
 
 ---
 
