@@ -294,7 +294,7 @@ class WindowsProcessBackend(ProcessBackend):
             return True
 
         callback_ref = callback_type(callback)
-        if not self._user32.EnumWindows(callback_ref, 0):
+        if not self._user32.EnumWindows(ctypes.cast(callback_ref, ctypes.c_void_p), 0):
             error_code = ctypes.get_last_error()
             if error_code:
                 raise ProcessSupervisorError(
