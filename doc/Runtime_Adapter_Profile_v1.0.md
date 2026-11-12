@@ -4,7 +4,7 @@
 - 版本：1.0
 - 日期：2026-11-12
 - 对应阶段：P1.5
-- 状态：接口与兼容适配器已实现，待 GitHub Actions 验收
+- 状态：**P1.5 GitHub Actions 软件 CI PASS**（Run #62 / commit 322904a / 66 项测试通过）；真实串口、Capture 及 Allegro 实机验收仍未完成
 
 ## 1. 目标与边界
 
