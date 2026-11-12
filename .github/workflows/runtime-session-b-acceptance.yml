@@ -1,0 +1,94 @@
+name: Runtime Session B-host acceptance
+
+on:
+  push:
+    branches:
+      - feature/runtime-session-p1-2
+    paths:
+      - "protocol.py"
+      - "runtime_session_protocol.py"
+      - "airbridge_app.py"
+      - "test/test_runtime_session_protocol.py"
+      - ".github/workflows/runtime-session-b-acceptance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-session-b-acceptance
+  cancel-in-progress: false
+
+jobs:
+  host-b:
+    name: Host B - protocol and live handshake
+    runs-on: [self-hosted, windows, x64, airbridge-b]
+    timeout-minutes: 5
+    steps:
+      - name: Checkout tested revision
+        uses: actions/checkout@v4
+
+      - name: Run Runtime Session protocol unit tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python --version
+          python -m unittest discover -s test -p "test_runtime_session_protocol.py" -v
+
+      - name: Verify local AirBridge endpoint and negotiate with Host A
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $base = "http://127.0.0.1:8888/api/v1/runtime"
+          $deadline = (Get-Date).AddSeconds(30)
+          $available = $false
+
+          while ((Get-Date) -lt $deadline) {
+            try {
+              $null = Invoke-RestMethod -Uri "$base/capabilities" -Method Get -TimeoutSec 3
+              $available = $true
+              break
+            } catch {
+              Start-Sleep -Seconds 2
+            }
+          }
+
+          if (-not $available) {
+            throw "Host B cannot reach its local AirBridge API on 127.0.0.1:8888. Start AirBridge and connect the A/B serial link first."
+          }
+
+          $request = Invoke-RestMethod -Uri "$base/negotiate" -Method Post -ContentType "application/json" -Body "{}" -TimeoutSec 5
+          if (-not $request.success -or [string]::IsNullOrWhiteSpace($request.message_id)) {
+            throw "Host B failed to submit the Runtime Session handshake request: $($request | ConvertTo-Json -Depth 8 -Compress)"
+          }
+
+          $deadline = (Get-Date).AddSeconds(20)
+          $status = $null
+          do {
+            $status = Invoke-RestMethod -Uri "$base/capabilities" -Method Get -TimeoutSec 5
+            if ($status.state -eq "negotiated") { break }
+            if ($status.state -eq "no_common_protocol" -or $status.state -eq "handshake_not_supported") {
+              throw "Host B reports an incompatible peer: $($status | ConvertTo-Json -Depth 8 -Compress)"
+            }
+            Start-Sleep -Seconds 1
+          } while ((Get-Date) -lt $deadline)
+
+          if ($status.state -ne "negotiated" -or -not $status.negotiated) {
+            throw "Host B did not confirm a Runtime Session handshake with Host A: $($status | ConvertTo-Json -Depth 8 -Compress)"
+          }
+          if ($status.features -notcontains "handshake") {
+            throw "Host B peer did not advertise the required handshake feature."
+          }
+          if ($status.can_create_session -ne $false) {
+            throw "Unexpected capability advertisement: P1.2 must not advertise Session creation."
+          }
+
+          $summary = @"
+          ### Host B Runtime Session acceptance: PASS
+
+          - Protocol: $($status.protocol)
+          - Peer version: $($status.peer_version)
+          - Peer features: $($status.features -join ", ")
+          - Session creation advertised: $($status.can_create_session)
+          "@
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
