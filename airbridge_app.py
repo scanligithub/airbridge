@@ -34,6 +34,7 @@ from request_tracker import (
     RequestTrackerError,
     encode_bounded_json_payload,
 )
+from request_broker import RequestBroker, RequestBrokerError
 from shell_engine import shell_engine, ShellEngine
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
@@ -463,9 +464,13 @@ class SerialWorker(threading.Thread):
     self.fs_pending_lock = threading.Lock()
     self.fs_pending_requests: Dict[int, Dict[str, Any]] = {}
 
-    # A-side HTTP <-> ABFP correlation. This is request/result matching only;
-    # Broker queues, idempotent execution, and Session lifecycle are later phases.
+    # A-side HTTP <-> ABFP waiter correlation.
     self.request_tracker = RequestTracker()
+
+    # B-side durable request admission / deduplication. This is a generic
+    # Broker ledger; execution remains delegated to the current legacy engines
+    # until Runtime Adapter registration is introduced in P1.5.
+    self.request_broker = RequestBroker()
 
     # Runtime Session protocol negotiation state. This is transport-level
     # capability discovery only; it does not create or manage Runtime Sessions.
