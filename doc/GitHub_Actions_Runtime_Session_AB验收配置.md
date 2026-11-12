@@ -33,7 +33,7 @@ https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflow
 ## 触发方式
 
 - Push 到 `feature/runtime-session-p1-2` 且修改协议实现、握手实现、相关测试或该 Workflow 时自动运行；
-- 保留 `workflow_dispatch` 手动触发入口；
+- 配置了 `workflow_dispatch` 手动触发入口；分支上的代码变更由 `push` 路径过滤器自动触发；
 - 不需要注册 Runner、不需要配置仓库 Secrets，也不需要用户提供 Windows 机器。
 
 ## 验收结果的边界
@@ -54,7 +54,7 @@ CI PASS **不代表**以下内容已经实测：
 - **Protocol unit tests PASS**：协议 Envelope 与 ABFP 帧契约通过；
 - **A/B simulation PASS**：两个生产 SerialWorker 状态机在模拟链路上完成双向握手，关联及重置行为符合预期；
 - **CI FAIL**：查看对应 Job 日志，按失败测试定位；
-- 不再存在等待 `airbridge-a` / `airbridge-b` 自托管 Runner 的 queued 状态。
+- 新工作流不再依赖 `airbridge-a` / `airbridge-b` 自托管 Runner；此前旧工作流创建的 queued 运行记录可能仍留在 Actions 历史中，不属于新的云端 CI。
 
 ## 安全边界
 
