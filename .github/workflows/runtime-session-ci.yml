@@ -10,15 +10,12 @@ on:
       - "airbridge_app.py"
       - "test/test_runtime_session_protocol.py"
       - "test/test_runtime_session_ab_simulation.py"
+      - "test/test_request_api_http.py"
       - ".github/workflows/runtime-session-ci.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: runtime-session-ci
-  cancel-in-progress: false
 
 jobs:
   protocol-unit:
@@ -69,3 +66,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python -m unittest discover -s test -p "test_runtime_session_ab_simulation.py" -v
+
+      - name: Run correlated HTTP API integration tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m unittest discover -s test -p "test_request_api_http.py" -v
