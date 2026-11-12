@@ -47,8 +47,8 @@ class FakeProcessBackend:
     def list_windows(self, pid):
         return list(self.windows.get(pid, []))
 
-    def request_close(self, pid, windows):
-        self.close_requests.append((pid, tuple(w.hwnd for w in windows)))
+    def request_close(self, process, windows):
+        self.close_requests.append((process.pid, tuple(w.hwnd for w in windows)))
         return len(windows), []
 
     def wait_for_exit(self, pid, timeout_seconds):
