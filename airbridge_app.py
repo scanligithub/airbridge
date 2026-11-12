@@ -1464,6 +1464,10 @@ class AntigravityIPCServer:
   def __init__(self, worker: SerialWorker, port: int = 8888):
     self.worker = worker
     self.port = port
+    self._server = None
+    self._server_thread = None
+    self._server_ready = threading.Event()
+    self._server_error = None
 
   def start(self):
     worker_ref = self.worker
@@ -1692,13 +1696,31 @@ class AntigravityIPCServer:
 
     def serve():
       try:
-        s = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
-        s.daemon_threads = True
-        s.serve_forever()
-      except Exception:
-        pass
+        server = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
+        server.daemon_threads = True
+        self._server = server
+        self.port = server.server_address[1]
+        self._server_ready.set()
+        server.serve_forever()
+      except Exception as exc:
+        self._server_error = exc
+        self._server_ready.set()
 
-    threading.Thread(target=serve, daemon=True).start()
+    self._server_thread = threading.Thread(
+        target=serve, name="AirBridgeHTTPServer", daemon=True
+    )
+    self._server_thread.start()
+    if not self._server_ready.wait(timeout=5.0):
+      raise RuntimeError("AirBridge HTTP server did not finish starting")
+    if self._server_error is not None:
+      raise RuntimeError(f"AirBridge HTTP server failed to start: {self._server_error}")
+
+  def stop(self):
+    server = self._server
+    if server is not None:
+      server.shutdown()
+      server.server_close()
+      self._server = None
 
 
 # ==============================================================================
