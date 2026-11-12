@@ -11,11 +11,11 @@ https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflow
 
 工作流：`.github/workflows/runtime-session-ci.yml`
 
-### 第一层：协议与请求跟踪器单元测试
+### 第一层：协议、A 端跟踪器与 B 端 Broker 单元测试
 
 - 在 GitHub 托管 Windows 2025 虚拟机上运行；
-- 执行 `test/test_runtime_session_protocol.py` 和 `test/test_request_tracker.py`；
-- 覆盖 JSON Envelope、UUID、schema、载荷上限、ABFP 帧编解码、请求注册 / 完成 / 接受 / 失败 / unknown、重复 ID、容量限制、TTL 回收和大结果裁剪。
+- 执行 `test/test_runtime_session_protocol.py`、`test/test_request_tracker.py` 和 `test/test_request_broker.py`；
+- 覆盖 JSON Envelope、UUID、schema、载荷上限、ABFP 帧编解码、A 端 waiter 状态 / TTL、B 端 SQLite 去重、相同 ID 不同 Payload 冲突、并发重复登记、Broker 重启恢复、心跳检测、容量限制和结果缓存裁剪。
 
 ### 第二层：A/B 双端软件模拟
 
@@ -24,10 +24,11 @@ https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflow
 - 创建两个真实的 `SerialWorker` 对象，但不启动 GUI、线程或真实串口；
 - 通过内存双向链路传输 `ABFPFrame.pack()` 产生的二进制帧，并由对端 `FrameParser.feed()` 解析，再调用生产代码的帧处理方法；
 - 对 A、B 两端分别发起 HELLO，验证双向 CAPABILITIES 响应及 correlation_id 关联；
-- 验证双方协商 `handshake` 与 `request.correlation`，且 `profiles=[]`、`can_create_session=false`；
+- 验证双方协商 `handshake`、`request.correlation` 与 `request.deduplication`，且 `profiles=[]`、`can_create_session=false`；
 - 验证无关 correlation_id 的 CAPABILITIES 被忽略，链路重置会结束旧 waiter；
 - 通过真实 ABFP 内存双向链路，将 EDA_TASK_SUBMIT / EDA_TASK_FIN 与 SHELL_EXEC / SHELL_RESULT 在两端 Worker 之间往返，验证 UUID request_id 被原样关联；
-- 通过真实本地 HTTP Server 端口测试 EDA / Shell POST、pending 轮询、异步 Shell accepted、旧对端能力不足和串口断开时拒绝提交；
+- 重放相同 EDA / Shell 帧，验证 B 端执行函数只被调用一次且返回缓存结果；相同 ID、不同 Payload 返回 `REQUEST_ID_CONFLICT`；
+- 通过真实本地 HTTP Server 端口测试 EDA / Shell POST、pending 轮询、异步 Shell accepted、调用方指定 request_id、重复 POST 返回 409、缺少去重能力及串口断开时拒绝提交；
 - 验证无效 Shell timeout 在发送任何 ABFP 帧之前被拒绝。
 
 这层不是另写一套替代协议的模拟器；它驱动 `SerialWorker` 中的生产握手 / 响应处理方法，并启动实际 `AntigravityIPCServer` 进行 HTTP 测试。ABFP 帧仍经过真实打包和流式解析。
@@ -40,14 +41,14 @@ https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflow
 
 ## 验收结果的边界
 
-CI PASS 代表：协议和 RequestTracker 单元测试通过；生产 `SerialWorker` 的双端握手 / EDA / Shell 结果关联通过内存 ABFP 链路模拟；A 端本地 HTTP EDA / Shell 请求接口通过集成测试。
+CI PASS 代表：协议、A 端 RequestTracker 和 B 端 SQLite RequestBroker 单元测试通过；生产 `SerialWorker` 的双端握手 / EDA / Shell 请求关联与重复帧去重通过内存 ABFP 链路模拟；A 端本地 HTTP EDA / Shell 请求接口通过集成测试。
 
 CI PASS **不代表**以下内容已经实测：
 
 - 两台独立 Windows 主机之间的真实 COM/USB/串口物理通信；
 - 串口驱动、波特率、电气链路、硬件丢包和真实链路重连；
 - Capture / Allegro 已安装、已启动或能够执行 Tcl / SKILL；
-- 真实远端 Cadence / Shell 进程执行；B 端 Session Broker、请求去重 / 幂等、Session Create、Capture Tcl Bridge、进程监督或优雅关闭。
+- 真实远端 Cadence / Shell 进程执行；Session Create、Runtime Adapter / Profile、Capture Tcl Bridge、Process Supervisor、Session FIFO 队列或专业软件优雅关闭。
 
 由于当前没有可供本项目使用的 Windows 实体机，真实物理链路验收暂不纳入自动 CI；不得把软件模拟 PASS 写成物理 A/B 实测 PASS。后续如果获得实际硬件环境，可另行增加可选的硬件在环验收，而不影响云端 CI。
 
