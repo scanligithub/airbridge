@@ -332,7 +332,9 @@ class RequestBroker:
             raw_result = executor()
             bounded_result = self._bounded_result(raw_result)
             terminal_state = (
-                "accepted"
+                "unknown"
+                if bounded_result.get("request_state") == "unknown"
+                else "accepted"
                 if bounded_result.get("status") == "running"
                 and bounded_result.get("async") is True
                 else "failed"
