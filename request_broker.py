@@ -34,10 +34,14 @@ class RequestBroker:
         db_path: Optional[str] = None,
         ttl_seconds: int = DEFAULT_TTL_SECONDS,
         max_records: int = DEFAULT_MAX_RECORDS,
+        running_stale_seconds: float = 120.0,
+        heartbeat_interval_seconds: float = 30.0,
     ):
         self.db_path = str(db_path or self.default_db_path())
         self.ttl_seconds = max(1, int(ttl_seconds))
         self.max_records = max(1, int(max_records))
+        self.running_stale_seconds = max(0.1, float(running_stale_seconds))
+        self.heartbeat_interval_seconds = max(0.05, float(heartbeat_interval_seconds))
         self._lock = threading.RLock()
         self._closed = False
 
@@ -56,7 +60,7 @@ class RequestBroker:
             self._conn.execute("PRAGMA journal_mode = WAL")
             self._conn.execute("PRAGMA synchronous = FULL")
         self._initialize_schema()
-        self._recover_interrupted_requests()
+        self._recover_stale_requests()
 
     @staticmethod
     def default_db_path() -> str:
@@ -126,21 +130,23 @@ class RequestBroker:
                 "ON broker_requests(state, updated_at)"
             )
 
-    def _recover_interrupted_requests(self) -> int:
-        """Mark persisted RUNNING work as UNKNOWN on broker process startup.
+    def _recover_stale_requests(self, now: Optional[float] = None) -> int:
+        """Convert RUNNING records without a recent broker heartbeat to UNKNOWN.
 
-        The request may or may not have reached the external runtime before a
-        crash. UNKNOWN is deliberately non-retryable with the same ID: the
-        broker must not risk executing a side-effecting request a second time.
+        A second AirBridge process must not mark a live request as interrupted.
+        The executing broker refreshes updated_at periodically. Only a record
+        that has missed the heartbeat deadline is considered indeterminate.
+        UNKNOWN is non-retryable with the same ID, avoiding duplicate side effects.
         """
-        now = time.time()
+        now = time.time() if now is None else float(now)
+        cutoff = now - self.running_stale_seconds
         result = {
             "request_state": "unknown",
             "error": {
-                "code": "BROKER_RESTART_RECOVERY",
+                "code": "BROKER_HEARTBEAT_TIMEOUT",
                 "message": (
-                    "Broker restarted while this request was running; "
-                    "remote execution outcome cannot be confirmed"
+                    "No broker heartbeat was received before the stale-request "
+                    "deadline; remote execution outcome cannot be confirmed"
                 ),
             },
         }
@@ -152,9 +158,9 @@ class RequestBroker:
                     """
                     UPDATE broker_requests
                     SET state = 'unknown', result_json = ?, error = ?, updated_at = ?
-                    WHERE state = 'running'
+                    WHERE state = 'running' AND updated_at <= ?
                     """,
-                    (encoded, result["error"]["message"], now),
+                    (encoded, result["error"]["message"], now, cutoff),
                 )
                 count = cursor.rowcount
                 self._conn.execute("COMMIT")
@@ -163,7 +169,24 @@ class RequestBroker:
                 self._conn.execute("ROLLBACK")
                 raise
 
+    def _heartbeat_request(
+        self, request_id: str, stop_event: threading.Event
+    ) -> None:
+        while not stop_event.wait(self.heartbeat_interval_seconds):
+            with self._lock:
+                if self._closed:
+                    return
+                self._conn.execute(
+                    """
+                    UPDATE broker_requests
+                    SET updated_at = ?
+                    WHERE request_id = ? AND state = 'running'
+                    """,
+                    (time.time(), request_id),
+                )
+
     def _prune_locked(self, now: float, reserve_slot: bool = False) -> None:
+        self._recover_stale_requests(now)
         cutoff = now - self.ttl_seconds
         self._conn.execute(
             """
@@ -294,6 +317,14 @@ class RequestBroker:
                 self._conn.execute("ROLLBACK")
                 raise
 
+        heartbeat_stop = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=self._heartbeat_request,
+            args=(normalized_id, heartbeat_stop),
+            name=f"AirBridgeRequestHeartbeat-{normalized_id[:8]}",
+            daemon=True,
+        )
+        heartbeat_thread.start()
         try:
             raw_result = executor()
             bounded_result = self._bounded_result(raw_result)
@@ -314,6 +345,10 @@ class RequestBroker:
             }
             terminal_state = "failed"
             error_text = str(exc)
+
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=max(1.0, self.heartbeat_interval_seconds + 0.5))
 
         result_json = json.dumps(
             bounded_result,
