@@ -559,6 +559,6 @@ DboDesignUpdateOccurrenceBlockerManager_Release
 1. `DboSession*` / `DboDesign*` 的数量和名称是本次 Capture 17.2 安装、当前 Tcl Interpreter 的实测快照；不能直接推广为所有 Capture / SPB 版本的固定清单。
 2. 构造器、迭代器类型、包装命令、getter、setter 和操作方法均包含在枚举结果中；命令名本身不表达完整 Tcl 调用签名。
 3. 清单中包含可能修改对象或设计状态的命令，例如 `DboSession_SaveDesign`、`DboSession_RemoveDesign`、`DboDesign_MarkModified`、`DboDesign_StartDBBatchUpdate` 和各类 `Set*`。本次只枚举名称，没有调用这些写入方法。
-4. 本轮未在当前 Start Page 测试中打开 DSN / OPJ，也未验证 `GetActiveDesign` 返回的设计指针、设计对象属性、迭代器遍历或保存行为。后续需在专用测试工程上逐项设计只读 API 验证，再单独批准写入测试。
+4. 2026-11-12 已补充 Start Page 状态下 `GetActiveDesign` 实机只读探测：Capture 17.2 / Tcl 8.6，Session 全局变量存在、Session wrapper 绑定成功，`$lSession GetActiveDesign` 返回 `NULL`，无异常。该次没有打开 DSN / OPJ。详见 `Capture_Dbo_API_Tcl_示例索引_v1.0.md` 的 DBO-V01 记录。仍未验证设计对象属性、当前 Session 的空迭代器行为及保存行为。
 5. 下一步可以依据本清单选择明确签名、可验证副作用的只读方法，先完成 Session / Design / Schematic / Page 的对象关系探测；在此之前不得仅凭命令名称推测调用参数。
 
