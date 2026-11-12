@@ -3,8 +3,8 @@
 - 文档编号：AB-RUNTIME-ADAPTER-001
 - 版本：1.0
 - 日期：2026-11-12
-- 对应阶段：P1.5
-- 状态：**P1.5 GitHub Actions 软件 CI PASS**（Run #62 / commit 322904a / 66 项测试通过）；真实串口、Capture 及 Allegro 实机验收仍未完成
+- 对应阶段：P1.5 / P1.6
+- 状态：**P1.5 / P1.6 GitHub Actions 软件 CI PASS**（P1.5 Run #62：66 项；P1.6 Run #76：80 项）；真实串口和新版 Capture Bridge 实机复验仍未完成
 
 ## 1. 目标与边界
 
@@ -123,7 +123,8 @@ Profile 只声明可执行范围和能力；它不在本阶段保存 Cadence 安
 
 | profile_id | adapter_id | operation | execution_mode | 说明 |
 |---|---|---|---|---|
-| legacy-cadence-oneshot | legacy-cadence-eda | execute | one-shot-process | 临时包装 EDAExecutor；仍由旧引擎判断 Tcl / SKILL 并按原方式启动 |
+| legacy-cadence-oneshot | legacy-cadence-eda | execute | one-shot-process | 用于 Allegro SKILL 等保留旧执行路径的 EDA 请求 |
+| capture-tcl-session | capture-tcl-session | execute | persistent-gui-session | Capture Tcl 专用 Adapter；复用一份 Capture PID / Tcl Interpreter，通过 capAutoLoad Bridge 串行执行请求 |
 | legacy-shell-process | legacy-shell-process | execute | process-per-request | 包装现有 ShellEngine；保留同步、异步启动与现有输出回调 |
 
 两个 Profile 通过 Engine Provider 延迟取得底层 Engine，避免 Registry 注册后测试替换或主程序重建 Engine 时持有过期对象引用。
@@ -134,7 +135,7 @@ Profile 只声明可执行范围和能力；它不在本阶段保存 Cadence 安
 
 ### EDA
 
-现有 EDA_TASK_SUBMIT → RequestBroker（eda.execute）→ RuntimeAdapterRegistry（legacy-cadence-oneshot）→ LegacyCadenceOneShotAdapter → EDAExecutor。
+现有 EDA_TASK_SUBMIT → RequestBroker（eda.execute）→ RuntimeAdapterRegistry。Tcl 请求选择 `capture-tcl-session` → CaptureTclAdapter → CaptureTclBridgeSession → capAutoLoad Bridge；Allegro SKILL 请求选择 `legacy-cadence-oneshot` → LegacyCadenceOneShotAdapter → EDAExecutor。
 
 Adapter 将旧执行器结果统一为：
 - success：returncode == 0；
@@ -172,7 +173,16 @@ Adapter 透传现有 ShellEngine 的结构化结果；同步 / 异步语义、Sh
 
 ## 8. 后续演进
 
-- P1.6：新增 Capture Tcl Adapter 与 Capture Profile；它应通过 capAutoLoad 自动建立 Tcl Bridge，并复用同一个 Capture PID / Tcl Interpreter 处理连续请求。不得把 Tcl API 写入 SerialWorker 或 RequestBroker。
+- P1.6（软件实现与 CI PASS）：CaptureTclAdapter + capAutoLoad Bridge，READY nonce/PID 校验、持久 Interpreter、结构化结果与 UNKNOWN 超时语义；真实 Capture 17.2 实机复验仍待执行。
 - P1.7：Process Supervisor 消费 Profile 的进程匹配 / 独占策略，负责扫描所有冲突进程、优雅关闭并确认退出、启动与身份验证。
 - P1.8：Capture Skill E2E。
 - P1.9：新增 Allegro SKILL Adapter / Profile，不改变通用 Broker 契约。
+
+## 9. P1.6 Capture Tcl Session Adapter
+
+P1.6 的 `CaptureTclAdapter` 不调用 `EDAExecutor.execute_script()` 启动每条 Tcl 脚本，而是取得 / 复用 B 端当前 Session 的 `CaptureTclBridgeSession`，把脚本写入 Session 专属请求队列。Capture 自己的 capAutoLoad Tcl Bridge 负责认领并在同一解释器内执行。
+
+该 Adapter 当前仅在主机 B 本地 Registry 中注册，**不通过 SESSION_CAPABILITIES 广播**，因为主机 A 还没有主机级 Profile 可用性探测。P1.6 仍复用现有 EDA ABFP 帧，不代表 Session Create、Session FIFO Broker 或统一 SESSION_EXEC 协议已经完成。
+
+P1.6 软件验收见 [GitHub Actions Run #76](https://github.com/scanligithub/airbridge/actions/runs/43148279572)：80 项测试通过。GitHub Runner 使用 Fake Capture Bridge / Python 队列模拟器，没有真实启动 Cadence；新版 Bridge 的 Capture 17.2 实机确认仍是独立验收项。
+
