@@ -130,15 +130,7 @@ class RequestBroker:
                 "ON broker_requests(state, updated_at)"
             )
 
-    def _recover_stale_requests(self, now: Optional[float] = None) -> int:
-        """Convert RUNNING records without a recent broker heartbeat to UNKNOWN.
-
-        A second AirBridge process must not mark a live request as interrupted.
-        The executing broker refreshes updated_at periodically. Only a record
-        that has missed the heartbeat deadline is considered indeterminate.
-        UNKNOWN is non-retryable with the same ID, avoiding duplicate side effects.
-        """
-        now = time.time() if now is None else float(now)
+    def _mark_stale_running_locked(self, now: float) -> int:
         cutoff = now - self.running_stale_seconds
         result = {
             "request_state": "unknown",
@@ -151,18 +143,29 @@ class RequestBroker:
             },
         }
         encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        cursor = self._conn.execute(
+            """
+            UPDATE broker_requests
+            SET state = 'unknown', result_json = ?, error = ?, updated_at = ?
+            WHERE state = 'running' AND updated_at <= ?
+            """,
+            (encoded, result["error"]["message"], now, cutoff),
+        )
+        return cursor.rowcount
+
+    def _recover_stale_requests(self, now: Optional[float] = None) -> int:
+        """Convert RUNNING records without a recent broker heartbeat to UNKNOWN.
+
+        A second AirBridge process must not mark a live request as interrupted.
+        The executing broker refreshes updated_at periodically. Only a record
+        that has missed the heartbeat deadline is considered indeterminate.
+        UNKNOWN is non-retryable with the same ID, avoiding duplicate side effects.
+        """
+        current_time = time.time() if now is None else float(now)
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                cursor = self._conn.execute(
-                    """
-                    UPDATE broker_requests
-                    SET state = 'unknown', result_json = ?, error = ?, updated_at = ?
-                    WHERE state = 'running' AND updated_at <= ?
-                    """,
-                    (encoded, result["error"]["message"], now, cutoff),
-                )
-                count = cursor.rowcount
+                count = self._mark_stale_running_locked(current_time)
                 self._conn.execute("COMMIT")
                 return count
             except Exception:
@@ -186,7 +189,7 @@ class RequestBroker:
                 )
 
     def _prune_locked(self, now: float, reserve_slot: bool = False) -> None:
-        self._recover_stale_requests(now)
+        self._mark_stale_running_locked(now)
         cutoff = now - self.ttl_seconds
         self._conn.execute(
             """
