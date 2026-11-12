@@ -13,6 +13,8 @@ on:
       - "runtime_adapter.py"
       - "capture_tcl_bridge.py"
       - "process_supervisor.py"
+      - "scripts/capture_session_e2e.py"
+      - "test/test_capture_session_e2e.py"
       - "test/test_capture_tcl_bridge.py"
       - "test/test_process_supervisor.py"
       - "test/test_runtime_adapter.py"
@@ -53,7 +55,13 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python -m py_compile runtime_adapter.py capture_tcl_bridge.py process_supervisor.py airbridge_app.py
+          python -m py_compile runtime_adapter.py capture_tcl_bridge.py process_supervisor.py airbridge_app.py scripts/capture_session_e2e.py
+
+      - name: Run Host-A Capture Session E2E harness tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m unittest discover -s test -p "test_capture_session_e2e.py" -v
 
       - name: Run Process Supervisor tests
         shell: pwsh
