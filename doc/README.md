@@ -20,6 +20,8 @@
 - [Capture 启动、开图与关闭流程（旧版）](Capture_启动开图与关闭流程.md)：记录历史一次性启动实现。其“仅轻量 Tcl 探针、通过 DSN 命令行开图、只关闭 AirBridge managed_processes”的设计已被新的 Runtime Session 目标架构取代；请先阅读上述三份新文档。
 - [Allegro PCB 启动与关闭流程](Allegro_PCB_启动与关闭流程.md)：记录现有 Allegro SKILL 启动和关闭实现。未来应按 Runtime Adapter 模型迁移，迁移前保留为现状说明。
 
+| [Capture Dbo API Tcl 示例索引 v1.0](Capture_Dbo_API_Tcl_示例索引_v1.0.md) | 从 orcad_tclscripts 整理的 DboSession / Design / Schematic / Page / 属性读取示例、调用约定、副作用分类与最小实测计划 | 源码索引完成；Start Page GetActiveDesign 等运行时行为待分项验收 |
+
 ## 文档约定
 
 - “实测 PASS”只表示相应环境和具体测试已通过，不自动代表所有 SPB 版本兼容。
