@@ -28,6 +28,18 @@ class _SignalSink:
         pass
 
 
+class _ObservedEvent(threading.Event):
+    """Expose when a waiter has entered Event.wait()."""
+
+    def __init__(self):
+        super().__init__()
+        self.wait_entered = threading.Event()
+
+    def wait(self, timeout=None):
+        self.wait_entered.set()
+        return super().wait(timeout)
+
+
 def _new_worker():
     # Bypass the GUI/EDA/serial-thread startup path. Only initialize the
     # state consumed by the production Runtime Session methods under test.
@@ -156,10 +168,26 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         )
         self.assertTrue(request["success"], request)
 
-        host._reset_session_peer_status("serial link disconnected")
-        result = host._wait_session_negotiation(
-            request["message_id"], timeout=0.1
+        observed_event = _ObservedEvent()
+        host.session_pending_handshakes[request["message_id"]]["event"] = observed_event
+        waiter_result = {}
+        waiter = threading.Thread(
+            target=lambda: waiter_result.update(
+                host._wait_session_negotiation(
+                    request["message_id"], timeout=2.0
+                )
+            )
         )
+        waiter.start()
+        self.assertTrue(
+            observed_event.wait_entered.wait(timeout=1.0),
+            "handshake waiter did not enter its blocking wait",
+        )
+
+        host._reset_session_peer_status("serial link disconnected")
+        waiter.join(timeout=1.0)
+        self.assertFalse(waiter.is_alive(), "link reset did not wake the waiter")
+        result = waiter_result
 
         self.assertFalse(result["success"])
         self.assertEqual(result["state"], "disconnected")
