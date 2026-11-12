@@ -162,6 +162,7 @@ class RequestTracker:
     def get(self, request_id: str) -> Dict[str, Any]:
         normalized = self.validate_request_id(request_id)
         with self._lock:
+            self._prune_locked(time.monotonic())
             record = self._records.get(normalized)
             if record is None:
                 return {
