@@ -17,6 +17,7 @@ from runtime_session_protocol import (
     encode_session_message,
     make_session_capabilities,
 )
+from request_tracker import RequestTracker
 
 
 class _FakeSerialPort:
@@ -59,6 +60,7 @@ def _new_worker():
         "error": None,
     }
     worker.session_link_generation = 1
+    worker.request_tracker = RequestTracker()
     worker.parser = FrameParser()
     worker.seq_counter = 0
     worker.sig = SimpleNamespace(sig_rx_log=_SignalSink())
@@ -198,6 +200,55 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         )
         self.assertFalse(stale["success"])
         self.assertEqual(stale["state"], "stale")
+
+
+
+    def test_eda_task_fin_resolves_matching_http_request_id(self):
+        host = _new_worker()
+        request_id = str(uuid.uuid4())
+        host.request_tracker.register(request_id, "eda.execute")
+        response = {
+            "request_id": request_id,
+            "returncode": 0,
+            "output": "Capture Tcl result",
+        }
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.EDA_TASK_FIN,
+                7,
+                __import__("json").dumps(response).encode("utf-8"),
+            )
+        )
+
+        result = host.request_tracker.get(request_id)
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["result"]["returncode"], 0)
+        self.assertEqual(result["result"]["output"], "Capture Tcl result")
+
+    def test_shell_result_resolves_matching_http_request_id(self):
+        host = _new_worker()
+        request_id = str(uuid.uuid4())
+        host.request_tracker.register(request_id, "shell.exec")
+        response = {
+            "request_id": request_id,
+            "success": True,
+            "task_id": "shell-test",
+            "exit_code": 0,
+            "stdout": "hello",
+            "stderr": "",
+        }
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SHELL_RESULT,
+                8,
+                __import__("json").dumps(response).encode("utf-8"),
+            )
+        )
+
+        result = host.request_tracker.get(request_id)
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["result"]["task_id"], "shell-test")
+        self.assertEqual(result["result"]["stdout"], "hello")
 
 
 if __name__ == "__main__":
