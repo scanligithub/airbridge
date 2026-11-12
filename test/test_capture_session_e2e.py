@@ -225,6 +225,11 @@ class CaptureSessionE2ETests(unittest.TestCase):
     def test_run_acceptance_requires_host_b_dsn_path_and_positive_timeout(self):
         with self.assertRaisesRegex(e2e.E2EError, ".dsn"):
             e2e.run_acceptance("http://127.0.0.1:8888", "project.opj")
+        with self.assertRaisesRegex(e2e.E2EError, "absolute Windows path"):
+            e2e.run_acceptance(
+                "http://127.0.0.1:8888",
+                "relative\\demo.dsn",
+            )
         with self.assertRaisesRegex(e2e.E2EError, "positive"):
             e2e.run_acceptance(
                 "http://127.0.0.1:8888",
