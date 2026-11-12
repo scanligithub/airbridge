@@ -128,3 +128,15 @@ ProcessSupervisor 专项测试 9 项，其中 Windows-only Runner 集成测试�
 - **合计 98 项通过、0 项失败，两个 Job 均成功。**
 
 Host-A harness 的 8 项测试覆盖 Tcl Probe 生成、结果报告解析、request_id / 状态拒绝、启动宽限、Host-B 绝对 DSN 路径、PID 保持和命令可用性检查。CI 使用 Mock HTTP / Mock Runtime 结果，不连接真实 Host B；真实 Capture Session E2E 必须在 Host A / Host B 运行 scripts/capture_session_e2e.py 后独立验收。
+
+## Run #92：P1.8 Host-A Capture Session E2E 绝对 DSN 路径检查
+
+- GitHub Actions Run：[#92](https://github.com/scanligithub/airbridge/actions/runs/43151269632)
+- 测试提交：`063d79297907a72377ef9aee15727e0924a7ab39`
+- 单元层：77 项通过（含 Host-A E2E harness 8 项，其中验证拒绝相对 DSN 路径）；
+- A/B 生产 SerialWorker 软件模拟：12 项通过；
+- HTTP correlated request 集成：9 项通过；
+- **合计 98 项通过、0 项失败，两个 Job 均成功。**
+
+Run #92 是 Host-A E2E harness 当前的最新 CI 依据。它仍使用 Mock HTTP / Mock Runtime，不连接真实 Host B 或 Capture 17.2；真实 Capture Session E2E 只有在主机 A 执行脚本并通过两个连续请求的 PID / Tcl 状态检查后才能 PASS。
+
