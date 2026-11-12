@@ -122,7 +122,7 @@ class CaptureTclBridgeTests(unittest.TestCase):
     def test_create_installs_session_scoped_autoload_hook_and_bridge(self):
         self.assertTrue(self.session.bridge_script_path.is_file())
         self.assertTrue(self.session.hook_path.is_file())
-        self.assertIn("after 200 ::ABBridge::poll", self.session.bridge_script_path.read_text(encoding="utf-8"))
+        self.assertIn("after $poll_ms ::ABBridge::poll", self.session.bridge_script_path.read_text(encoding="utf-8"))
         self.assertIn("startup_nonce", self.session.bridge_script_path.read_text(encoding="utf-8"))
         self.assertIn("source", self.session.hook_path.read_text(encoding="utf-8"))
         self.assertTrue(self.session.requests_dir.is_dir())
@@ -290,7 +290,7 @@ class CaptureTclBridgeTests(unittest.TestCase):
             ),
             RuntimeExecutionContext(),
         )
-        self.assertTrue(bridge.script.startswith('Open "D:\\\\work\\\\project.opj"\n'))
+        self.assertTrue(bridge.script.startswith('Open "D:\\\\work\\\\project.opj"\\n'))
 
     def test_result_retention_prunes_oldest_records_by_ttl_and_capacity(self):
         self.session.results_dir.mkdir(parents=True, exist_ok=True)
