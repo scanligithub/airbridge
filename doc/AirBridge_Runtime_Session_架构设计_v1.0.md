@@ -247,15 +247,17 @@ Capture 的 Tcl Bridge 使用 after 轮询文件队列是已验证的原型。�
 
 ## 11. 与当前代码的关系
 
-当前 main 分支状态：
+P1.4 后，B 端 RequestBroker 独立负责 Request 幂等、结果持久化和缓存重放。P1.5 将实际 Engine 调用接入 RuntimeAdapterRegistry，由 RuntimeProfile 选择执行适配器：
 
-- EDAExecutor 负责一次性脚本启动、bootstrap、完成标记和进程跟踪；
-- managed_processes 只跟踪当前 AirBridge 进程启动的应用；
-- keep_open=True 不代表已存在 Capture 能接收第二条脚本；
-- 当前 EDA_TASK_FIN 和 SHELL_RESULT 以控制台日志为主，尚未提供完整 HTTP 请求结果关联；
-- 当前一次性 bootstrap 的完成标记不能可靠区分 Tcl 成功与失败。
+- legacy-cadence-oneshot → LegacyCadenceOneShotAdapter → 现有 EDAExecutor；
+- legacy-shell-process → LegacyShellProcessAdapter → 现有 ShellEngine；
+- RequestBroker 只调用通用执行回调，不解析 Tcl / SKILL / Shell，也不保存 Runtime Engine 引用；
+- RuntimeExecutionContext 向 Adapter 提供受控日志回调，不暴露 SerialWorker、串口或 Qt 控件；
+- EDAExecutor 仍负责旧的一次性启动、bootstrap、完成标记和进程跟踪；它不是 Capture 常驻 Session Adapter；
+- keep_open=True 仍不代表已有 Capture 能接收第二条 Tcl 请求；
+- 本机 Registry 中存在 Profile，不代表对端主机上一定安装了对应 Runtime。握手的 profiles=[] 保持不变，直至后续阶段具备可验证的主机级发现结果。
 
-目标改造应新增独立的 Session Broker / Process Supervisor / Runtime Adapter 层。EDAExecutor 在迁移期间作为 legacy one-shot 兼容层，不应继续膨胀为 Session Broker。
+P1.6 将为 Capture 实现独立的 Tcl Adapter / Bridge；P1.7 再将进程冲突扫描、优雅关闭、启动和进程身份校验放入通用 Process Supervisor。
 
 ## 12. 实施阶段与验收
 
@@ -273,7 +275,7 @@ Capture 的 Tcl Bridge 使用 after 轮询文件队列是已验证的原型。�
 
 验收必须包含：同一 Session 多次请求、请求重复投递、A/B 断连恢复、错误回传、长任务等待超时、关闭过程中的保存提示、Broker 重启以及 Capture 非正常退出。
 
-**当前实现边界（2026-11-12）：** P1.2 已完成能力协商；P1.3 已完成 A 端 HTTP / ABFP request_id 结果关联；P1.4 正在将通用 B 端 RequestBroker 接入现有 EDA / Shell 帧，负责 SQLite 去重、缓存结果、冲突检测、容量 / TTL 与 heartbeat stale recovery。P1.4 不提供 Session Create、每 Session FIFO、Runtime Adapter 或 Process Supervisor；这些仍按 P1.5–P1.7 分阶段实现。
+**当前实现边界（2026-11-12）：** P1.2 能力协商、P1.3 A 端 HTTP / ABFP request_id 关联、P1.4 B 端 SQLite RequestBroker 去重 / 结果缓存，以及 P1.5 本机 RuntimeAdapter / RuntimeProfile 注册与执行分派已实现并通过相应阶段的软件 CI 验收。P1.5 的 legacy-cadence-oneshot 与 legacy-shell-process 只是旧 Engine 兼容适配器；当前对端 CAPABILITIES 仍返回 profiles=[]，不宣称远端 Capture / Allegro Adapter 已安装或可用。Session Create、每 Session FIFO、Capture 长驻 Tcl Bridge 和通用 Process Supervisor 尚未实现，分别留给 P1.6 / P1.7。
 
 ---
 
