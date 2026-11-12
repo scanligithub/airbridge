@@ -118,3 +118,13 @@ ProcessSupervisor 专项测试 9 项，其中 Windows-only Runner 集成测试�
 
 新增 Tcl 解释器回归通过 Python 3.12 自带的 Tcl 8.6 解释器直接 source 本轮生成的 bridge.tcl，执行真实 Tcl 命令并验证 READY nonce / PID、文件队列请求认领、脚本返回值、stdout 捕获和结果文件。该测试比 Python 模拟器更接近真实 Tcl 运行时，但不提供 Capture Dbo API、Capture GUI 消息泵或工程对象，因此仍不能替代真实 Capture 17.2 实机验收。
 
+## Run #91：P1.8 Host-A Capture Session E2E harness 回归
+
+- GitHub Actions Run：[#91](https://github.com/scanligithub/airbridge/actions/runs/43151264299)
+- 测试提交：`48cc55597a684296be500d76982dbb74b8201bec`
+- 单元层 77 项：Protocol 10、RequestTracker 11、Host-A E2E harness 8、ProcessSupervisor 9、Capture Tcl Bridge 13、Runtime Adapter 11、RequestBroker 15；
+- A/B 生产 SerialWorker 软件模拟：12 项；
+- HTTP correlated request 集成：9 项；
+- **合计 98 项通过、0 项失败，两个 Job 均成功。**
+
+Host-A harness 的 8 项测试覆盖 Tcl Probe 生成、结果报告解析、request_id / 状态拒绝、启动宽限、Host-B 绝对 DSN 路径、PID 保持和命令可用性检查。CI 使用 Mock HTTP / Mock Runtime 结果，不连接真实 Host B；真实 Capture Session E2E 必须在 Host A / Host B 运行 scripts/capture_session_e2e.py 后独立验收。
