@@ -58,12 +58,20 @@ class RuntimeAdapterTests(unittest.TestCase):
             [item["profile_id"] for item in profiles],
             ["allegro-skill-oneshot", "legacy-cadence-oneshot", "legacy-shell-process"],
         )
+        by_id = {item["profile_id"]: item for item in profiles}
+        self.assertEqual(by_id["allegro-skill-oneshot"]["operations"], ["execute"])
         self.assertEqual(
-            profiles[0]["operations"],
-            ["execute"],
+            by_id["allegro-skill-oneshot"]["execution_mode"],
+            "one-shot-gui",
         )
-        self.assertEqual(profiles[0]["execution_mode"], "one-shot-process")
-        self.assertEqual(profiles[1]["execution_mode"], "process-per-request")
+        self.assertEqual(
+            by_id["legacy-cadence-oneshot"]["execution_mode"],
+            "one-shot-process",
+        )
+        self.assertEqual(
+            by_id["legacy-shell-process"]["execution_mode"],
+            "process-per-request",
+        )
 
     def test_legacy_cadence_adapter_delegates_without_exposing_worker(self):
         messages = []

@@ -4,7 +4,7 @@
 - 版本：1.0
 - 日期：2026-11-12
 - 对应阶段：P1.5–P1.9.1
-- 状态：**P1.5–P1.7 与 P1.9.1 GitHub Actions 软件 CI PASS**（P1.5 Run #62：66 项；P1.6 Run #76：80 项；P1.7 Run #85：89 项）；真实串口、新版 Capture Bridge 与 Cadence GUI 进程关闭实机复验仍未完成
+- 状态：**P1.5–P1.7 GitHub Actions 软件 CI PASS；P1.9.1 已实现，当前 CI 验收中**（P1.5 Run #62：66 项；P1.6 Run #76：80 项；P1.7 Run #85：89 项）；真实串口、新版 Capture Bridge 与 Cadence GUI 进程关闭实机复验仍未完成
 
 ## 1. 目标与边界
 
