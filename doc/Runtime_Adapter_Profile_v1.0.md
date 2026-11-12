@@ -184,7 +184,7 @@ P1.6 的 `CaptureTclAdapter` 不调用 `EDAExecutor.execute_script()` 启动每�
 
 该 Adapter 当前仅在主机 B 本地 Registry 中注册，**不通过 SESSION_CAPABILITIES 广播**，因为主机 A 还没有主机级 Profile 可用性探测。P1.6 仍复用现有 EDA ABFP 帧，不代表 Session Create、Session FIFO Broker 或统一 SESSION_EXEC 协议已经完成。
 
-P1.6 软件验收见 [GitHub Actions Run #76](https://github.com/scanligithub/airbridge/actions/runs/43148279572)：80 项测试通过。GitHub Runner 使用 Fake Capture Bridge / Python 队列模拟器，没有真实启动 Cadence；新版 Bridge 的 Capture 17.2 实机确认仍是独立验收项。
+P1.6 软件验收先在 [Run #76](https://github.com/scanligithub/airbridge/actions/runs/43148279572) 完成 80 项测试；后续 [Run #88](https://github.com/scanligithub/airbridge/actions/runs/43150162732) 又将生成的 bridge.tcl 直接 source 到标准 Tcl 8.6 解释器，执行文件队列请求并校验 READY / 返回值 / stdout / result 文件。Run #88 完整单元 + A/B + HTTP 共 90 项通过。**标准 Tcl 解释器不提供 Capture Dbo API 或真实 GUI，故新版 Bridge 的 Capture 17.2 实机确认仍是独立验收项。**
 
 ## 10. P1.7 Process Supervisor 接入
 
