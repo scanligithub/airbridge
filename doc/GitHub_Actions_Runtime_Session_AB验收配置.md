@@ -33,7 +33,7 @@ https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflow
 ## 触发方式
 
 - Push 到 `feature/runtime-session-p1-2` 且修改协议实现、握手实现、相关测试或该 Workflow 时自动运行；
-- 配置了 `workflow_dispatch` 手动触发入口；分支上的代码变更由 `push` 路径过滤器自动触发；
+- 配置了 `workflow_dispatch` 手动触发入口；按照 GitHub 规则，手动触发要求该 Workflow 文件存在于默认分支，因此本功能分支目前依靠 `push` 路径过滤器自动触发，合并到 `main` 后才可从 UI 手动运行；
 - 不需要注册 Runner、不需要配置仓库 Secrets，也不需要用户提供 Windows 机器。
 
 ## 验收结果的边界
