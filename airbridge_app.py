@@ -1190,10 +1190,23 @@ class SerialWorker(threading.Thread):
       try:
         result = json.loads(frame.payload.decode("utf-8", errors="replace"))
         request_id = result.get("request_id")
-        if request_id and self.request_tracker.complete(request_id, result):
+        response_state = (
+            "unknown"
+            if result.get("request_state") == "unknown"
+            else "failed"
+            if (
+                result.get("request_state") == "failed"
+                or isinstance(result.get("error"), dict)
+                or result.get("returncode", 0) not in (0, None)
+            )
+            else "completed"
+        )
+        if request_id and self.request_tracker.complete(
+            request_id, result, state=response_state
+        ):
           self.sig.sig_rx_log.emit(
               "EDA",
-              f"请求 {request_id} 已完成，returncode={result.get('returncode')}",
+              f"请求 {request_id} 状态={response_state}，returncode={result.get('returncode')}",
           )
         else:
           self.sig.sig_rx_log.emit(
@@ -1299,7 +1312,11 @@ class SerialWorker(threading.Thread):
         obj = json.loads(frame.payload.decode("utf-8", errors="replace"))
         request_id = obj.get("request_id")
         response_state = (
-            "accepted"
+            "unknown"
+            if obj.get("request_state") == "unknown"
+            else "failed"
+            if obj.get("request_state") == "failed" or obj.get("success") is False and obj.get("error")
+            else "accepted"
             if obj.get("status") == "running" and obj.get("async") is True
             else "completed"
         )
