@@ -2,14 +2,14 @@
 
 - 文档编号：AB-ADAPTER-CAPTURE-001
 - 版本：1.0
-- 状态：**原型实测通过；正式 Adapter 待实现**
+- 状态：**原型 Capture 17.2 实测证据保留；P1.6 Capture Tcl Adapter / Bridge 软件 CI PASS；新正式 Bridge 尚待真实 Capture 17.2 实机复验**
 - 日期：2026-11-12
 - 实测环境：Windows / OrCAD Capture SPB 17.2-2016 / Tcl 8.6.0
 - 关联文档：
   - AirBridge 通用 Runtime Session 架构设计 v1.0
   - AirBridge Runtime Session Protocol v1
 
-> 本文记录用户在真实 Capture 17.2 环境中的测试证据和后续 Adapter 接入约束。临时原型文件不是正式发行组件；自动加载和文件队列原型通过，不代表 AirBridge Session Broker 已完成。
+> 本文前半记录用户在真实 Capture 17.2 环境中的原型实测证据；第 8 节记录 P1.6 正式 Python Adapter / 生成式 Tcl Bridge 的软件实现与 GitHub Actions 验收。云端 CI 使用确定性文件队列模拟器，不会启动真实 Cadence Capture，因此不能替代新版 Bridge 在 Capture 17.2 / Tcl 8.6.0 上的实机复验。
 
 ---
 
@@ -294,4 +294,36 @@ airbridge_tcl_bridge_test/
 
 ---
 
-**当前结论：Capture 17.2 的 capAutoLoad 自动初始化、同一 Tcl Interpreter 多请求执行、跨请求状态持久性、工程 / 页面 / Dbo API 访问及现有 AirBridge 串口回传均已有实机证据。正式 Session Broker、专用 Session 协议、进程 Supervisor 和完整 Skill 生命周期仍待实现。**
+**当前结论：** 用户此前已在真实 Capture 17.2 / Tcl 8.6.0 环境验证 capAutoLoad 自动初始化、after 轮询、同一 Tcl Interpreter 连续请求、跨请求变量/proc 保留、Dbo / 页面操作和原型结果回传。P1.6 又完成了正式 Python CaptureTclAdapter、Session 独立文件队列、READY nonce/PID 校验、原子请求/结果文件、错误/超时 UNKNOWN 语义和 A/B Worker 软件集成，并在 GitHub Actions Run #76 完成 80 项软件测试。**但 P1.6 生成的正式 Bridge 尚未在真实 Capture 17.2 中重新加载和执行验收**；Session Create 专用 ABFP 消息、Process Supervisor、保存后优雅 Exit 与完整 Skill 生命周期仍待后续阶段。
+
+## 8. P1.6 正式 Capture Tcl Adapter / Bridge 软件实现
+
+### 8.1 实现边界
+
+新增 `capture_tcl_bridge.py`，包含：
+- `CaptureTclBridgeSession`：为每个 Session 创建独立工作目录、随机 startup_nonce、桥接脚本与专属 capAutoLoad hook；
+- `bridge.tcl`：由 Capture 的 capAutoLoad 自动 source，在 Capture 自己的 Tcl 事件循环内以 `after 200` 轮询；
+- 请求文件经临时文件 + 原子重命名投递；Capture 将 `.req` 原子认领到 `running`，单次轮询只执行一个请求；
+- READY 文件包含 session_id、startup_nonce、runtime_pid、Tcl 版本；B 端必须匹配本次 nonce 和 Popen PID；
+- 结果包含 request_id、payload SHA-256、Capture PID、Tcl 版本、return code、result、stdout/stderr、errorInfo/errorCode 和运行时间；
+- 脚本大小限制 1 MiB；请求等待超时或 Capture 退出时返回 UNKNOWN，不自动删除仍可能执行的请求，也不自动重放；
+- `RequestBroker` 将 `request_state=unknown` 持久化为 UNKNOWN，重复 request_id 返回缓存状态。
+
+### 8.2 Worker 集成
+
+- EDA Tcl 请求选择 `capture-tcl-session` Profile；
+- Allegro SKILL 仍由 `legacy-cadence-oneshot` 兼容 Profile 执行；
+- 继续使用既有 EDA_TASK_SUBMIT / EDA_TASK_FIN 和 request_id 关联，不在 P1.6 新增 SESSION_CREATE / SESSION_EXEC 帧；
+- 当前对端 CAPABILITIES 仍返回 `profiles=[]`，不广播未经主机级验证的 Capture Profile；
+- P1.7 Process Supervisor 完成前，如果 B 端发现任何未由当前 Worker 管理的 Capture.exe，P1.6 拒绝另起实例；不自动关闭或强杀用户进程。
+
+### 8.3 软件 CI 证据与限制
+
+GitHub Actions [Run #76](https://github.com/scanligithub/airbridge/actions/runs/43148279572)，提交 `9fc895c56c34f9f18c30fb573df8b7aa981485f9`：
+- Protocol 10、RequestTracker 11、Capture Bridge 12、Runtime Adapter 11、RequestBroker 15 项，共 59 项；
+- A/B 生产 SerialWorker 软件模拟 12 项；
+- HTTP correlated request 集成 9 项；
+- 合计 **80 项通过，两个 Job 均成功**。
+
+本轮 Capture Bridge 测试使用 Python 文件队列模拟器；A/B 测试使用内存 ABFP 双向链路和 Fake Capture Bridge。它们验证 Adapter、文件协议、状态、去重、结果映射和 Worker 路由，不执行真实 Cadence API，也不证明生成 Tcl 在 Capture 17.2 上实际运行。因此需要下一步在真实 B 主机进行 Capture 17.2 / Tcl 8.6.0 实机复验。
+
