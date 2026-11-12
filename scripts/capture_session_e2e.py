@@ -236,8 +236,11 @@ def run_acceptance(
     version: str = "17.2",
     timeout_seconds: int = 60,
 ) -> Dict[str, Any]:
-    if PureWindowsPath(target_dsn).suffix.lower() != ".dsn":
+    windows_path = PureWindowsPath(target_dsn)
+    if windows_path.suffix.lower() != ".dsn":
         raise E2EError("target_dsn must be a .dsn path on Host B")
+    if not windows_path.is_absolute():
+        raise E2EError("target_dsn must be an absolute Windows path on Host B")
     if timeout_seconds < 1:
         raise E2EError("timeout_seconds must be positive")
 
