@@ -290,6 +290,7 @@ if {{[llength [info commands ::puts]] && ![llength [info commands ::ABBridge::_r
 }}
 if {{[llength [info commands ::ABBridge::_raw_puts]]}} {{
     proc ::puts {{args}} {{
+        set raw_args $args
         set no_newline 0
         set channel stdout
         if {{[llength $args] > 0 && [lindex $args 0] eq "-nonewline"}} {{
@@ -302,9 +303,9 @@ if {{[llength [info commands ::ABBridge::_raw_puts]]}} {{
             set channel [lindex $args 0]
             set message [lindex $args 1]
         }} else {{
-            return [uplevel 1 [linsert $args 0 ::ABBridge::_raw_puts]]
+            return [uplevel 1 [linsert $raw_args 0 ::ABBridge::_raw_puts]]
         }}
-        set rc [uplevel 1 [linsert $args 0 ::ABBridge::_raw_puts]]
+        set rc [uplevel 1 [linsert $raw_args 0 ::ABBridge::_raw_puts]]
         if {{$::ABBridge::active}} {{
             if {{$channel eq "stdout"}} {{
                 append ::ABBridge::stdout $message
