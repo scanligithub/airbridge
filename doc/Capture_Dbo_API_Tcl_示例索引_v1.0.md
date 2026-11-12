@@ -423,9 +423,11 @@ tclscripts/capDB/capLibPropUtil.tcl
 
 ### DBO-V02：当前 Session 的 Open Design / Open Library 枚举
 
-**优先级：P1。**
+**优先级：P1 / 当前下一条验证。**
 
-前置条件：Capture 中已有工程和/或 Library 处于打开状态。工程由用户预先打开；探测不传 target_file。
+**第一阶段前置条件：** Capture 17.2 保持 Start Page 状态，没有打开 DSN / OPJ；不传 target_file。先枚举当前 Session 中实际已打开的 Design / Library，不预设两类对象都为空（尤其不预设 Library 数量）。
+
+可复用脚本：[`scripts/capture_dbo_session_iterators_probe.tcl`](../scripts/capture_dbo_session_iterators_probe.tcl)。
 
 只调用已有示例明确使用的接口：
 
@@ -434,7 +436,9 @@ tclscripts/capDB/capLibPropUtil.tcl
 - 对返回对象使用 GetName；
 - 正常释放两个迭代器和 DboState。
 
-目标：确认实际返回数量、名称和 NULL 终止方式，建立后续 Session 状态诊断能力。
+目标：确认迭代器创建是否成功、NextDesign / NextLib 的结束标记、实际名称列表以及资源释放结果。该探测只枚举当前 Session 已打开的对象，不打开 DSN/OPJ，也不主动加载 OLB。
+
+**第二阶段（如有必要）：** 用户预先打开一个测试工程和/或 Library 后，再验证非空集合的对象名称读取。只有第一阶段实际出现空集合或未覆盖非空路径时，才安排第二阶段。
 
 不调用 GetDesign、GetDesignAndSchematics、GetLib、SaveDesign、RemoveDesign、MarkAllLibForSave。
 
