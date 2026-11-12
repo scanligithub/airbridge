@@ -2,11 +2,11 @@
 
 - 文档编号：AB-PROTO-SESSION-001
 - 版本：1.0
-- 状态：**P1.2–P1.5 通用软件层已通过对应 GitHub Actions CI（P1.5 Run #62，66 项测试通过）；Session 生命周期、Capture Tcl Adapter 与 Process Supervisor 待后续阶段**
+- 状态：**P1.2–P1.6 当前实现均已通过 GitHub Actions 软件 CI（P1.6 Run #76，80 项测试通过）；Session Create / Close 专用消息、Process Supervisor 与真实 Capture 17.2 实机复验仍待完成**
 - 日期：2026-11-12
 - 关联架构：AirBridge 通用 Runtime Session 架构设计 v1.0
 
-> 本文件定义消息语义、JSON Envelope、ABFP 帧分配和北向 HTTP API。P1.2 已实现 0x15 / 0x16 能力协商；P1.3 在现有 EDA / Shell 帧的 JSON Payload 中增加 request_id 回显与 A 端 HTTP 结果关联；P1.4 在 B 端增加通用持久化 Request 去重层，不新增 ABFP 帧。Session Create、每 Session FIFO 队列和统一 Session Request 帧仍为后续阶段。
+> 本文件定义消息语义、JSON Envelope、ABFP 帧分配和北向 HTTP API。P1.2 已实现 0x15 / 0x16 能力协商；P1.3 在现有 EDA / Shell 帧的 JSON Payload 中增加 request_id 回显与 A 端 HTTP 结果关联；P1.4 增加通用 B 端持久化 Request 去重；P1.5 增加本机 Runtime Adapter / Profile；P1.6 将 Capture Tcl 接入本机持久 Bridge。P1.5 / P1.6 均未新增 Session Create / SESSION_EXEC 帧，统一 Session 生命周期协议仍为后续阶段。
 
 ---
 
@@ -438,7 +438,7 @@ P1.2 已实现内容：
 - `GET /api/v1/runtime/capabilities` 与 `POST /api/v1/runtime/negotiate`；
 - 对端旧版本无响应时标记 `unconfirmed`，不将静默丢帧误判为明确不兼容。
 
-P1.3 当前实现内容（云端 CI 验收中）：
+P1.3 当前实现内容（已通过软件 CI）：
 
 - 协议能力增加 `request.correlation`；未协商出该能力时拒绝结构化 EDA / Shell HTTP 提交；
 - A 端独立生成 UUID request_id，并在现有 EDA / Shell 帧的 JSON Payload 中传递；
@@ -447,7 +447,7 @@ P1.3 当前实现内容（云端 CI 验收中）：
 - HTTP 等待超时返回 pending 并可轮询；断线或保留期限到达时返回 unknown；
 - 大型文本结果裁剪到单帧 ABFP Payload 上限。
 
-P1.4 不代表已实现 Session Create、每 Session FIFO 队列、Runtime Adapter / Profile、统一 SESSION_EXEC、Capture Tcl Bridge 或 Process Supervisor；B 端 RequestBroker 当前只覆盖现有 EDA / Shell 请求帧中的 request_id。
+P1.4 的 RequestBroker 仍只覆盖现有 EDA / Shell 帧中的 request_id，不负责 Session Create、每 Session FIFO 或专业软件语义。P1.5 已增加本机 Runtime Adapter / Profile 注册与执行分派；P1.6 已将 Capture Tcl 请求路由至本机 CaptureTclAdapter / capAutoLoad Bridge，但继续复用 EDA_TASK_SUBMIT / EDA_TASK_FIN，不新增 SESSION_CREATE / SESSION_EXEC 帧。CAPABILITIES 的 profiles 仍为空，且真实 Capture 17.2 实机复验、Process Supervisor 与完整 Session 生命周期尚未完成。
 
 | 阶段 | 验收 |
 |---|---|
