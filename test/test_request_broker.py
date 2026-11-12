@@ -173,7 +173,7 @@ class RequestBrokerTests(unittest.TestCase):
         request_id = str(uuid.uuid4())
         payload = {"script": "puts may-have-run"}
         digest = RequestBroker.payload_digest(payload)
-        now = time.time()
+        now = time.time() - 200
         self.broker.close()
 
         connection = sqlite3.connect(self.db_path)
@@ -208,6 +208,81 @@ class RequestBrokerTests(unittest.TestCase):
             recovered.close()
         # Prevent tearDown from closing the already-closed original object again.
         self.broker = RequestBroker(self.db_path, ttl_seconds=30, max_records=20)
+
+    def test_second_broker_does_not_mark_recent_running_request_unknown(self):
+        request_id = str(uuid.uuid4())
+        payload = {"script": "still-running"}
+        digest = RequestBroker.payload_digest(payload)
+        now = time.time()
+        self.broker._conn.execute(
+            """
+            INSERT INTO broker_requests
+            (request_id, request_kind, payload_sha256, state,
+             created_at, updated_at, result_json, error)
+            VALUES (?, ?, ?, 'running', ?, ?, NULL, NULL)
+            """,
+            (request_id, "eda.execute", digest, now, now),
+        )
+
+        second_broker = RequestBroker(
+            self.db_path, ttl_seconds=30, max_records=20
+        )
+        try:
+            duplicate = second_broker.execute(
+                request_id,
+                "eda.execute",
+                payload,
+                lambda: {"returncode": 99},
+            )
+            self.assertEqual(duplicate["disposition"], "in_progress")
+            self.assertEqual(duplicate["state"], "running")
+        finally:
+            second_broker.close()
+
+    def test_live_long_request_refreshes_heartbeat(self):
+        request_id = str(uuid.uuid4())
+        broker = RequestBroker(
+            self.db_path,
+            ttl_seconds=30,
+            max_records=20,
+            running_stale_seconds=0.3,
+            heartbeat_interval_seconds=0.05,
+        )
+        started = threading.Event()
+        release = threading.Event()
+
+        def long_execution():
+            started.set()
+            self.assertTrue(release.wait(timeout=3.0))
+            return {"returncode": 0}
+
+        result_holder = {}
+        thread = threading.Thread(
+            target=lambda: result_holder.update(
+                broker.execute(
+                    request_id,
+                    "eda.execute",
+                    {"script": "long-running"},
+                    long_execution,
+                )
+            )
+        )
+        thread.start()
+        self.assertTrue(started.wait(timeout=1.0))
+        time.sleep(0.6)
+
+        duplicate = broker.execute(
+            request_id,
+            "eda.execute",
+            {"script": "long-running"},
+            lambda: {"returncode": 99},
+        )
+        self.assertEqual(duplicate["disposition"], "in_progress")
+        release.set()
+        thread.join(timeout=2.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result_holder["state"], "completed")
+        broker.close()
 
     def test_active_requests_are_not_evicted_when_broker_is_full(self):
         broker = RequestBroker(self.db_path, ttl_seconds=30, max_records=1)
