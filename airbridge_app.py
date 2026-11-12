@@ -1675,12 +1675,13 @@ class AntigravityIPCServer:
           if (
               peer_status.get("state") != "negotiated"
               or "request.correlation" not in peer_status.get("features", [])
+              or "request.deduplication" not in peer_status.get("features", [])
           ):
             self._reply_json(
                 503,
                 {
                     "state": "not_submitted",
-                    "error": "peer has not confirmed request.correlation capability",
+                    "error": "peer has not confirmed request.correlation and request.deduplication capabilities",
                     "peer_state": peer_status.get("state"),
                     "peer_features": peer_status.get("features", []),
                 },
@@ -1762,12 +1763,13 @@ class AntigravityIPCServer:
           if (
               peer_status.get("state") != "negotiated"
               or "request.correlation" not in peer_status.get("features", [])
+              or "request.deduplication" not in peer_status.get("features", [])
           ):
             self._reply_json(
                 503,
                 {
                     "state": "not_submitted",
-                    "error": "peer has not confirmed request.correlation capability",
+                    "error": "peer has not confirmed request.correlation and request.deduplication capabilities",
                     "peer_state": peer_status.get("state"),
                     "peer_features": peer_status.get("features", []),
                 },
