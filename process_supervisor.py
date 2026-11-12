@@ -138,7 +138,7 @@ class ProcessBackend:
 
     def request_close(
         self,
-        pid: int,
+        process: ProcessInfo,
         windows: Sequence[ProcessWindow],
     ) -> Tuple[int, List[str]]:
         raise NotImplementedError
@@ -304,11 +304,35 @@ class WindowsProcessBackend(ProcessBackend):
 
     def request_close(
         self,
-        pid: int,
+        process: ProcessInfo,
         windows: Sequence[ProcessWindow],
     ) -> Tuple[int, List[str]]:
         sent = 0
         errors: List[str] = []
+        current_path = self._query_executable_path(process.pid)
+        if not current_path:
+            return 0, [
+                f"cannot verify executable path for PID={process.pid}; "
+                "refusing to send WM_CLOSE"
+            ]
+
+        current_name = os.path.basename(current_path).lower()
+        expected_name = process.image_name.lower()
+        if current_name != expected_name:
+            return 0, [
+                f"PID={process.pid} image changed from {expected_name} "
+                f"to {current_name}; refusing to close a reused PID"
+            ]
+
+        if process.executable_path:
+            expected_path = os.path.normcase(os.path.abspath(process.executable_path))
+            actual_path = os.path.normcase(os.path.abspath(current_path))
+            if expected_path != actual_path:
+                return 0, [
+                    f"PID={process.pid} executable path changed; refusing to "
+                    "close a possibly reused PID"
+                ]
+
         for window in windows:
             if not window.visible or window.is_dialog:
                 continue
@@ -322,7 +346,7 @@ class WindowsProcessBackend(ProcessBackend):
                 sent += 1
             else:
                 errors.append(
-                    f"WM_CLOSE failed for HWND={window.hwnd} PID={pid} "
+                    f"WM_CLOSE failed for HWND={window.hwnd} PID={process.pid} "
                     f"(WinError {ctypes.get_last_error()})"
                 )
         return sent, errors
@@ -439,7 +463,7 @@ class ProcessSupervisor:
         # Request graceful closure for all eligible processes before waiting.
         requested: List[Tuple[ProcessInfo, List[ProcessWindow]]] = []
         for process, windows in eligible:
-            sent, errors = self.backend.request_close(process.pid, windows)
+            sent, errors = self.backend.request_close(process, windows)
             if sent <= 0 or errors:
                 message = "; ".join(errors) if errors else "no WM_CLOSE message was accepted"
                 outcomes.append(
