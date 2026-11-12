@@ -1,61 +1,64 @@
-# GitHub Actions：Runtime Session A/B 实机验收
+# GitHub Actions：Runtime Session 云端 A/B 软件验收
 
-## 两个 Workflow
+## 目标与运行环境
 
-- **runtime-session-a-acceptance.yml**：只在主机 A 的 Windows self-hosted runner 上运行。
-- **runtime-session-b-acceptance.yml**：只在主机 B 的 Windows self-hosted runner 上运行。
+本项目不依赖用户提供 Windows 实体机，也不注册 self-hosted runner。CI 使用 GitHub 托管的 `windows-2025` 标准 Runner；每个 Job 由 GitHub 自动分配临时 Windows 虚拟机。
 
-每个 Workflow 都会：
+当前仓库为公开仓库，GitHub 官方文档列明公开仓库的标准 GitHub-hosted Runner 免费且不限标准 Runner 使用量。Runner 的标签和规格以 GitHub 官方文档为准：
+https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job
 
-1. 检出本次触发的 Git commit；
-2. 运行 test_runtime_session_protocol.py；
-3. 访问本机 127.0.0.1:8888 的 Runtime API；
-4. 主动发送一次 HELLO 协商请求；
-5. 等待本机 AirBridge 确认对端已协商 runtime-session.v1，且具备 handshake 功能；
-6. 验证当前 P1.2 没有错误地宣称已支持 Session 创建。
+## CI 分层
 
-两个 Workflow 通过同一次 feature 分支 push 并行触发。它们分别验证 A、B 两侧的本地状态，不会模拟或伪造串口链路结果。
+工作流：`.github/workflows/runtime-session-ci.yml`
 
-## 前提：在 A、B 两台 Windows 主机分别注册 Runner
+### 第一层：协议单元测试
 
-GitHub 云端 runner 无法访问你的本机 COM 串口、Windows AirBridge 进程或 Capture 桌面环境，因此实机验收必须使用 self-hosted runner。
+- 在 GitHub 托管 Windows 2025 虚拟机上运行；
+- 执行 `test/test_runtime_session_protocol.py`；
+- 覆盖 JSON Envelope、UUID、schema、载荷上限、ABFP 帧编解码和旧 FrameType 兼容。
 
-在 GitHub 仓库：
+### 第二层：A/B 双端软件模拟
 
-1. 打开 Settings → Actions → Runners → New self-hosted runner；
-2. 选择 Windows / x64；
-3. 按 GitHub 当前页面给出的命令，在主机 A 注册 runner，并添加自定义标签 airbridge-a；
-4. 在主机 B 重复注册，添加自定义标签 airbridge-b；
-5. 确认两个 Runner 在仓库 Runner 列表中均显示 Idle / 在线。
+- 在另一台 GitHub 托管 Windows 2025 虚拟机上运行；
+- 安装 PySide6 和 pyserial，以便导入 AirBridge 当前生产模块；
+- 创建两个真实的 `SerialWorker` 对象，但不启动 GUI、线程或真实串口；
+- 通过内存双向链路传输 `ABFPFrame.pack()` 产生的二进制帧，并由对端 `FrameParser.feed()` 解析，再调用生产代码的帧处理方法；
+- 对 A、B 两端分别发起 HELLO，验证双向 CAPABILITIES 响应及 correlation_id 关联；
+- 验证双方最终状态为 `negotiated`，功能仅包含 `handshake`，`profiles=[]`，且 `can_create_session=false`；
+- 验证无关 correlation_id 的 CAPABILITIES 被忽略；
+- 验证链路重置会结束旧 waiter，并拒绝旧连接代次的握手请求。
 
-注册命令由 GitHub 页面现场生成，包含短时有效 token。不要把 token 发到聊天、写入仓库或提交到日志。
+这层不是另写一套替代协议的模拟器；它驱动 `SerialWorker` 中的生产握手入口和处理方法，ABFP 帧仍经过真实打包和流式解析。
 
-标准标签 self-hosted、windows、x64 由 Runner 自动提供；本仓库 Workflow 额外要求 airbridge-a 或 airbridge-b 标签。
+## 触发方式
 
-## 每次验收前
+- Push 到 `feature/runtime-session-p1-2` 且修改协议实现、握手实现、相关测试或该 Workflow 时自动运行；
+- 保留 `workflow_dispatch` 手动触发入口；
+- 不需要注册 Runner、不需要配置仓库 Secrets，也不需要用户提供 Windows 机器。
 
-- A、B 两台机器都运行同一提交版本的 AirBridge；
-- 两端串口链路已连接，AirBridge 本地 HTTP API 监听 127.0.0.1:8888；
-- A/B 端各自的 API /api/v1/runtime/capabilities 可从本机访问；
-- Python 3 可在 Runner 账号的 PATH 中通过 python 命令运行；
-- Runner 在线，且分别带有正确的自定义标签。
+## 验收结果的边界
 
-Workflow 不会替用户启动 AirBridge、连接串口、启动 Capture 或关闭现有 Cadence 进程。
+CI PASS 代表：协议单元测试通过，并且当前生产 `SerialWorker` 握手处理逻辑通过双端内存 ABFP 链路模拟。
+
+CI PASS **不代表**以下内容已经实测：
+
+- 两台独立 Windows 主机之间的真实 COM/USB/串口物理通信；
+- 串口驱动、波特率、电气链路、硬件丢包和真实链路重连；
+- Capture / Allegro 已安装、已启动或能够执行 Tcl / SKILL；
+- Session Broker、Session Create、Request 执行、request_id 结果关联、进程监督或优雅关闭。
+
+由于当前没有可供本项目使用的 Windows 实体机，真实物理链路验收暂不纳入自动 CI；不得把软件模拟 PASS 写成物理 A/B 实测 PASS。后续如果获得实际硬件环境，可另行增加可选的硬件在环验收，而不影响云端 CI。
 
 ## 结果解释
 
-- PASS：该主机本地 AirBridge 已通过协议单元测试，并确认其对端完成 Runtime Session v1 握手。
-- queued：GitHub 尚未找到匹配标签且在线的 Runner，或 Runner 暂时忙碌；这不是测试 PASS。
-- API 不可达：AirBridge 尚未运行，或本机 API 未监听指定地址/端口。
-- unconfirmed：未得到对端 CAPABILITIES，可能是对端未升级、串口未连通或链路没有响应；不能直接断言是版本不兼容。
-- no_common_protocol / handshake_not_supported：对端明确未声明双方需要的协议/握手能力。
-
-本验收只覆盖 P1.2 的能力协商，不代表 Session Create、Capture Tcl 执行、结果关联、进程监督或关闭流程已通过。
+- **Protocol unit tests PASS**：协议 Envelope 与 ABFP 帧契约通过；
+- **A/B simulation PASS**：两个生产 SerialWorker 状态机在模拟链路上完成双向握手，关联及重置行为符合预期；
+- **CI FAIL**：查看对应 Job 日志，按失败测试定位；
+- 不再存在等待 `airbridge-a` / `airbridge-b` 自托管 Runner 的 queued 状态。
 
 ## 安全边界
 
-- Runner 使用仓库级标签定向，不接受通用 windows-latest 替代实机验收。
-- Workflow 仅授予 contents: read。
-- 不使用 GitHub Secrets 保存 Runner 注册 token；token 仅用于首次注册。
-- 不在 Workflow 中执行任意远程 Shell 命令。
-- 不把 COM 端口、Cadence 工程或设计文件上传为 Action artifact。
+- Workflow 权限仅为 `contents: read`；
+- 不启动任意远程 Shell；
+- 不访问用户主机、COM 端口或 Cadence 工程；
+- 不上传设计文件或真实工程数据作为 Action artifact。
