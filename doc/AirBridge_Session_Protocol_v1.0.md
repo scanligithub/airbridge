@@ -2,7 +2,7 @@
 
 - 文档编号：AB-PROTO-SESSION-001
 - 版本：1.0
-- 状态：**P1.2 能力协商、P1.3 A 端 Request ID 关联、P1.4 B 端持久化 Request 去重已完成对应软件 CI 验收；P1.5 本机 Runtime Adapter / Profile 抽象已实现，等待本轮 CI；Session 生命周期、Capture Tcl Adapter 与 Process Supervisor 待后续阶段**
+- 状态：**P1.2–P1.5 通用软件层已通过对应 GitHub Actions CI（P1.5 Run #62，66 项测试通过）；Session 生命周期、Capture Tcl Adapter 与 Process Supervisor 待后续阶段**
 - 日期：2026-11-12
 - 关联架构：AirBridge 通用 Runtime Session 架构设计 v1.0
 
