@@ -2,8 +2,10 @@
 # -*- coding: utf-8 -*-
 """Wire helpers for the generic AirBridge Runtime Session protocol.
 
-This module intentionally contains no Capture, Allegro, Tcl, SKILL, or
-Runtime-Adapter behavior. P1.2 implements only HELLO/CAPABILITIES.
+This module owns the generic capability handshake and feature advertisement.
+It intentionally contains no Capture, Allegro, Tcl, SKILL, Broker, or
+Runtime-Adapter execution behavior. Request correlation and deduplication
+are implemented by the Worker / RequestBroker layers using legacy ABFP frames.
 """
 import json
 import uuid
