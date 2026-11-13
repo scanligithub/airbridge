@@ -2,11 +2,11 @@
 
 - 文档编号：AB-PROTO-SESSION-001
 - 版本：1.0
-- 状态：**P1.2 已实现 HELLO / CAPABILITIES；Session 生命周期与请求消息待后续阶段实现**
+- 状态：**P1.2–P1.7 当前实现均已通过 GitHub Actions 软件 CI（最新完整回归 Run #88，90 项测试通过）；Session Create / Close 专用消息、每 Session FIFO Broker 与真实 Capture 17.2 实机验收仍待完成**
 - 日期：2026-11-12
 - 关联架构：AirBridge 通用 Runtime Session 架构设计 v1.0
 
-> 本文件定义消息语义、JSON Envelope、ABFP 帧分配和北向 HTTP API。P1.2 已实现 0x15 / 0x16 能力协商；其他 Session 生命周期和 Request 帧仍为后续实现范围。
+> 本文件定义消息语义、JSON Envelope、ABFP 帧分配和北向 HTTP API。P1.2 已实现 0x15 / 0x16 能力协商；P1.3 在现有 EDA / Shell 帧的 JSON Payload 中增加 request_id 回显与 A 端 HTTP 结果关联；P1.4 增加通用 B 端持久化 Request 去重；P1.5 增加本机 Runtime Adapter / Profile；P1.6 将 Capture Tcl 接入本机持久 Bridge。P1.5 / P1.6 均未新增 Session Create / SESSION_EXEC 帧，统一 Session 生命周期协议仍为后续阶段。
 
 ---
 
@@ -103,7 +103,7 @@ P1.2 已实现。收到 HELLO 的节点会返回 CAPABILITIES；两端在连接�
   "sent_at_utc": "2026-11-12T01:00:00.000Z",
   "payload": {
     "supported_protocols": ["runtime-session.v1"],
-    "features": ["handshake"],
+    "features": ["handshake", "request.correlation", "request.deduplication"],
     "profiles": [],
     "server_version": "airbridge-v2.4",
     "max_frame_payload": 65000
@@ -111,7 +111,7 @@ P1.2 已实现。收到 HELLO 的节点会返回 CAPABILITIES；两端在连接�
 }
 ~~~
 
-P1.2 当前只声明 `handshake` 功能，`profiles` 为空；这不代表已支持 Session 创建、脚本执行或任何 Capture / Allegro Adapter。`runtime-session.v1` 标识 Envelope / 协议族版本，实际已实现功能必须以 `features` 为准。Profile 只作为 B 端注册的通用能力描述，A 端不能假设所有主机都安装了某个 Profile。
+P1.2 提供 `handshake`，P1.3 增加 `request.correlation`，P1.4 增加 `request.deduplication`。P1.5 已在每台 AirBridge 主机的本地执行层实现 RuntimeAdapterRegistry，并注册旧版 EDA / Shell 兼容 Profile；但当前 `profiles` 仍为空。这是有意的安全边界：本机注册信息不能证明对端已安装某个 Adapter，也不能证明其专业软件版本、运行环境和执行 Bridge 已就绪。只有后续阶段实现主机级 Profile 发现与实测验证后，才可通过 CAPABILITIES 广播可用 Profile。`runtime-session.v1` 标识 Envelope / 协议族版本，实际已实现通用协议功能以 `features` 为准，具体运行环境能力以经过验证的 Profile 元数据为准。
 
 ### 4.3 SESSION_CREATE（建议 FrameType 0x17）
 
@@ -260,7 +260,7 @@ Result 应提供运行 PID、真实执行状态、返回值、stdout/stderr（�
 
 ### 7.2 Request 状态
 
-- ACCEPTED：已接收；
+- ACCEPTED：已接收；对于当前 Shell 异步 HTTP 接口，表示对端已返回后台任务启动回执，不代表执行完成；
 - QUEUED：等待执行；
 - RUNNING：正在执行；
 - SUCCEEDED：执行成功；
@@ -326,7 +326,7 @@ HTTP 客户端自身等待结束应返回 pending / wait timeout，而不是擅�
 
 0x24 暂不分配。0x15 / 0x16 已写入 `protocol.py`；0x17–0x1F、0x22–0x23 仍是预留编号，尚未接收或处理。
 
-协商超时只能报告 `unconfirmed`（对端未响应 / 链路无响应），不能仅凭超时断言对端一定是旧版本。收到合法 CAPABILITIES 但没有共同协议时报告 `no_common_protocol`。当前功能列表只有 `handshake`，未声明 `session.create`。
+协商超时只能报告 `unconfirmed`（对端未响应 / 链路无响应），不能仅凭超时断言对端一定是旧版本。收到合法 CAPABILITIES 但没有共同协议时报告 `no_common_protocol`。当前功能列表声明 `handshake` 与 `request.correlation`，未声明 `session.create`。
 
 ## 11. HTTP API（主机 A 北向接口）
 
@@ -336,6 +336,7 @@ HTTP 客户端自身等待结束应返回 pending / wait timeout，而不是擅�
 |---|---|---|
 | GET /capabilities | 查询最近一次对端协议协商状态及功能列表（P1.2 已实现） | 200 |
 | POST /negotiate | 异步触发一次能力协商，立即返回 message_id（P1.2 已实现） | 202 / 503 |
+| GET /api/v1/requests/{request_id} | 查询 A 端保留的 EDA / Shell 请求状态及结果（P1.3 已实现） | 200 / 202 / 400 / 404 / 502 / 503 |
 | GET /profiles | 列出 B 端已注册 Runtime Profiles | 200（待实现） |
 | POST /sessions | 创建 Session | 202 |
 | GET /sessions | 列出当前会话 | 200 |
@@ -375,7 +376,29 @@ HTTP 提交 Request 示例：
 
 Session 创建和 Request 提交接口未来默认异步返回 202 和 ID。P1.2 的 negotiate 端点同样立即返回 message_id；Skill 通过 GET capabilities 查询协商结果，不让 HTTP Handler 等待串口响应。
 
-实际 P1.2 HTTP 路径为 `/api/v1/runtime/capabilities` 与 `/api/v1/runtime/negotiate`。其他 Session API 尚未实现。现有 /api/v1/eda/execute、/api/v1/shell/exec 和 FrameType.EDA_* / SHELL_* 在迁移期保持兼容。Session API 稳定后再评估 deprecated 时间表，不在第一阶段删除旧接口。
+实际 P1.2 HTTP 路径为 `/api/v1/runtime/capabilities` 与 `/api/v1/runtime/negotiate`。P1.3 当前支持：
+- `POST /api/v1/eda/execute`：提交 EDA 脚本；
+- `POST /api/v1/shell/exec`：提交远程 Shell 命令；
+- `GET /api/v1/requests/{request_id}`：按 UUID 查询请求状态和结果。
+
+A 端生成独立 UUID `request_id`，把它作为可选 JSON 字段放入现有 `EDA_TASK_SUBMIT` / `SHELL_EXEC` 帧 Payload；B 端在 `EDA_TASK_FIN` / `SHELL_RESULT` 中原样回显。既有 ABFP FrameType 与 16 位 `seq_id` 均不改变，`seq_id` 仍只用于传输帧编号。A 端只有在最近一次能力协商成功，且对端同时声明 `request.correlation` 与 `request.deduplication` 时，才允许新的结构化 HTTP EDA / Shell 请求提交；断线或对端不支持时返回 `not_submitted`。调用方可在 POST body 中提供 UUID `request_id`；A 端尚保留该 ID 时再次 POST 会返回 409，并要求改用 GET 查询。A 端进程重启或记录过期后，相同 ID 可重新下发给 B 端 Broker，由 B 端持久化记录决定返回缓存结果、冲突或 UNKNOWN。
+
+HTTP 行为：
+- 请求等待超过 `wait_timeout_ms` 时返回 HTTP 202 和 `state=pending`；这只代表 HTTP 等待结束，不代表远端任务取消。随后可用 GET 请求状态接口轮询。
+- EDA / Shell 同步结果完成时返回 200；请求失败返回 502；链路断开或结果未知返回 503。
+- Shell 异步模式返回 HTTP 202 / `state=accepted`，表示已收到后台启动回执，不代表命令执行完成；后续可轮询观察是否有最终结果（当前 Shell 异步引擎先返回启动回执，真正结束状态仍通过日志输出路径通知）。
+- GET 状态接口对 pending / accepted 返回 202，对 completed 返回 200，对 failed 返回 502，对 unknown 返回 503，对不存在或已过期 ID 返回 404；无效 UUID 返回 400。
+
+A 端请求记录仅保存在内存中，默认最多 500 条、保留 TTL 为 900 秒。等待超时不删除记录；等待记录超过保留期限后转为 `unknown` 并唤醒等待者，终态记录到期后可被回收。串口断开也会将所有 pending 请求置为 `unknown`。重启 A 端进程后不保证恢复这些记录。
+
+P1.4 B 端 RequestBroker 当前行为（云端 CI 验收中）：
+- 使用 SQLite 持久化请求 ID、请求类型、规范化 JSON Payload 的 SHA-256、状态和有界结果；默认数据库路径为 Windows `%LOCALAPPDATA%/AirBridge/runtime_broker.sqlite3`，可用环境变量 `AIRBRIDGE_RUNTIME_DB` 覆盖。
+- 默认最多保留 10000 条请求记录，终态 TTL 为 24 小时；单条缓存结果限制在 64000 字节以内。清理优先回收过期 / 最早的终态记录，不驱逐仍在执行的 RUNNING 请求。
+- Broker 在调用执行函数前原子登记 RUNNING；相同 `request_id`、相同请求类型和相同 Payload hash 的重发：RUNNING 时不启动第二次执行，终态时返回缓存结果；相同 ID 对应不同请求类型或不同 Payload hash 时返回 `REQUEST_ID_CONFLICT`。
+- 正在执行的请求每 30 秒刷新一次 Broker 心跳；默认 120 秒未收到心跳的 RUNNING 记录转成 UNKNOWN，之后不会以同一 ID 自动重放。此策略可避免另一个 Broker 实例把仍在执行的请求误判为中断。
+- Shell 异步请求的 `accepted` 记录缓存后台任务启动回执，不代表 Shell 进程已结束；同一 ID 重发只返回相同回执，不会再次启动命令。
+
+P1.4 仅实现通用 Request 去重和有界结果缓存；当前过渡执行回调仍委托给旧版 EDAExecutor / ShellEngine，尚未引入 Runtime Adapter / Profile，也没有 Session ID、每 Session FIFO 队列、去重窗口外的保护或 exactly-once 保证。若 Broker 在外部副作用执行后、结果落盘前崩溃，恢复状态为 UNKNOWN，系统不会自动重跑。现有 GUI 发出的无 `request_id` 任务仍保留旧式执行路径。其他 Session API 尚未实现。
 
 ## 12. 大载荷与文件引用
 
@@ -415,7 +438,16 @@ P1.2 已实现内容：
 - `GET /api/v1/runtime/capabilities` 与 `POST /api/v1/runtime/negotiate`；
 - 对端旧版本无响应时标记 `unconfirmed`，不将静默丢帧误判为明确不兼容。
 
-当前实现只证明双方理解 Session v1 Envelope / 握手；不代表 Session Broker、Profile、Session Create、Request 执行已实现。
+P1.3 当前实现内容（已通过软件 CI）：
+
+- 协议能力增加 `request.correlation`；未协商出该能力时拒绝结构化 EDA / Shell HTTP 提交；
+- A 端独立生成 UUID request_id，并在现有 EDA / Shell 帧的 JSON Payload 中传递；
+- B 端 EDA_TASK_FIN / SHELL_RESULT 回显 request_id，A 端按 ID 唤醒对应 HTTP waiter；
+- A 端新增有限容量、TTL 的内存 RequestTracker 和 `GET /api/v1/requests/{request_id}`；
+- HTTP 等待超时返回 pending 并可轮询；断线或保留期限到达时返回 unknown；
+- 大型文本结果裁剪到单帧 ABFP Payload 上限。
+
+P1.4 的 RequestBroker 仍只覆盖现有 EDA / Shell 帧中的 request_id，不负责 Session Create、每 Session FIFO 或专业软件语义。P1.5 已增加本机 Runtime Adapter / Profile 注册与执行分派；P1.6 已将 Capture Tcl 请求路由至本机 CaptureTclAdapter / capAutoLoad Bridge，但继续复用 EDA_TASK_SUBMIT / EDA_TASK_FIN，不新增 SESSION_CREATE / SESSION_EXEC 帧。CAPABILITIES 的 profiles 仍为空，且真实 Capture 17.2 实机复验、Process Supervisor 与完整 Session 生命周期尚未完成。
 
 | 阶段 | 验收 |
 |---|---|

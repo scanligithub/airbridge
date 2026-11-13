@@ -1,0 +1,189 @@
+# test_request_tracker.py
+# -*- coding: utf-8 -*-
+import threading
+import time
+import unittest
+import uuid
+
+from request_tracker import (
+    RequestTracker,
+    RequestTrackerError,
+    encode_bounded_json_payload,
+)
+
+
+class RequestTrackerTests(unittest.TestCase):
+    def test_register_wait_and_complete_returns_structured_result(self):
+        tracker = RequestTracker()
+        request_id = str(uuid.uuid4())
+        tracker.register(request_id, "eda.execute")
+
+        waiter_result = {}
+        waiter = threading.Thread(
+            target=lambda: waiter_result.update(tracker.wait(request_id, 2.0))
+        )
+        waiter.start()
+        time.sleep(0.01)
+
+        self.assertTrue(
+            tracker.complete(
+                request_id,
+                {"returncode": 0, "output": "Capture Tcl completed"},
+            )
+        )
+        waiter.join(timeout=1.0)
+
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(waiter_result["state"], "completed")
+        self.assertEqual(waiter_result["result"]["returncode"], 0)
+        self.assertEqual(
+            waiter_result["result"]["output"], "Capture Tcl completed"
+        )
+
+    def test_http_wait_timeout_keeps_request_pollable(self):
+        tracker = RequestTracker()
+        request_id = str(uuid.uuid4())
+        tracker.register(request_id, "shell.exec")
+
+        timed_out = tracker.wait(request_id, 0)
+        self.assertEqual(timed_out["state"], "pending")
+
+        self.assertTrue(
+            tracker.complete(request_id, {"success": True, "exit_code": 0})
+        )
+        polled = tracker.get(request_id)
+        self.assertEqual(polled["state"], "completed")
+        self.assertEqual(polled["result"]["exit_code"], 0)
+
+    def test_disconnect_marks_pending_request_unknown_and_wakes_waiter(self):
+        tracker = RequestTracker()
+        request_id = str(uuid.uuid4())
+        tracker.register(request_id, "eda.execute")
+        observed = threading.Event()
+        result = {}
+
+        def wait_for_result():
+            observed.set()
+            result.update(tracker.wait(request_id, 2.0))
+
+        waiter = threading.Thread(target=wait_for_result)
+        waiter.start()
+        self.assertTrue(observed.wait(timeout=1.0))
+
+        self.assertEqual(tracker.fail_all_pending("serial link disconnected"), 1)
+        waiter.join(timeout=1.0)
+
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(result["state"], "unknown")
+        self.assertEqual(result["error"], "serial link disconnected")
+
+    def test_duplicate_and_invalid_request_ids_are_rejected(self):
+        tracker = RequestTracker()
+        request_id = str(uuid.uuid4())
+        tracker.register(request_id, "eda.execute")
+
+        with self.assertRaises(RequestTrackerError):
+            tracker.register(request_id, "shell.exec")
+        with self.assertRaises(RequestTrackerError):
+            tracker.register("not-a-uuid", "eda.execute")
+
+    def test_acceptance_is_terminal_for_http_ack_but_distinct_from_completion(self):
+        tracker = RequestTracker()
+        request_id = str(uuid.uuid4())
+        tracker.register(request_id, "shell.exec")
+        self.assertTrue(
+            tracker.complete(
+                request_id,
+                {"status": "running", "async": True},
+                state="accepted",
+            )
+        )
+        snapshot = tracker.get(request_id)
+        self.assertEqual(snapshot["state"], "accepted")
+        self.assertEqual(snapshot["result"]["status"], "running")
+
+    def test_tracker_does_not_evict_pending_records_when_full(self):
+        tracker = RequestTracker(max_records=1)
+        tracker.register(str(uuid.uuid4()), "eda.execute")
+
+        with self.assertRaises(RequestTrackerError):
+            tracker.register(str(uuid.uuid4()), "shell.exec")
+
+    def test_completed_records_expire_and_are_pruned(self):
+        tracker = RequestTracker(ttl_seconds=1)
+        request_id = str(uuid.uuid4())
+        tracker.register(request_id, "eda.execute")
+        tracker.complete(request_id, {"returncode": 0})
+        time.sleep(1.05)
+
+        snapshot = tracker.get(request_id)
+        self.assertEqual(snapshot["state"], "not_found")
+
+    def test_pending_record_expires_to_unknown_and_wakes_waiter(self):
+        tracker = RequestTracker(ttl_seconds=1)
+        request_id = str(uuid.uuid4())
+        tracker.register(request_id, "eda.execute")
+        waiter_result = {}
+        waiter = threading.Thread(
+            target=lambda: waiter_result.update(tracker.wait(request_id, 3.0))
+        )
+        waiter.start()
+        waiter.join(timeout=2.0)
+
+        self.assertFalse(
+            waiter.is_alive(),
+            "pending waiter was not released at the retention deadline",
+        )
+        self.assertEqual(waiter_result["state"], "unknown")
+        self.assertIn("status is unknown", waiter_result["error"])
+
+    def test_get_does_not_evict_terminal_record_at_capacity(self):
+        tracker = RequestTracker(max_records=2)
+        first = str(uuid.uuid4())
+        second = str(uuid.uuid4())
+        third = str(uuid.uuid4())
+
+        tracker.register(first, "eda.execute")
+        tracker.complete(first, {"returncode": 0})
+        tracker.register(second, "shell.exec")
+        tracker.complete(second, {"exit_code": 0})
+
+        # Polling at capacity must not evict a result as a side effect.
+        self.assertEqual(tracker.get(first)["state"], "completed")
+        self.assertEqual(tracker.get(second)["state"], "completed")
+
+        # A new registration may recycle the oldest terminal result.
+        tracker.register(third, "eda.execute")
+        self.assertEqual(tracker.get(first)["state"], "not_found")
+        self.assertEqual(tracker.get(second)["state"], "completed")
+        self.assertEqual(tracker.get(third)["state"], "pending")
+
+    def test_terminal_retention_ttl_starts_when_request_finishes(self):
+        tracker = RequestTracker(ttl_seconds=1)
+        request_id = str(uuid.uuid4())
+        tracker.register(request_id, "eda.execute")
+        time.sleep(0.55)
+        tracker.complete(request_id, {"returncode": 0})
+
+        # The record must remain available for a full retention interval
+        # after completion, rather than expiring at request-start + TTL.
+        time.sleep(0.55)
+        self.assertEqual(tracker.get(request_id)["state"], "completed")
+
+        time.sleep(0.55)
+        self.assertEqual(tracker.get(request_id)["state"], "not_found")
+
+    def test_large_text_result_is_truncated_to_abfp_limit(self):
+        payload = encode_bounded_json_payload(
+            {"request_id": str(uuid.uuid4()), "stdout": "输出内容" * 30000},
+            max_bytes=4096,
+        )
+        self.assertLessEqual(len(payload), 4096)
+        import json
+        decoded = json.loads(payload.decode("utf-8"))
+        self.assertTrue(decoded["stdout_truncated"])
+        self.assertLess(len(decoded["stdout"]), 30000)
+
+
+if __name__ == "__main__":
+    unittest.main()

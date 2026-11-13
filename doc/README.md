@@ -1,20 +1,28 @@
 # AirBridge 文档索引
 
-本文档目录存放 AirBridge 架构、协议、Runtime Adapter 和软件生命周期设计。
+本文档目录存放 AirBridge Core 架构、通用协议、Runtime Adapter 接入和软件生命周期设计。专业 API / 对象模型属于相应 Skill；职责边界以《AirBridge 职责边界与 Skill 集成规范 v1.0》为准。
 
 ## 当前设计基线
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
-| [通用 Runtime Session 架构设计 v1.0](AirBridge_Runtime_Session_架构设计_v1.0.md) | Agent Skill、AirBridge Client、Session Broker、Process Supervisor、Runtime Adapter 的边界与生命周期 | 设计基线，待实现 |
-| [Runtime Session Protocol v1](AirBridge_Session_Protocol_v1.0.md) | Session / Request / Result 数据结构、ABFP 帧、HTTP API、幂等、超时和取消语义 | P1.2 握手与能力协商已实现；生命周期和 Request 阶段待实现 |
-| [Capture Tcl Bridge 实测基线](Capture_Tcl_Bridge_实测基线_v1.0.md) | Capture 17.2 自动加载、文件队列原型、Dbo/页面操作和 A→B→Capture→B→A 实测证据 | 原型实测通过，正式 Adapter 待实现 |
-| [GitHub Actions Runtime Session A/B 验收配置](GitHub_Actions_Runtime_Session_AB验收配置.md) | A/B 两台 Windows 主机的 self-hosted runner 标签、Workflow 步骤和验收状态解释 | Workflow 已建立；实机 runner 待注册 |
+| [AirBridge 代码边界审计与渐进迁移计划 v1.0](AirBridge_代码边界审计与渐进迁移计划_v1.0.md) | 基于当前代码审计 Core / Adapter / Skill 混合点，提出 Capture Session 生命周期抽取、Polyfill 解耦、显式 Profile 路由与 Session 协议实施顺序 | 2026-11-13 静态审计完成；M1 代码迁移待开始 |
+| [AirBridge 职责边界与 Skill 集成规范 v1.0](AirBridge_职责边界与Skill集成规范_v1.0.md) | 冻结 Core、Runtime Adapter、软件内 Bridge 与 Agent Skill 的职责边界；Capture / Allegro API 归属、版本兼容、代码迁移和验收分层 | 2026-11-13 架构边界基线已建立；现有兼容代码待渐进迁移 |
+| [通用 Runtime Session 架构设计 v1.0](AirBridge_Runtime_Session_架构设计_v1.0.md) | Agent Skill、AirBridge Client、Session Broker、Process Supervisor、Runtime Adapter 的边界与生命周期 | P1.2–P1.7 软件层通过 CI；Capture Bridge / Start Page 关闭重启实机 PASS；专用 Session 生命周期、完整 FIFO Broker 和 Allegro 实机验收仍待后续阶段 |
+| [Runtime Session Protocol v1](AirBridge_Session_Protocol_v1.0.md) | Session / Request / Result 数据结构、ABFP 帧、HTTP API、幂等、超时和取消语义 | P1.2–P1.7 已实现软件部分通过 CI；Session Create / Close 专用协议与 FIFO Broker 待实现 |
+| [Runtime Adapter / Profile 接口设计 v1.0](Runtime_Adapter_Profile_v1.0.md) | 通用 Adapter 接口、Profile Registry、旧版 EDA / Shell 兼容适配器及执行边界 | P1.5–P1.7 与 P1.9.1 GitHub Actions 软件 CI PASS；Capture Bridge 与 Start Page 正常关闭已在主机 B 实机验证；保存提示等边界场景待验收 |
+| [Capture Session Host-A E2E 验收工具 v1.0](Capture_Session_E2E_验收工具_v1.0.md) | 从 Host A 调用 HTTP API，验证两条连续 Tcl 请求复用 Capture PID / Interpreter，并执行最小活动设计探针；不是 Capture Skill 专业 API 验收 | P1.8 harness Run #92（98 项）软件 CI PASS；真实 A/B E2E 待主机联调 |
+| [Allegro SKILL Runtime Adapter v1.0](Allegro_SKILL_Runtime_Adapter_v1.0.md) | 将 Allegro SKILL 从通用 Cadence fallback 路由到独立 Adapter / Profile，保持既有启动、开板和 GUI 生命周期行为 | P1.9.1 Run #94 软件 CI PASS（102 项）；Host B Allegro 17.2 实机回归及生命周期扩展待验收 |
+| [Process Supervisor 设计与验收 v1.0](Process_Supervisor_v1.0.md) | Capture / Allegro 进程发现、映像身份校验、WM_CLOSE、退出确认、启动阻断策略 | P1.7 软件 CI PASS；Capture Start Page 的 WM_CLOSE 与真实进程退出 PASS；保存提示、多手动实例、无主窗口和无响应场景待验收 |
+| [Capture Tcl Bridge 实测基线](Capture_Tcl_Bridge_实测基线_v1.0.md) | Capture 17.2 Runtime Adapter / Bridge 接入实测、P1.6 capAutoLoad / Session、多请求和错误恢复、P1.7 进程生命周期；附带历史 Dbo 命令枚举证据 | 2026-11-12 主机 B：正式 Bridge、并发串行、错误恢复、关闭/重启实机 PASS；Dbo 命令清单仅为历史观察，不构成 Adapter API 契约 |
+| [GitHub Actions Runtime Session CI 验收配置](GitHub_Actions_Runtime_Session_AB验收配置.md) | GitHub 托管 Windows Runner、协议单测、生产 SerialWorker 双端模拟和验收边界 | 云端 CI 配置；物理串口实测不在当前 CI 范围 |
+| [Capture Dbo API Tcl 示例索引 v1.0（临时归档）](Capture_Dbo_API_Tcl_示例索引_v1.0.md) | Capture Skill 的 DboSession / Design / Schematic / Page / 属性读取研究资料；仅为迁移前历史归档，不属于 AirBridge API 契约 | DBO-V01 Start Page 三种 Active Design 入口均实机返回 NULL；DBO-V02 暂停，后续转入 Capture Skill |
 
 ## 现有专业软件生命周期文档
 
 - [Capture 启动、开图与关闭流程（旧版）](Capture_启动开图与关闭流程.md)：记录历史一次性启动实现。其“仅轻量 Tcl 探针、通过 DSN 命令行开图、只关闭 AirBridge managed_processes”的设计已被新的 Runtime Session 目标架构取代；请先阅读上述三份新文档。
 - [Allegro PCB 启动与关闭流程](Allegro_PCB_启动与关闭流程.md)：记录现有 Allegro SKILL 启动和关闭实现。未来应按 Runtime Adapter 模型迁移，迁移前保留为现状说明。
+
 
 ## 文档约定
 

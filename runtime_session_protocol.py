@@ -2,8 +2,10 @@
 # -*- coding: utf-8 -*-
 """Wire helpers for the generic AirBridge Runtime Session protocol.
 
-This module intentionally contains no Capture, Allegro, Tcl, SKILL, or
-Runtime-Adapter behavior. P1.2 implements only HELLO/CAPABILITIES.
+This module owns the generic capability handshake and feature advertisement.
+It intentionally contains no Capture, Allegro, Tcl, SKILL, Broker, or
+Runtime-Adapter execution behavior. Request correlation and deduplication
+are implemented by the Worker / RequestBroker layers using legacy ABFP frames.
 """
 import json
 import uuid
@@ -15,7 +17,7 @@ from protocol import FrameType, MAX_PAYLOAD_LEN
 SCHEMA_VERSION = 1
 SESSION_PROTOCOL_ID = "runtime-session.v1"
 CLIENT_VERSION = "airbridge-v2.4"
-IMPLEMENTED_FEATURES = ("handshake",)
+IMPLEMENTED_FEATURES = ("handshake", "request.correlation", "request.deduplication")
 
 
 class SessionProtocolError(ValueError):
@@ -85,8 +87,10 @@ def make_session_capabilities(
     return create_envelope(
         {
             "supported_protocols": [SESSION_PROTOCOL_ID],
-            # This build implements handshake only. Session creation and
-            # runtime execution must not be advertised before later phases.
+            # The generic Worker / Broker already implement correlation and
+            # deduplication. Local adapter registration is not proof that a
+            # profile is installed and usable on the peer, so keep wire
+            # profiles empty until host-specific discovery is implemented.
             "features": list(IMPLEMENTED_FEATURES),
             "profiles": [],
             "server_version": server_version,

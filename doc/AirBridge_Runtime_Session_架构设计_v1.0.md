@@ -2,11 +2,11 @@
 
 - 文档编号：AB-ARCH-SESSION-001
 - 版本：1.0
-- 状态：**设计基线（待实现）**
-- 日期：2026-11-12
+- 状态：**目标架构设计基线；P1.2–P1.7 软件层已通过相应 CI；2026-11-12 Capture 17.2 / Tcl 8.6 新版 Bridge、Start Page 正常关闭与重启已在主机 B 实机 PASS；P1.8 完整 Capture Skill E2E、专用 Session Create / Close 协议、完整 FIFO Broker 和 Allegro 生命周期扩展仍待完成**
+- 日期：2026-11-13
 - 适用范围：AirBridge 主机 A / 主机 B；未来所有通过 Agent Skill 使用远端专业软件的场景
 
-> 本文定义目标架构，不代表当前 main 分支已经实现 Session Broker、Session API 或新的 ABFP 消息。当前可运行的 Capture 文件队列 Bridge 是原型，实测证据见《Capture Tcl Bridge 实测基线》。
+> 本文定义目标架构，不代表当前分支已经实现 Session Create / Close API、统一 Session Request 帧或完整的专业软件生命周期。P1.6 Capture Tcl Adapter / Bridge 与 P1.7 Process Supervisor 已完成软件实现；新版 Bridge、Capture Start Page 正常关闭及关闭后重启已于 2026-11-12 在主机 B 实机验证。AirBridge 与专业 Skill 的规范性职责边界见《AirBridge 职责边界与 Skill 集成规范 v1.0》。
 
 ---
 
@@ -94,7 +94,7 @@ Runtime Adapter 是主机 B 上的可插拔适配器，负责实现统一接口�
 - Allegro SKILL Adapter + Allegro SKILL Bridge；
 - 未来其他应用自己的 Runtime Adapter。
 
-Adapter 可以作为 Skill 配套组件或独立安装包发布，但不得把专业工作流决策塞进 AirBridge 核心。
+Adapter 可以作为 Skill 配套组件或独立安装包发布，但必须保持薄接入层边界：只处理进程、安装路径、Bridge 初始化、请求传输和运行时状态；不得解释 Dbo / SKILL 等领域 API、对象模型或专业工作流。具体边界以《AirBridge 职责边界与 Skill 集成规范 v1.0》为准。
 
 ### 3.5 Runtime Profile
 
@@ -120,6 +120,12 @@ Profile 是声明式运行配置，由 Adapter / 专业软件集成包注册，A
 上例仅为设计示意。当前尚未实现 Profile Registry。
 
 对于当前 Capture 需求，Profile 的冲突组应能覆盖主机 B 上已有的 Capture 实例，包括用户手动启动的 Capture。不能只检查 AirBridge 自己启动并登记的进程。若发现旧实例无法优雅退出，必须停止新会话启动并通知用户，不得强制杀进程。
+
+### 3.6 Skill 与 Adapter 的专业边界
+
+Agent Skill 持有专业 API、对象模型、版本 API 兼容、操作流程和保存决策。Runtime Adapter 只处理目标软件进程、Bridge 初始化、不透明脚本投递和运行状态回传。Core 不分析脚本正文，也不内置专业 API 方法表。
+
+例如，Capture 17.2 / 17.4 / 23.1 的 Dbo API 差异由 Capture Skill 版本适配包维护；Adapter 只报告它实际发现并启动的 Capture / Tcl 版本。具体规范见《AirBridge 职责边界与 Skill 集成规范 v1.0》。
 
 ## 4. Session 模型
 
@@ -171,21 +177,19 @@ Session 状态：
 
 **不得用静态、可复用的 ready 文件作为唯一启动成功判据。** 启动文件应按 session_id 隔离，并通过临时文件 + 原子重命名发布。
 
-### 5.1 Capture Profile 的已验证行为
+### 5.1 Capture Runtime Adapter 的已验证行为
 
-当前 OrCAD Capture 17.2 已验证：
+2026-11-12 在主机 B / OrCAD Capture SPB 17.2-2016 / Tcl 8.6.0 中已实测：
 
-- Capture 启动时自动加载 capAutoLoad 目录内的 Tcl 文件；
-- Tcl Bridge 可以通过 Tcl after 轮询本地任务队列；
-- 可以在同一 Tcl Interpreter 内连续执行任务；
-- 可以调用 Open 打开 OPJ；
-- 可以使用 GetActivePMDesign、Dbo Session 的 GetActiveDesign 取得活动设计；
-- 可以使用 OPage 切换页面；参数顺序为 schematic name、page name；
-- 页面级 GetActivePage 需要先有 SchematicView 上下文；
-- 可以通过 Tcl 调用 Project Manager 的 File::Save；
-- Exit 可以正常关闭 Capture。
+- Capture 启动时自动加载 capAutoLoad 目录内的生成式 Tcl Bridge；
+- Bridge READY / LOCK 与本次 session_id、startup_nonce 和真实 Capture PID 一致；
+- Tcl Bridge 可在 Capture 自身事件循环中轮询请求队列；
+- 同一 Capture PID / Tcl Interpreter 可连续处理多个独立请求，并保留 Tcl 全局状态；
+- 请求错误不会导致 Bridge / Interpreter 失效；同一 Session 并发请求按顺序执行；
+- Capture PID 6648 可通过 WM_CLOSE 正常退出，独立进程检查确认退出；后续启动得到新 PID 3776 和新 Session；
+- 重启后的 Bridge 能继续处理连续请求。
 
-这些是当前 Capture 17.2 的实测基线，不意味着所有 Cadence 版本都具有完全相同行为。详细证据见《Capture Tcl Bridge 实测基线》。
+这些证据验证的是 Runtime Adapter 的进程接入、Bridge 初始化、请求传输和执行回传，不构成 Dbo API 的调用规范。Open、OPage、GetActivePage、Dbo 对象访问及保存工作流等专业 API 操作，应由对应 Skill 实现和验收。详细现场记录见《Capture Tcl Bridge 实测基线》。
 
 ## 6. Request 执行模型
 
@@ -247,17 +251,29 @@ Capture 的 Tcl Bridge 使用 after 轮询文件队列是已验证的原型。�
 
 ## 11. 与当前代码的关系
 
-当前 main 分支状态：
+P1.4 后，B 端 RequestBroker 独立负责 Request 幂等、结果持久化和缓存重放。P1.5 将实际 Engine 调用接入 RuntimeAdapterRegistry；P1.6 再为 Capture Tcl 引入专用 Adapter：
 
-- EDAExecutor 负责一次性脚本启动、bootstrap、完成标记和进程跟踪；
-- managed_processes 只跟踪当前 AirBridge 进程启动的应用；
-- keep_open=True 不代表已存在 Capture 能接收第二条脚本；
-- 当前 EDA_TASK_FIN 和 SHELL_RESULT 以控制台日志为主，尚未提供完整 HTTP 请求结果关联；
-- 当前一次性 bootstrap 的完成标记不能可靠区分 Tcl 成功与失败。
+- Tcl EDA_TASK_SUBMIT → RequestBroker → RuntimeAdapterRegistry（capture-tcl-session）→ CaptureTclAdapter → CaptureTclBridgeSession → capAutoLoad Bridge；
+- Allegro SKILL EDA_TASK_SUBMIT → RequestBroker → RuntimeAdapterRegistry（legacy-cadence-oneshot）→ LegacyCadenceOneShotAdapter → EDAExecutor；
+- Shell 请求 → RequestBroker → RuntimeAdapterRegistry（legacy-shell-process）→ LegacyShellProcessAdapter → ShellEngine；
+- RequestBroker 只负责请求去重、结果持久化和重放，不解析 Tcl / SKILL / Shell；
+- Capture Bridge 由 capAutoLoad 自动 source，在 Capture 自己的 Tcl 事件循环内以 after 轮询 Session 独立文件队列；单个 Session 同时只执行一条请求；
+- READY 校验 session_id、随机 startup_nonce、Capture PID 和 Tcl 版本；结果携带 request_id、payload hash、return code、输出、错误信息、PID 和时间；
+- Capture 请求超时 / 进程退出返回 UNKNOWN，Broker 缓存 UNKNOWN，不自动重放可能已产生副作用的脚本；
+- P1.7 新增通用 ProcessSupervisor：枚举所有匹配进程（含手动启动），检查窗口和阻塞提示，验证 PID 对应的映像身份后仅发送 WM_CLOSE，并等待进程句柄实际退出；任何进程残留、扫描期间出现新实例、保存/确认提示或无法识别的窗口都会阻断启动；
+- Worker 的 Capture Tcl Session 启动路径已接入 Supervisor；健康的 Worker-owned Capture Session 仍直接复用，不会先关闭再启动；
+- Allegro ProcessSpec 已定义；P1.9.1 已将 Allegro SKILL 独立路由到专用 Adapter / Profile，但仍沿用已验证的 EDAExecutor 启动与关闭逻辑，尚未接入 ProcessSupervisor；
+- 本机 Registry 注册了 Capture Profile，但握手仍保持 profiles=[]；不能据此宣称主机 A 已确认主机 B 的 Capture Profile 可用。
 
-目标改造应新增独立的 Session Broker / Process Supervisor / Runtime Adapter 层。EDAExecutor 在迁移期间作为 legacy one-shot 兼容层，不应继续膨胀为 Session Broker。
+P1.6 软件 CI 已验证文件队列契约、READY 校验、结果解析、超时 UNKNOWN、Worker Profile 路由与重复请求去重；新版 Bridge 已于 2026-11-12 在真实 Capture 17.2 / Tcl 8.6.0 中完成自动加载、连续请求、错误恢复、并发串行和重启复用实机验证。P1.7 ProcessSupervisor 软件 CI 覆盖状态机、进程发现、映像路径、窗口枚举和阻断策略；此外，真实 Capture Start Page PID 6648 的 WM_CLOSE 与实际退出也已在主机 B PASS。保存提示、多手动实例、无主窗口及无响应场景仍待实机验收。Dbo API 命令枚举和调用研究属于 Capture Skill 的专业 API 范围，不是 Core / Adapter 的产品接口。
 
 ## 12. 实施阶段与验收
+
+
+### 专业 API 研究资料的归属
+
+当前仓库中保留的 Capture Dbo API 命令清单和 Tcl 示例索引，是此前技术研究的历史资料，不构成 AirBridge Core 或 Capture Runtime Adapter 的接口契约。后续应迁入 Capture Skill 项目；本仓库仅保留 Runtime Adapter 的接入证据和必要的通用协议文档。
+
 
 | 阶段 | 工作 | 核心验收 |
 |---|---|---|
@@ -269,9 +285,12 @@ Capture 的 Tcl Bridge 使用 after 轮询文件队列是已验证的原型。�
 | P1.6 | Capture Tcl Adapter 集成 | capAutoLoad READY、同 PID 连续请求、错误回传 |
 | P1.7 | 通用 Process Supervisor | 先关闭全部冲突实例，确认退出后再启动 |
 | P1.8 | Capture Skill 端到端验收 | 打开工程、页面操作、保存、Exit、进程退出 |
-| P1.9 | Allegro Adapter 验证 | 不影响既有 SKILL 工作流 |
+| P1.9.1 | Allegro SKILL Adapter / Profile 隔离 | 专用路由、类型校验、参数与结果兼容；不改变既有 SKILL 工作流 |
+| P1.9.2 | Allegro ProcessSupervisor / Session 生命周期评估 | 先明确手动实例边界、优雅关闭和 GUI 兼容性，再决定是否实施 |
 
 验收必须包含：同一 Session 多次请求、请求重复投递、A/B 断连恢复、错误回传、长任务等待超时、关闭过程中的保存提示、Broker 重启以及 Capture 非正常退出。
+
+**当前实现边界（2026-11-13）：** P1.2–P1.4 协议协商、Request ID 关联与 B 端 RequestBroker 已通过软件 CI；P1.5 Runtime Adapter / Profile 的 Run #62 通过 66 项；P1.6 / P1.7 软件回归保留 Run #88（90 项）等证据。2026-11-12 已在真实主机 B / Capture 17.2 / Tcl 8.6.0 完成正式 Bridge 自动加载、持久 Interpreter、多请求、错误隔离、并发串行、Start Page 正常关闭、关闭后新 Session 重启及状态复用；实机记录见《Capture Tcl Bridge 实测基线》。P1.7 保存提示、多手动实例、无主窗口和无响应场景仍待实机验收。当前对端 CAPABILITIES 仍返回 profiles=[]；P1.8 Host-A E2E harness 的 Run #92（98 项软件 CI）通过，但完整 Capture Skill 工作流 E2E 尚未完成。SESSION_CREATE / SESSION_EXEC / SESSION_CLOSE 专用协议、完整每 Session FIFO Broker 和 Allegro 生命周期扩展仍待实现。AirBridge / Runtime Adapter / Skill 的规范职责边界以《AirBridge 职责边界与 Skill 集成规范 v1.0》为准。
 
 ---
 
@@ -284,4 +303,10 @@ Capture 的 Tcl Bridge 使用 after 轮询文件队列是已验证的原型。�
 5. Session ID、Request ID 与 ABFP seq_id 相互独立。
 6. 新实例启动前，必须先优雅关闭所有匹配的旧进程并确认退出。
 7. Capture Bridge 通过 capAutoLoad 自动初始化；文件队列是当前已验证的 Adapter 原型。
-8. 本文为设计基线，代码实现和版本兼容仍需逐阶段验收。
+8. Dbo Tcl API、Allegro SKILL API 和专业工作流由相应 Skill 负责，不进入 AirBridge Core / 通用 Adapter。
+9. 本文为设计基线，代码实现和版本兼容仍需逐阶段验收。
+
+
+### P1.9.1 增量状态（2026-11-12）
+
+Allegro SKILL 已由独立 `AllegroSkillAdapter` / `allegro-skill-oneshot` Profile 接管路由。该适配器只做脚本类型验证和参数/结果适配，实际仍调用既有 EDAExecutor，未改变 Allegro 启动命令、SCR / SKILL 文件生成、BRD 路径 sidecar、交互式 `axlOpenDesign()`、`keep_open` 或独立关闭路径。ProcessSupervisor 对 Allegro 的集成暂缓，不会主动扫描或关闭用户手动启动的 Allegro。软件 CI 已由 [Run #94](https://github.com/scanligithub/airbridge/actions/runs/43158226213) 验收：81 项单元、12 项 A/B Worker 模拟、9 项 HTTP 集成，共 102 项通过、0 项失败。Host B Allegro 17.2 GUI 回归仍待执行。

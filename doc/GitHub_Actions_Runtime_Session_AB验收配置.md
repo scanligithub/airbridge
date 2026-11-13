@@ -1,61 +1,155 @@
-# GitHub Actions：Runtime Session A/B 实机验收
+# GitHub Actions：Runtime Session 云端 A/B 软件验收
 
-## 两个 Workflow
+## 目标与运行环境
 
-- **runtime-session-a-acceptance.yml**：只在主机 A 的 Windows self-hosted runner 上运行。
-- **runtime-session-b-acceptance.yml**：只在主机 B 的 Windows self-hosted runner 上运行。
+本项目不依赖用户提供 Windows 实体机，也不注册 self-hosted runner。CI 使用 GitHub 托管的 `windows-2025` 标准 Runner；每个 Job 由 GitHub 自动分配临时 Windows 虚拟机。
 
-每个 Workflow 都会：
+当前仓库为公开仓库，GitHub 官方文档列明公开仓库的标准 GitHub-hosted Runner 免费且不限标准 Runner 使用量。Runner 的标签和规格以 GitHub 官方文档为准：
+https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job
 
-1. 检出本次触发的 Git commit；
-2. 运行 test_runtime_session_protocol.py；
-3. 访问本机 127.0.0.1:8888 的 Runtime API；
-4. 主动发送一次 HELLO 协商请求；
-5. 等待本机 AirBridge 确认对端已协商 runtime-session.v1，且具备 handshake 功能；
-6. 验证当前 P1.2 没有错误地宣称已支持 Session 创建。
+## CI 分层
 
-两个 Workflow 通过同一次 feature 分支 push 并行触发。它们分别验证 A、B 两侧的本地状态，不会模拟或伪造串口链路结果。
+工作流：`.github/workflows/runtime-session-ci.yml`
 
-## 前提：在 A、B 两台 Windows 主机分别注册 Runner
+### 第一层：协议、A 端跟踪器与 B 端 Broker 单元测试
 
-GitHub 云端 runner 无法访问你的本机 COM 串口、Windows AirBridge 进程或 Capture 桌面环境，因此实机验收必须使用 self-hosted runner。
+- 在 GitHub 托管 Windows 2025 虚拟机上运行；
+- 执行 `test/test_runtime_session_protocol.py`、`test/test_request_tracker.py`、`test/test_request_broker.py` 和 `test/test_runtime_adapter.py`；
+- 覆盖 JSON Envelope、UUID、schema、载荷上限、ABFP 帧编解码、A 端 waiter 状态 / TTL、B 端 SQLite 去重、相同 ID 不同 Payload 冲突、并发重复登记、Broker 重启恢复、心跳检测、容量限制和结果缓存裁剪；并验证 RuntimeAdapter / RuntimeProfile 注册、能力子集约束、只读 Request Payload、Profile 分派、禁用 / 未知 Profile 拒绝，以及 EDA / Shell 兼容适配器的参数与结果透传。
 
-在 GitHub 仓库：
+### 第二层：A/B 双端软件模拟
 
-1. 打开 Settings → Actions → Runners → New self-hosted runner；
-2. 选择 Windows / x64；
-3. 按 GitHub 当前页面给出的命令，在主机 A 注册 runner，并添加自定义标签 airbridge-a；
-4. 在主机 B 重复注册，添加自定义标签 airbridge-b；
-5. 确认两个 Runner 在仓库 Runner 列表中均显示 Idle / 在线。
+- 在另一台 GitHub 托管 Windows 2025 虚拟机上运行；
+- 安装 PySide6 和 pyserial，以便导入 AirBridge 当前生产模块；
+- 创建两个真实的 `SerialWorker` 对象，但不启动 GUI、线程或真实串口；
+- 通过内存双向链路传输 `ABFPFrame.pack()` 产生的二进制帧，并由对端 `FrameParser.feed()` 解析，再调用生产代码的帧处理方法；
+- 对 A、B 两端分别发起 HELLO，验证双向 CAPABILITIES 响应及 correlation_id 关联；
+- 验证双方协商 `handshake`、`request.correlation` 与 `request.deduplication`，且 `profiles=[]`、`can_create_session=false`；
+- 验证无关 correlation_id 的 CAPABILITIES 被忽略，链路重置会结束旧 waiter；
+- 通过真实 ABFP 内存双向链路，将 EDA_TASK_SUBMIT / EDA_TASK_FIN 与 SHELL_EXEC / SHELL_RESULT 在两端 Worker 之间往返，验证 UUID request_id 被原样关联；
+- 重放相同 EDA / Shell 帧，验证 B 端执行函数只被调用一次且返回缓存结果；相同 ID、不同 Payload 返回 `REQUEST_ID_CONFLICT`；
+- 通过真实本地 HTTP Server 端口测试 EDA / Shell POST、pending 轮询、异步 Shell accepted、调用方指定 request_id、重复 POST 返回 409、缺少去重能力及串口断开时拒绝提交；
+- 验证无效 Shell timeout 在发送任何 ABFP 帧之前被拒绝。
 
-注册命令由 GitHub 页面现场生成，包含短时有效 token。不要把 token 发到聊天、写入仓库或提交到日志。
+这层不是另写一套替代协议的模拟器；它驱动 `SerialWorker` 中的生产握手 / 响应处理方法，并启动实际 `AntigravityIPCServer` 进行 HTTP 测试。ABFP 帧仍经过真实打包和流式解析。
 
-标准标签 self-hosted、windows、x64 由 Runner 自动提供；本仓库 Workflow 额外要求 airbridge-a 或 airbridge-b 标签。
+## 触发方式
 
-## 每次验收前
+- Push 到 `feature/runtime-session-p1-2` 且修改协议实现、握手实现、相关测试或该 Workflow 时自动运行；
+- 配置了 `workflow_dispatch` 手动触发入口；按照 GitHub 规则，手动触发要求该 Workflow 文件存在于默认分支，因此本功能分支目前依靠 `push` 路径过滤器自动触发，合并到 `main` 后才可从 UI 手动运行；
+- 不需要注册 Runner、不需要配置仓库 Secrets，也不需要用户提供 Windows 机器。
 
-- A、B 两台机器都运行同一提交版本的 AirBridge；
-- 两端串口链路已连接，AirBridge 本地 HTTP API 监听 127.0.0.1:8888；
-- A/B 端各自的 API /api/v1/runtime/capabilities 可从本机访问；
-- Python 3 可在 Runner 账号的 PATH 中通过 python 命令运行；
-- Runner 在线，且分别带有正确的自定义标签。
+## 验收结果的边界
 
-Workflow 不会替用户启动 AirBridge、连接串口、启动 Capture 或关闭现有 Cadence 进程。
+CI PASS 代表：协议、A 端 RequestTracker 和 B 端 SQLite RequestBroker 单元测试通过；生产 `SerialWorker` 的双端握手 / EDA / Shell 请求关联与重复帧去重通过内存 ABFP 链路模拟；A 端本地 HTTP EDA / Shell 请求接口通过集成测试。
+
+CI PASS **不代表**以下内容已经实测：
+
+- 两台独立 Windows 主机之间的真实 COM/USB/串口物理通信；
+- 串口驱动、波特率、电气链路、硬件丢包和真实链路重连；
+- Capture / Allegro 已安装、已启动或能够执行 Tcl / SKILL；
+- 真实远端 Cadence / Shell 进程执行；真实 Capture 17.2 capAutoLoad 是否加载本轮生成的正式 Bridge、真实 Tcl / Dbo 命令执行与 GUI 消息循环行为；
+- 真实 Capture.exe 的 WM_CLOSE、多个实例关闭、保存提示、无响应退出阻断和重启生命周期；P1.7 的这部分目前仅通过 FakeProcessBackend 状态机测试；
+- Session Create / Close 专用 ABFP 消息、统一 SESSION_EXEC、每 Session FIFO Broker、完整 Skill 保存 / Exit 生命周期；
+- Allegro 旧 SKILL 执行路径尚未接入 ProcessSupervisor，留待 P1.9。
+
+由于当前没有可供本项目使用的 Windows 实体机，真实物理链路验收暂不纳入自动 CI；不得把软件模拟 PASS 写成物理 A/B 实测 PASS。后续如果获得实际硬件环境，可另行增加可选的硬件在环验收，而不影响云端 CI。
 
 ## 结果解释
 
-- PASS：该主机本地 AirBridge 已通过协议单元测试，并确认其对端完成 Runtime Session v1 握手。
-- queued：GitHub 尚未找到匹配标签且在线的 Runner，或 Runner 暂时忙碌；这不是测试 PASS。
-- API 不可达：AirBridge 尚未运行，或本机 API 未监听指定地址/端口。
-- unconfirmed：未得到对端 CAPABILITIES，可能是对端未升级、串口未连通或链路没有响应；不能直接断言是版本不兼容。
-- no_common_protocol / handshake_not_supported：对端明确未声明双方需要的协议/握手能力。
-
-本验收只覆盖 P1.2 的能力协商，不代表 Session Create、Capture Tcl 执行、结果关联、进程监督或关闭流程已通过。
+- **Protocol unit tests PASS**：协议 Envelope 与 ABFP 帧契约通过；
+- **A/B simulation PASS**：两个生产 SerialWorker 状态机在模拟链路上完成双向握手，关联及重置行为符合预期；P1.6 额外验证 EDA Tcl 请求选择 Capture Session Adapter、结果 PID / Tcl 元数据回传及 request_id 重复投递不重复执行；
+- **Capture Bridge unit PASS**：Python Bridge 客户端、capAutoLoad Tcl 源码生成、请求/结果文件契约、READY nonce/PID 校验、错误与 UNKNOWN 状态映射通过模拟器测试；不等同 Capture 真实 Tcl Interpreter 实机测试；
+- **CI FAIL**：查看对应 Job 日志，按失败测试定位；
+- 新工作流不再依赖 `airbridge-a` / `airbridge-b` 自托管 Runner；此前旧工作流创建的 queued 运行记录可能仍留在 Actions 历史中，不属于新的云端 CI。
 
 ## 安全边界
 
-- Runner 使用仓库级标签定向，不接受通用 windows-latest 替代实机验收。
-- Workflow 仅授予 contents: read。
-- 不使用 GitHub Secrets 保存 Runner 注册 token；token 仅用于首次注册。
-- 不在 Workflow 中执行任意远程 Shell 命令。
-- 不把 COM 端口、Cadence 工程或设计文件上传为 Action artifact。
+- Workflow 权限仅为 `contents: read`；
+- 不启动任意远程 Shell；
+- 不访问用户主机、COM 端口或 Cadence 工程；
+- 不上传设计文件或真实工程数据作为 Action artifact。
+
+## P1.5 软件 CI 实测记录
+
+- GitHub Actions Run：[#62](https://github.com/scanligithub/airbridge/actions/runs/43146376763)
+- 测试提交：`322904a06d25aa522574a50dd885277913e30d73`
+- Protocol / RequestTracker / Runtime Adapter / RequestBroker 单元测试：46 项通过；
+- A/B 生产 SerialWorker 双端软件模拟：11 项通过；
+- HTTP correlated request 集成：9 项通过；
+- **合计 66 项通过，两个 Job 均成功。**
+
+该结果是 GitHub 托管 Windows Runner 上的软件级验收。测试通过内存 ABFP 双向链路模拟两个 Worker，不使用物理 COM 端口，也未启动真实 Capture 或 Allegro。因此不能把此 CI 结果解释为双主机串口实测、Capture 常驻 Tcl Bridge 验收或专业软件 GUI 生命周期验收。
+
+## P1.6 Capture Tcl Adapter 软件 CI 实测记录
+
+- GitHub Actions Run：[#76](https://github.com/scanligithub/airbridge/actions/runs/43148279572)
+- 测试提交：`9fc895c56c34f9f18c30fb573df8b7aa981485f9`
+- Protocol：10 项；RequestTracker：11 项；Capture Tcl Bridge：12 项；Runtime Adapter：11 项；RequestBroker：15 项；
+- 单元测试合计：59 项通过；
+- A/B 生产 SerialWorker 软件模拟：12 项通过（包含 Capture Profile 路由、PID / Tcl 元数据回传、相同 request_id 去重）；
+- HTTP correlated request 集成：9 项通过；
+- Runtime / Capture Bridge / Worker 模块 `py_compile`：通过；
+- **合计 80 项测试通过，两个 Job 均成功。**
+
+P1.6 测试中，A/B 链路由内存 ABFP 双向模拟；Capture Adapter 使用 Fake Capture Bridge；Bridge 文件队列测试使用 Python 确定性模拟器。GitHub Runner 没有运行 Cadence Capture，也没有真实 COM / USB 串口。因此本轮 PASS 只覆盖软件 Adapter、文件协议、READY 校验、请求路由、去重、结果映射和超时状态；不覆盖真实 Capture 17.2 自动加载新版 Bridge、Tcl/Dbo API 执行、GUI 消息循环、工程保存或 Exit 生命周期。以上实机验收仍待主机 B 执行。
+
+## P1.7 Process Supervisor 软件 CI 实测记录
+
+- GitHub Actions Run：[#85](https://github.com/scanligithub/airbridge/actions/runs/43149369815)
+- 测试提交：`42ba2e31c3902ae39abe249187360147b0d15151`
+- Protocol / RequestTracker / ProcessSupervisor / Capture Bridge / Runtime Adapter / RequestBroker 单元测试：68 项通过；
+- A/B 生产 SerialWorker 软件模拟：12 项通过；
+- HTTP correlated request 集成：9 项通过；
+- **合计 89 项通过，两个 Job 均成功。**
+
+ProcessSupervisor 专项测试 9 项，其中 Windows-only Runner 集成测试实际通过 `tasklist` 发现当前 Python 进程、查询 executable path 并调用 EnumWindows 枚举窗口；FakeProcessBackend 测试覆盖多实例优雅关闭、模态提示阻断、超时、无可见主窗口、Allegro/Capture 匹配隔离及关闭期间新进程出现等场景。
+
+该 Run 没有在 Runner 上关闭真实 Capture.exe。它验证了 Win32 发现 / 映像查询 / 窗口枚举 API 可调用，以及 Supervisor 状态机的安全策略；实际 Cadence WM_CLOSE、保存提示和进程退出必须在主机 B 实机验收。
+
+## Run #88：P1.6 / P1.7 完整回归与 Tcl 8.6 解释器执行
+
+- GitHub Actions Run：[#88](https://github.com/scanligithub/airbridge/actions/runs/43150162732)
+- 提交：`309a13f582b1d6aa1e58ad043f64fd002459dfe2`
+- 单元层：Protocol 10、RequestTracker 11、ProcessSupervisor 9、Capture Tcl Bridge 13、Runtime Adapter 11、RequestBroker 15，共 **69 项**；
+- A/B 生产 SerialWorker 模拟：12 项；
+- HTTP correlated request：9 项；
+- **总计 90 项通过、0 项失败，两个 Job 均成功。**
+
+新增 Tcl 解释器回归通过 Python 3.12 自带的 Tcl 8.6 解释器直接 source 本轮生成的 bridge.tcl，执行真实 Tcl 命令并验证 READY nonce / PID、文件队列请求认领、脚本返回值、stdout 捕获和结果文件。该测试比 Python 模拟器更接近真实 Tcl 运行时，但不提供 Capture Dbo API、Capture GUI 消息泵或工程对象，因此仍不能替代真实 Capture 17.2 实机验收。
+
+## Run #91：P1.8 Host-A Capture Session E2E harness 回归
+
+- GitHub Actions Run：[#91](https://github.com/scanligithub/airbridge/actions/runs/43151264299)
+- 测试提交：`48cc55597a684296be500d76982dbb74b8201bec`
+- 单元层 77 项：Protocol 10、RequestTracker 11、Host-A E2E harness 8、ProcessSupervisor 9、Capture Tcl Bridge 13、Runtime Adapter 11、RequestBroker 15；
+- A/B 生产 SerialWorker 软件模拟：12 项；
+- HTTP correlated request 集成：9 项；
+- **合计 98 项通过、0 项失败，两个 Job 均成功。**
+
+Host-A harness 的 8 项测试覆盖 Tcl Probe 生成、结果报告解析、request_id / 状态拒绝、启动宽限、Host-B 绝对 DSN 路径、PID 保持和命令可用性检查。CI 使用 Mock HTTP / Mock Runtime 结果，不连接真实 Host B；真实 Capture Session E2E 必须在 Host A / Host B 运行 scripts/capture_session_e2e.py 后独立验收。
+
+## Run #92：P1.8 Host-A Capture Session E2E 绝对 DSN 路径检查
+
+- GitHub Actions Run：[#92](https://github.com/scanligithub/airbridge/actions/runs/43151269632)
+- 测试提交：`063d79297907a72377ef9aee15727e0924a7ab39`
+- 单元层：77 项通过（含 Host-A E2E harness 8 项，其中验证拒绝相对 DSN 路径）；
+- A/B 生产 SerialWorker 软件模拟：12 项通过；
+- HTTP correlated request 集成：9 项通过；
+- **合计 98 项通过、0 项失败，两个 Job 均成功。**
+
+Run #92 是 Host-A E2E harness 当前的最新 CI 依据。它仍使用 Mock HTTP / Mock Runtime，不连接真实 Host B 或 Capture 17.2；真实 Capture Session E2E 只有在主机 A 执行脚本并通过两个连续请求的 PID / Tcl 状态检查后才能 PASS。
+
+
+
+---
+
+## P1.9.1 Allegro SKILL Adapter 回归（Run #94）
+
+- 运行：[Runtime Session CI Run #94](https://github.com/scanligithub/airbridge/actions/runs/43158226213)
+- Commit：`7d6ecedee4177d3b1b5d1604b062383ee334ffb7`
+- Protocol Unit Job：81 项通过（包含 Allegro Adapter 新增测试）
+- A/B duplex + HTTP Job：12 项 Worker 模拟 + 9 项 HTTP 集成通过
+- 总计：**102 项通过，0 项失败；两个 Job 均成功**
+
+Run #94 验证软件层 Profile 路由与既有执行器兼容，没有启动或控制真实 Allegro GUI。Host B Allegro 17.2 的 BRD 打开 / 关闭回归仍需单独执行。
