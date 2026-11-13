@@ -1,0 +1,32 @@
+name: AirBridge MCP Gateway
+
+on:
+  push:
+    paths:
+      - "mcp_gateway/**"
+      - ".github/workflows/mcp-gateway.yml"
+  pull_request:
+    paths:
+      - "mcp_gateway/**"
+      - ".github/workflows/mcp-gateway.yml"
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: mcp_gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install gateway package
+        run: python -m pip install .
+      - name: Compile
+        run: python -m compileall -q airbridge_mcp_gateway tests
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
