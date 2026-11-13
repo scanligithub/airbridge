@@ -1689,6 +1689,10 @@ class AntigravityIPCServer:
     port: int = 8888,
     security_store: Optional[AgentSecurityStore] = None,
     allow_eda_execute: Optional[bool] = None,
+    read_requests_per_minute: Optional[int] = None,
+    status_requests_per_minute: Optional[int] = None,
+    execute_requests_per_minute: Optional[int] = None,
+    max_pending_eda_per_agent: Optional[int] = None,
   ):
     self.worker = worker
     self.port = port
@@ -1696,6 +1700,29 @@ class AntigravityIPCServer:
     if allow_eda_execute is None:
       allow_eda_execute = os.environ.get("AIRBRIDGE_ALLOW_EDA_EXECUTE", "0").strip().lower() in ("1", "true", "yes", "on")
     self.allow_eda_execute = bool(allow_eda_execute)
+
+    def _positive_limit(value: Optional[int], env_name: str, default: int) -> int:
+      raw = os.environ.get(env_name, str(default)) if value is None else value
+      try:
+        parsed = int(raw)
+      except (TypeError, ValueError) as exc:
+        raise ValueError(f"{env_name} must be a positive integer") from exc
+      if isinstance(raw, bool) or parsed < 1:
+        raise ValueError(f"{env_name} must be a positive integer")
+      return parsed
+
+    self.read_requests_per_minute = _positive_limit(
+        read_requests_per_minute, "AIRBRIDGE_AGENT_READ_RPM", 60
+    )
+    self.status_requests_per_minute = _positive_limit(
+        status_requests_per_minute, "AIRBRIDGE_AGENT_STATUS_RPM", 120
+    )
+    self.execute_requests_per_minute = _positive_limit(
+        execute_requests_per_minute, "AIRBRIDGE_AGENT_EXECUTE_RPM", 5
+    )
+    self.max_pending_eda_per_agent = _positive_limit(
+        max_pending_eda_per_agent, "AIRBRIDGE_AGENT_MAX_PENDING_EDA", 1
+    )
     self._server = None
     self._server_thread = None
     self._server_ready = threading.Event()
@@ -1705,18 +1732,24 @@ class AntigravityIPCServer:
     worker_ref = self.worker
     security_ref = self.security_store
     allow_eda_execute = self.allow_eda_execute
+    read_requests_per_minute = self.read_requests_per_minute
+    status_requests_per_minute = self.status_requests_per_minute
+    execute_requests_per_minute = self.execute_requests_per_minute
+    max_pending_eda_per_agent = self.max_pending_eda_per_agent
 
     class Handler(BaseHTTPRequestHandler):
 
       def log_message(self, format, *args):
         pass
 
-      def _reply_json(self, status_code: int, data: dict):
+      def _reply_json(self, status_code: int, data: dict, extra_headers: Optional[dict] = None):
         body = json.dumps(data).encode("utf-8")
         try:
           self.send_response(status_code)
           self.send_header("Content-Type", "application/json; charset=utf-8")
           self.send_header("Content-Length", str(len(body)))
+          for header_name, header_value in (extra_headers or {}).items():
+            self.send_header(str(header_name), str(header_value))
           self.end_headers()
           self.wfile.write(body)
         finally:
@@ -1840,6 +1873,34 @@ class AntigravityIPCServer:
           })
           return False
 
+        if required_scope == "request.read":
+          quota_action = "status"
+          quota_limit = status_requests_per_minute
+        elif required_scope == "eda.execute":
+          quota_action = "execute"
+          quota_limit = execute_requests_per_minute
+        else:
+          quota_action = "api"
+          quota_limit = read_requests_per_minute
+        retry_after = security_ref.consume_rate_limit(
+            principal.agent_id,
+            quota_action,
+            limit=quota_limit,
+            window_seconds=60.0,
+        )
+        if retry_after:
+          self._audit_reason = "AGENT_RATE_LIMITED"
+          self._reply_json(429, {
+              "success": False,
+              "state": "rate_limited",
+              "error": {
+                  "code": "AGENT_RATE_LIMITED",
+                  "action": quota_action,
+                  "retry_after_seconds": retry_after,
+              },
+          }, extra_headers={"Retry-After": str(retry_after)})
+          return False
+
         if required_scope == "request.read" and not security_ref.can_read_request(
             self._audit_request_id or "", principal
         ):
@@ -1854,6 +1915,31 @@ class AntigravityIPCServer:
 
         self._principal = principal
         self._audit_decision = "allowed"
+        try:
+          # Persist an admission record before the API handler can reach the
+          # Runtime. If audit storage is unavailable, fail closed.
+          security_ref.audit_request(
+              agent_id=principal.agent_id,
+              token_id=principal.token_id,
+              method=method,
+              path=path,
+              decision="admitted",
+              http_status=200,
+              reason_code="REQUEST_ADMITTED",
+              request_id=self._audit_request_id,
+          )
+        except Exception:
+          self._audit_decision = "denied"
+          self._audit_reason = "AGENT_AUDIT_UNAVAILABLE"
+          self._reply_json(503, {
+              "success": False,
+              "state": "unavailable",
+              "error": {
+                  "code": "AGENT_AUDIT_UNAVAILABLE",
+                  "message": "Audit storage is unavailable; request was not admitted.",
+              },
+          })
+          return False
         return True
 
       def _set_payload_audit(self, raw_body: str):
@@ -1981,9 +2067,27 @@ class AntigravityIPCServer:
                 },
             )
             return
+          if not security_ref.begin_execution(
+              self._principal.agent_id,
+              request_id,
+              max_inflight=max_pending_eda_per_agent,
+          ):
+            self._audit_reason = "AGENT_EXECUTION_IN_FLIGHT_LIMIT"
+            self._reply_json(429, {
+                "success": False,
+                "state": "rate_limited",
+                "request_id": request_id,
+                "error": {
+                    "code": "AGENT_EXECUTION_IN_FLIGHT_LIMIT",
+                    "max_pending": max_pending_eda_per_agent,
+                },
+            }, extra_headers={"Retry-After": "1"})
+            return
+
           try:
             security_ref.bind_request_owner(request_id, self._principal.agent_id)
           except AgentSecurityError:
+            security_ref.end_execution(self._principal.agent_id, request_id)
             self._reply_json(409, {
                 "request_id": request_id,
                 "state": "already_registered",
@@ -2008,6 +2112,7 @@ class AntigravityIPCServer:
             )
           except Exception as exc:
             worker_ref.request_tracker.fail(request_id, str(exc))
+            security_ref.end_execution(self._principal.agent_id, request_id)
             self._reply_json(503, {"request_id": request_id, "state": "not_submitted", "error": str(exc)})
             return
 
@@ -2017,6 +2122,52 @@ class AntigravityIPCServer:
             wait_ms = min(max(timeout + 10, 5) * 1000, 300000)
           wait_ms = max(0, min(wait_ms, 300000))
           result = worker_ref.request_tracker.wait(request_id, wait_ms / 1000.0)
+          if result.get("state") in ("completed", "failed"):
+            security_ref.end_execution(self._principal.agent_id, request_id)
+          else:
+            owner_agent_id = self._principal.agent_id
+
+            def release_when_request_finishes():
+              try:
+                final_state = worker_ref.request_tracker.wait(request_id, None).get("state")
+                if final_state in ("completed", "failed", "unknown"):
+                  final_http_status = (
+                      200 if final_state == "completed"
+                      else 502 if final_state == "failed"
+                      else 503
+                  )
+                  try:
+                    security_ref.audit_request(
+                        agent_id=owner_agent_id,
+                        token_id=self._principal.token_id,
+                        method="ASYNC",
+                        path="/api/v1/eda/execute",
+                        decision=final_state,
+                        http_status=final_http_status,
+                        reason_code="ASYNC_EXECUTION_FINALIZED",
+                        request_id=request_id,
+                    )
+                  except Exception:
+                    # Admission was durably audited before dispatch; the
+                    # final outcome event may be absent if storage is failing.
+                    if final_state in ("unknown",):
+                      return
+                  if final_state in ("completed", "failed"):
+                    security_ref.end_execution(owner_agent_id, request_id)
+                # UNKNOWN / not_found means the outcome cannot be confirmed.
+                # Keep the persistent reservation until its conservative TTL.
+              except Exception:
+                # Retain the reservation rather than freeing quota on uncertainty.
+                return
+
+            # Pending, accepted, and unknown requests keep the per-Agent
+            # reservation. The waiter releases only on a known terminal result.
+            if result.get("state") in ("pending", "accepted"):
+              threading.Thread(
+                  target=release_when_request_finishes,
+                  name=f"AgentExecutionRelease-{request_id[:8]}",
+                  daemon=True,
+              ).start()
           status_code = (
               200 if result.get("state") == "completed"
               else 503 if result.get("state") == "unknown"

@@ -104,6 +104,7 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.temp.cleanup()
 
     def _request_json(self, method, path, payload=None, *, token="__default__", base_url=None):
+        self.last_headers = {}
         body = (
             None
             if payload is None
@@ -121,8 +122,10 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         )
         try:
             with urllib.request.urlopen(request, timeout=3.0) as response:
+                self.last_headers = dict(response.headers.items())
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
+            self.last_headers = dict(exc.headers.items())
             return exc.code, json.loads(exc.read().decode("utf-8"))
 
     def test_eda_post_returns_correlated_structured_result(self):
@@ -387,6 +390,171 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertTrue(records)
         self.assertEqual(records[0]["decision"], "denied")
         self.assertNotIn("secret-script-text", str(records))
+
+    def test_read_rate_limit_returns_429_and_retry_after_header(self):
+        limited = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            read_requests_per_minute=1,
+        )
+        limited.start()
+        try:
+            base = f"http://127.0.0.1:{limited.port}"
+            first_status, _ = self._request_json(
+                "GET", "/api/v1/runtime/capabilities", base_url=base
+            )
+            second_status, second = self._request_json(
+                "GET", "/api/v1/runtime/capabilities", base_url=base
+            )
+            self.assertEqual(first_status, 200)
+            self.assertEqual(second_status, 429, second)
+            self.assertEqual(second["error"]["code"], "AGENT_RATE_LIMITED")
+            self.assertIn("Retry-After", self.last_headers)
+        finally:
+            limited.stop()
+
+    def test_per_agent_inflight_eda_limit_rejects_second_pending_request(self):
+        self.worker.auto_complete = False
+        limited = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            allow_eda_execute=True,
+            max_pending_eda_per_agent=1,
+        )
+        limited.start()
+        try:
+            base = f"http://127.0.0.1:{limited.port}"
+            first_status, first = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts first", "wait_timeout_ms": 0},
+                base_url=base,
+            )
+            self.assertEqual(first_status, 202, first)
+            frame_count = len(self.worker.frames)
+            second_status, second = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts second", "wait_timeout_ms": 0},
+                base_url=base,
+            )
+            self.assertEqual(second_status, 429, second)
+            self.assertEqual(
+                second["error"]["code"], "AGENT_EXECUTION_IN_FLIGHT_LIMIT"
+            )
+            self.assertEqual(len(self.worker.frames), frame_count)
+        finally:
+            limited.stop()
+
+    def test_audit_admission_failure_fails_closed_before_runtime_access(self):
+        original = self.security.audit_request
+
+        def fail_audit(**_kwargs):
+            raise OSError("simulated audit database failure")
+
+        self.security.audit_request = fail_audit
+        try:
+            status, body = self._request_json(
+                "GET", "/api/v1/runtime/capabilities"
+            )
+            self.assertEqual(status, 503, body)
+            self.assertEqual(body["error"]["code"], "AGENT_AUDIT_UNAVAILABLE")
+            self.assertEqual(self.worker.frames, [])
+        finally:
+            self.security.audit_request = original
+
+    def test_read_rate_limit_returns_429_and_retry_after_header(self):
+        limited = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            read_requests_per_minute=1,
+        )
+        limited.start()
+        try:
+            base = f"http://127.0.0.1:{limited.port}"
+            first_status, _ = self._request_json(
+                "GET", "/api/v1/runtime/capabilities", base_url=base
+            )
+            second_status, second = self._request_json(
+                "GET", "/api/v1/runtime/capabilities", base_url=base
+            )
+            self.assertEqual(first_status, 200)
+            self.assertEqual(second_status, 429, second)
+            self.assertEqual(second["error"]["code"], "AGENT_RATE_LIMITED")
+        finally:
+            limited.stop()
+
+    def test_per_agent_inflight_eda_limit_rejects_second_pending_request(self):
+        self.worker.auto_complete = False
+        limited = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            allow_eda_execute=True,
+            max_pending_eda_per_agent=1,
+        )
+        limited.start()
+        try:
+            base = f"http://127.0.0.1:{limited.port}"
+            first_status, first = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts first", "wait_timeout_ms": 0},
+                base_url=base,
+            )
+            self.assertEqual(first_status, 202, first)
+            frame_count = len(self.worker.frames)
+            second_status, second = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts second", "wait_timeout_ms": 0},
+                base_url=base,
+            )
+            self.assertEqual(second_status, 429, second)
+            self.assertEqual(
+                second["error"]["code"], "AGENT_EXECUTION_IN_FLIGHT_LIMIT"
+            )
+            self.assertEqual(len(self.worker.frames), frame_count)
+        finally:
+            limited.stop()
+
+    def test_audit_admission_failure_fails_closed_before_runtime_access(self):
+        original = self.security.audit_request
+
+        def fail_audit(**_kwargs):
+            raise OSError("simulated audit database failure")
+
+        self.security.audit_request = fail_audit
+        try:
+            status, body = self._request_json(
+                "GET", "/api/v1/runtime/capabilities"
+            )
+            self.assertEqual(status, 503, body)
+            self.assertEqual(body["error"]["code"], "AGENT_AUDIT_UNAVAILABLE")
+            self.assertEqual(self.worker.frames, [])
+        finally:
+            self.security.audit_request = original
+
+    def test_legacy_eda_execute_alias_requires_authentication(self):
+        status, body = self._request_json(
+            "POST",
+            "/api/eda/exec",
+            {"script": "puts must_not_run"},
+            token="",
+        )
+        self.assertEqual(status, 401, body)
+        self.assertEqual(body["error"]["code"], "INVALID_AGENT_TOKEN")
+        self.assertEqual(self.worker.frames, [])
+
+    def test_unclassified_api_route_requires_admin_scope(self):
+        status, body = self._request_json(
+            "GET", "/api/v1/future-sensitive-route"
+        )
+        self.assertEqual(status, 403, body)
+        self.assertEqual(body["error"]["code"], "AGENT_SCOPE_DENIED")
 
 if __name__ == "__main__":
     unittest.main()

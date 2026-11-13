@@ -2,7 +2,7 @@
 
 - 日期：2026-11-13
 - 版本：1.0
-- 状态：M2.3.1 已在 feature/m2-agent-security 实现并通过 Windows CI（Python 3.10 / 3.11 / 3.12）；Host A 凭证配置和双 Host 安全验收待进行；配额与审计加固待 M2.3.2
+- 状态：M2.3.1 / M2.3.2 代码已实现，Windows CI（Python 3.10 / 3.11 / 3.12）首轮验证通过；最新配额、审计保留和持久化在途限制改动等待新一轮 CI；Host A 双 Token 实测待进行
 - 代码基线：M1 `43c0900b5728d9d13710e265bd87647804be2227`
 - 依赖阶段：M2.1 / M2.2 MCP Gateway 双 Host 安全模式验收已通过
 
@@ -27,7 +27,9 @@
 5. Host A 的 `RequestTracker` 默认记录保留期为 900 秒；MCP Gateway 的状态查询应依赖返回的 `state`，不能假定记录永久存在。
 6. 多个 Gateway 子进程目前共用同一个 AirBridge HTTP 服务、同一个 Runtime Session 和同一个 Capture Interpreter。
 
-因此，仅在 MCP 配置文件添加 Agent 名称、或只在 Gateway 检查权限，都不足以构成服务端身份认证与授权。\n\nM2.3.1 已在独立堆叠分支 `feature/m2-agent-security` 实现第一批服务端保护，但尚未部署到用户 Host A：SQLite 凭证库、一次性显示 Token 的本地管理 CLI、Gateway Bearer Header、HTTP route scopes、请求所有权绑定、服务端 EDA kill switch 和审计元数据已加入代码。GitHub Actions 的 Python 3.10 / 3.11 / 3.12 测试已通过；真实 Host A 凭证签发与 Antigravity / OpenCode 双 Token 验收仍待执行。
+因此，仅在 MCP 配置文件添加 Agent 名称、或只在 Gateway 检查权限，都不足以构成服务端身份认证与授权。
+
+M2.3.1 已在独立堆叠分支 `feature/m2-agent-security` 实现第一批服务端保护，但尚未部署到用户 Host A：SQLite 凭证库、一次性显示 Token 的本地管理 CLI、Gateway Bearer Header、HTTP route scopes、请求所有权绑定、服务端 EDA kill switch 和审计元数据已加入代码。GitHub Actions 的 Python 3.10 / 3.11 / 3.12 测试已通过；真实 Host A 凭证签发与 Antigravity / OpenCode 双 Token 验收仍待执行。
 
 ## 3. 威胁模型与信任边界
 
@@ -62,7 +64,7 @@
 - 建议使用至少 32 字节密码学安全随机数，并以 URL-safe Base64 输出。
 - 服务端数据库只保存 Token 的 SHA-256 摘要，不保存明文。
 - 明文 Token 只在生成时显示一次，写入对应 MCP Host 的本地配置。
-- 支持单 Token 撤销、Agent 全部 Token 撤销和 Token 轮换。
+- 支持单 Token 撤销、Agent 全部 Token 撤销；轮换通过签发新 Token 后撤销旧 Token 完成。
 - 不接受请求体参数或 `X-Agent-ID` 头所声明的身份；Agent ID 必须由服务端根据 Bearer Token 查表得出。
 
 ### 4.2 Gateway 配置
@@ -84,6 +86,7 @@ Gateway 新增：
 - `agent_credentials`：token_id、agent_id、token_sha256、scopes、enabled、created_at、expires_at、revoked_at。
 - `agent_audit`：timestamp、agent_id（允许为空，供未认证尝试）、action、request_id、decision、http_status、reason_code、duration_ms、payload_bytes、payload_sha256。
 - `agent_request_owners`：request_id、agent_id、created_at。
+- `agent_active_executions`：跨 AirBridge 进程重启仍保留的 Agent 在途 EDA 预留。
 
 数据库只保存 Token 摘要。数据库文件应继承当前 Windows 用户的本地配置目录 ACL；安装说明需明确不可将其放入仓库或同步到公共目录。
 
@@ -152,7 +155,9 @@ Authorization: Bearer <agent-token>
 - 未认证访问、Token 无效、Scope 拒绝、配额拒绝。
 - 只读查询及其 HTTP 状态。
 - EDA 请求提交、request_id、最终状态和耗时。
-- Token 签发、撤销、轮换等本地管理操作。
+- Token 签发、撤销等本地管理操作。
+
+当前实现保留最近 90 天且最多 200,000 条审计记录；按小时触发过期/容量清理。API 请求在进入 Runtime 前必须成功写入 admission 审计记录；该记录失败时返回 503，不继续处理。响应完成审计为附加结果记录。脚本正文和 Bearer Token 均不写入审计表。
 
 审计禁止记录：
 - 明文 Bearer Token。
@@ -164,12 +169,14 @@ EDA 请求可记录 UTF-8 正文的字节数和 SHA-256 摘要，便于关联而
 
 ## 8. 配额与并发
 
-M2.3 初始建议值（实现时应可配置，最终以测试和实际负载验证为准）：
+M2.3 首批默认值（由 AirBridge 服务端环境变量配置）：
 - 普通 API 调用：每 Agent 60 次 / 分钟。
 - Request Status 轮询：每 Agent 120 次 / 分钟。
 - EDA 执行提交：每 Agent 5 次 / 分钟。
 - 每 Agent 最多 1 个未完成 EDA 请求。
-- 触发限额返回 HTTP 429；必须在服务端拒绝，不得只在 Gateway 限制。
+- 触发限额返回 HTTP 429 和 `Retry-After`；必须在服务端拒绝，不得只在 Gateway 限制。
+
+配置项：`AIRBRIDGE_AGENT_READ_RPM=60`、`AIRBRIDGE_AGENT_STATUS_RPM=120`、`AIRBRIDGE_AGENT_EXECUTE_RPM=5`、`AIRBRIDGE_AGENT_MAX_PENDING_EDA=1`。滑动窗口计数在当前 AirBridge 服务进程内维护；服务进程重启后窗口重新计数。在途 EDA 预留则持久化到 SQLite，完成/失败时释放；结果不确定时保留 1,800 秒后才可清理。请求所有权记录也保留 1,800 秒，覆盖 A 侧 RequestTracker 的 900 秒 pending + 900 秒终态保留上限。
 
 多个 Agent 仍共享一个 Runtime Session。Runtime / Interpreter 的实际串行执行语义继续由 AirBridge 既有请求层保证。配额只能限制请求进入量，不能赋予每个 Agent 独立 Capture Interpreter，也不应宣称 Agent 之间拥有运行时隔离。
 
@@ -202,12 +209,16 @@ M2.3 初始建议值（实现时应可配置，最终以测试和实际负载验
 
 尚待：Host A 安装、分别签发 Antigravity / OpenCode Token、更新两端 MCP 配置和实机验收。未启用真实 EDA 执行。
 
-### M2.3.2 — 审计加固、配额与生命周期治理：待实现
-- 审计写入失败时的 fail-closed admission / finalization 语义。
-- 审计保留期、请求归属记录清理和数据容量策略。
-- 每 Agent API 速率限制、EDA 提交速率及最大在途执行限制，超限返回 429。
-- 审计 CLI 查询和导出边界测试。
-- Token 撤销、轮换、过期和并发访问压力测试。
+### M2.3.2 — 审计加固、配额与生命周期治理：代码已实现，最新 CI 待复验
+- API Admission 审计必须先持久化成功，失败返回 503 并且不进入 Runtime。
+- 最近 90 天、最多 200,000 条审计记录；按小时清理。
+- 请求所有权记录保留 1,800 秒；跨 Agent 请求结果读取返回与 not_found 等价的 404。
+- 服务端每 Agent 滑动窗口：普通 API 60/min、状态查询 120/min、EDA 提交 5/min；超限返回 429 和 Retry-After。
+- 每 Agent 最多一个未完成 EDA 请求；在途预留写入 SQLite，AirBridge 进程重启不会立即丢失，结果未知时保留至 1,800 秒保守期限。
+- Token 签发和撤销写入审计记录。
+- 已加入配额、持久化预留、审计清理、审计失败闭锁和 legacy EDA alias 认证测试；最新提交推送后等待 Windows CI 复验。
+
+限制：滑动窗口计数在 AirBridge 当前服务进程内维护，服务重启会重置窗口；在途执行预留和请求所有权记录持久化。
 
 ### M2.3.3 — 双 Host 安全验收：待实机
 - Antigravity / OpenCode 分别使用不同 Token。
@@ -237,5 +248,6 @@ M2.3 完成后，能够对两个本地 MCP Agent 进行应用层身份识别、�
 - `airbridge_app.py`：`AntigravityIPCServer` 的 GET / POST 路由与 loopback bind。
 - `request_tracker.py`：`RequestTracker.DEFAULT_TTL_SECONDS = 900`。
 - `request_broker.py`：B 侧持久化去重 Broker；它不等于 A 侧 Agent 身份或请求所有权机制。
-- `mcp_gateway/airbridge_mcp_gateway/config.py`：目前只有 Base URL、HTTP timeout、Gateway 执行开关。
-- `mcp_gateway/airbridge_mcp_gateway/http_client.py`：目前尚未附加 Agent Authorization Header。
+- `mcp_gateway/airbridge_mcp_gateway/config.py`：读取必需的 `AIRBRIDGE_AGENT_TOKEN`，仍强制 loopback。
+- `mcp_gateway/airbridge_mcp_gateway/http_client.py`：为现有 HTTP 调用附加 `Authorization: Bearer ...`。
+- `agent_security.py`：SQLite Token、scope、请求归属、滑动窗口、持久化在途预留和审计。

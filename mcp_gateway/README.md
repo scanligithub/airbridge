@@ -108,6 +108,28 @@ under the same Windows account. Do not expose port 8888 to a LAN or the
 Internet. Per-Agent tokens do not create independent Runtime Sessions or
 Capture interpreters.
 
+
+## AirBridge server-side security policy
+
+Configure these variables in the environment of the AirBridge desktop process on Host A (not in the Gateway MCP host config):
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| AIRBRIDGE_AGENT_SECURITY_DB | `%LOCALAPPDATA%\\AirBridge\\agent_security.sqlite3` | Local credential, ownership, quota reservation and audit database |
+| AIRBRIDGE_ALLOW_EDA_EXECUTE | `0` | Server-wide EDA execution kill switch; keep off during read-only operation |
+| AIRBRIDGE_AGENT_READ_RPM | `60` | Per-Agent ordinary API requests per minute |
+| AIRBRIDGE_AGENT_STATUS_RPM | `120` | Per-Agent request-status lookups per minute |
+| AIRBRIDGE_AGENT_EXECUTE_RPM | `5` | Per-Agent EDA submission attempts per minute |
+| AIRBRIDGE_AGENT_MAX_PENDING_EDA | `1` | Maximum simultaneous uncompleted EDA requests per Agent |
+
+The sliding-window rate counters are in memory and reset when the AirBridge
+HTTP service process restarts. In-flight EDA reservations and request ownership
+records are stored in SQLite. Unknown execution outcomes retain the Agent's
+in-flight reservation for a conservative 1,800 seconds. Audit records retain
+90 days, capped at 200,000 rows. Admission audit must be stored before an API
+handler can reach Runtime; an admission audit error returns HTTP 503 and blocks
+the operation.
+
 ## Request behaviour
 
 - The gateway creates a UUID request_id for every accepted execute call.

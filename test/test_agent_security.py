@@ -31,6 +31,9 @@ class AgentSecurityStoreTests(unittest.TestCase):
         self.assertEqual(principal.agent_id, "opencode")
         self.assertEqual(set(principal.scopes), {"runtime.read", "request.read"})
         self.assertNotIn("token", self.store.list_tokens()[0])
+        audit = self.store.list_audit(agent_id="opencode", limit=5)
+        self.assertEqual(audit[0]["decision"], "issued")
+        self.assertEqual(audit[0]["reason_code"], "AGENT_TOKEN_ISSUED")
 
     def test_invalid_or_missing_bearer_is_rejected(self):
         for header in (None, "", "Basic abc", "Bearer malformed"):
@@ -41,6 +44,9 @@ class AgentSecurityStoreTests(unittest.TestCase):
     def test_revoked_token_is_rejected_immediately(self):
         issued = self.store.issue_token("antigravity", ["runtime.read"])
         self.assertTrue(self.store.revoke_token(issued["token_id"]))
+        audit = self.store.list_audit(agent_id="antigravity", limit=5)
+        self.assertEqual(audit[0]["decision"], "revoked")
+        self.assertEqual(audit[0]["reason_code"], "AGENT_TOKEN_REVOKED")
         with self.assertRaises(AgentAuthenticationError):
             self.store.authenticate("Bearer " + issued["token"])
 
@@ -93,6 +99,128 @@ class AgentSecurityStoreTests(unittest.TestCase):
         self.assertNotIn("token", records[0])
         self.assertNotIn("script", records[0])
 
+
+    def test_sliding_window_rate_limit_is_per_agent_and_action(self):
+        self.assertEqual(
+            self.store.consume_rate_limit("antigravity", "read", limit=2),
+            0,
+        )
+        self.assertEqual(
+            self.store.consume_rate_limit("antigravity", "read", limit=2),
+            0,
+        )
+        self.assertGreater(
+            self.store.consume_rate_limit("antigravity", "read", limit=2),
+            0,
+        )
+        # Another Agent and another action have independent windows.
+        self.assertEqual(
+            self.store.consume_rate_limit("opencode", "read", limit=2),
+            0,
+        )
+        self.assertEqual(
+            self.store.consume_rate_limit("antigravity", "status", limit=1),
+            0,
+        )
+
+    def test_per_agent_inflight_execution_limit(self):
+        first = "d20f8b2c-6d01-4f9b-9c18-53ddf5dcae31"
+        second = "a20f8b2c-6d01-4f9b-9c18-53ddf5dcae32"
+        self.assertTrue(
+            self.store.begin_execution("antigravity", first, max_inflight=1)
+        )
+        self.assertFalse(
+            self.store.begin_execution("antigravity", second, max_inflight=1)
+        )
+        self.assertEqual(self.store.active_execution_count("antigravity"), 1)
+        self.assertTrue(
+            self.store.begin_execution("opencode", second, max_inflight=1)
+        )
+        self.store.end_execution("antigravity", first)
+        self.assertTrue(
+            self.store.begin_execution("antigravity", second, max_inflight=1)
+        )
+        self.assertEqual(self.store.active_execution_count("antigravity"), 1)
+
+    def test_active_execution_reservation_survives_store_reopen(self):
+        first = "d20f8b2c-6d01-4f9b-9c18-53ddf5dcae31"
+        second = "a20f8b2c-6d01-4f9b-9c18-53ddf5dcae32"
+        db_path = self.store.db_path
+        self.assertTrue(self.store.begin_execution("antigravity", first))
+        self.store.close()
+        reopened = AgentSecurityStore(db_path)
+        try:
+            self.assertEqual(reopened.active_execution_count("antigravity"), 1)
+            self.assertFalse(
+                reopened.begin_execution("antigravity", second, max_inflight=1)
+            )
+            reopened.end_execution("antigravity", first)
+            self.assertTrue(
+                reopened.begin_execution("antigravity", second, max_inflight=1)
+            )
+        finally:
+            reopened.close()
+        # Prevent tearDown from closing an already closed connection.
+        self.store = AgentSecurityStore(db_path)
+
+    def test_request_owner_expiration_is_bounded(self):
+        request_id = "d20f8b2c-6d01-4f9b-9c18-53ddf5dcae31"
+        token = self.store.issue_token("antigravity", ["request.read"])
+        principal = self.store.authenticate("Bearer " + token["token"])
+        self.store.bind_request_owner(request_id, "antigravity")
+        self.assertTrue(self.store.can_read_request(request_id, principal))
+        self.store._conn.execute(
+            "UPDATE agent_request_owners SET created_at = ? WHERE request_id = ?",
+            (0, request_id),
+        )
+        self.assertFalse(self.store.can_read_request(request_id, principal))
+        self.assertEqual(self.store.prune_request_owners(), 0)
+
+    def test_persistent_execution_reservation_survives_store_reopen(self):
+        first = "d20f8b2c-6d01-4f9b-9c18-53ddf5dcae31"
+        second = "a20f8b2c-6d01-4f9b-9c18-53ddf5dcae32"
+        db_path = self.store.db_path
+        self.assertTrue(self.store.begin_execution("antigravity", first))
+        self.store.close()
+        self.store = AgentSecurityStore(db_path)
+        self.assertEqual(self.store.active_execution_count("antigravity"), 1)
+        self.assertFalse(
+            self.store.begin_execution("antigravity", second, max_inflight=1)
+        )
+        self.store.end_execution("antigravity", first)
+        self.assertTrue(
+            self.store.begin_execution("antigravity", second, max_inflight=1)
+        )
+
+    def test_request_owner_expiration_is_bounded(self):
+        request_id = "d20f8b2c-6d01-4f9b-9c18-53ddf5dcae31"
+        issued = self.store.issue_token("antigravity", ["request.read"])
+        principal = self.store.authenticate("Bearer " + issued["token"])
+        self.store.bind_request_owner(request_id, "antigravity")
+        self.assertTrue(self.store.can_read_request(request_id, principal))
+        self.store._conn.execute(
+            "UPDATE agent_request_owners SET created_at = ? WHERE request_id = ?",
+            (0, request_id),
+        )
+        self.assertFalse(self.store.can_read_request(request_id, principal))
+
+    def test_audit_retention_and_max_record_pruning(self):
+        for index in range(4):
+            self.store.audit_request(
+                agent_id="opencode",
+                token_id="token-key",
+                method="GET",
+                path=f"/api/v1/test/{index}",
+                decision="allowed",
+                http_status=200,
+            )
+        self.store._conn.execute(
+            "UPDATE agent_audit SET timestamp = '2000-01-01T00:00:00.000Z' "
+            "WHERE audit_id = 1"
+        )
+        removed = self.store.prune_audit(retention_days=90, max_records=2)
+        self.assertGreaterEqual(removed, 2)
+        self.assertLessEqual(len(self.store.list_audit(limit=10)), 2)
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,11 +8,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import secrets
 import sqlite3
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -56,7 +58,9 @@ class AgentPrincipal:
     scopes: tuple[str, ...]
 
     def allows(self, scope: str) -> bool:
-        return "*" in self.scopes or "api.admin" in self.scopes or scope in self.scopes
+        if "*" in self.scopes or "api.admin" in self.scopes or scope in self.scopes:
+            return True
+        return scope == "request.read" and "request.read:any" in self.scopes
 
 
 class AgentSecurityStore:
@@ -65,6 +69,8 @@ class AgentSecurityStore:
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or self.default_db_path()
         self._lock = threading.RLock()
+        self._rate_events: dict[tuple[str, str], list[float]] = {}
+        self._last_audit_prune = 0.0
         if self.db_path != ":memory:":
             Path(self.db_path).expanduser().resolve().parent.mkdir(
                 parents=True, exist_ok=True
@@ -114,10 +120,24 @@ class AgentSecurityStore:
                 CREATE TABLE IF NOT EXISTS agent_request_owners (
                     request_id TEXT PRIMARY KEY,
                     agent_id TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_request_owners_agent
                     ON agent_request_owners(agent_id, created_at);
+                CREATE TABLE IF NOT EXISTS agent_active_executions (
+                    request_id TEXT PRIMARY KEY,
+                    agent_id TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_active_executions_agent
+                    ON agent_active_executions(agent_id, created_at);
+                CREATE TABLE IF NOT EXISTS agent_active_executions (
+                    request_id TEXT PRIMARY KEY,
+                    agent_id TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_active_executions_agent
+                    ON agent_active_executions(agent_id, created_at);
                 CREATE TABLE IF NOT EXISTS agent_audit (
                     audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp TEXT NOT NULL,
@@ -139,6 +159,38 @@ class AgentSecurityStore:
                     ON agent_audit(agent_id, timestamp);
                 """
             )
+            owner_columns = {
+                row["name"]: str(row["type"]).upper()
+                for row in self._conn.execute(
+                    "PRAGMA table_info(agent_request_owners)"
+                ).fetchall()
+            }
+            if owner_columns.get("created_at") != "REAL":
+                self._conn.execute(
+                    "ALTER TABLE agent_request_owners RENAME TO agent_request_owners_legacy"
+                )
+                self._conn.execute(
+                    """
+                    CREATE TABLE agent_request_owners (
+                        request_id TEXT PRIMARY KEY,
+                        agent_id TEXT NOT NULL,
+                        created_at REAL NOT NULL
+                    )
+                    """
+                )
+                self._conn.execute(
+                    """
+                    INSERT INTO agent_request_owners (request_id, agent_id, created_at)
+                    SELECT request_id, agent_id,
+                           COALESCE(strftime('%s', created_at), strftime('%s', 'now'))
+                    FROM agent_request_owners_legacy
+                    """
+                )
+                self._conn.execute("DROP TABLE agent_request_owners_legacy")
+                self._conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_agent_request_owners_agent "
+                    "ON agent_request_owners(agent_id, created_at)"
+                )
 
     @staticmethod
     def _utc_now() -> datetime:
@@ -196,23 +248,38 @@ class AgentSecurityStore:
             else None
         )
         with self._lock:
-            self._conn.execute(
-                """
-                INSERT INTO agent_credentials
-                    (token_id, agent_id, secret_sha256, scopes_json, enabled,
-                     created_at, expires_at, label)
-                VALUES (?, ?, ?, ?, 1, ?, ?, ?)
-                """,
-                (
-                    token_id,
-                    normalized_agent,
-                    digest,
-                    json.dumps(normalized_scopes),
-                    self._timestamp(created),
-                    expires,
-                    str(label or "")[:128],
-                ),
-            )
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO agent_credentials
+                        (token_id, agent_id, secret_sha256, scopes_json, enabled,
+                         created_at, expires_at, label)
+                    VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+                    """,
+                    (
+                        token_id,
+                        normalized_agent,
+                        digest,
+                        json.dumps(normalized_scopes),
+                        self._timestamp(created),
+                        expires,
+                        str(label or "")[:128],
+                    ),
+                )
+                self._insert_audit_locked(
+                    agent_id=normalized_agent,
+                    token_id=token_id,
+                    method="ADMIN",
+                    path="/admin/tokens",
+                    decision="issued",
+                    http_status=201,
+                    reason_code="AGENT_TOKEN_ISSUED",
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
         # The bearer secret is returned once. It is never stored in SQLite.
         return {
             "token_id": token_id,
@@ -260,29 +327,68 @@ class AgentSecurityStore:
     def revoke_token(self, token_id: str) -> bool:
         now = self._timestamp(self._utc_now())
         with self._lock:
-            cursor = self._conn.execute(
-                """
-                UPDATE agent_credentials
-                SET enabled = 0, revoked_at = ?
-                WHERE token_id = ? AND enabled = 1
-                """,
-                (now, token_id),
-            )
-            return cursor.rowcount == 1
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT agent_id FROM agent_credentials WHERE token_id = ? AND enabled = 1",
+                    (token_id,),
+                ).fetchone()
+                if row is None:
+                    self._conn.execute("COMMIT")
+                    return False
+                cursor = self._conn.execute(
+                    """
+                    UPDATE agent_credentials
+                    SET enabled = 0, revoked_at = ?
+                    WHERE token_id = ? AND enabled = 1
+                    """,
+                    (now, token_id),
+                )
+                if cursor.rowcount:
+                    self._insert_audit_locked(
+                        agent_id=row["agent_id"],
+                        token_id=token_id,
+                        method="ADMIN",
+                        path="/admin/tokens",
+                        decision="revoked",
+                        http_status=200,
+                        reason_code="AGENT_TOKEN_REVOKED",
+                    )
+                self._conn.execute("COMMIT")
+                return cursor.rowcount == 1
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def revoke_agent(self, agent_id: str) -> int:
         normalized = self._validate_agent_id(agent_id)
         now = self._timestamp(self._utc_now())
         with self._lock:
-            cursor = self._conn.execute(
-                """
-                UPDATE agent_credentials
-                SET enabled = 0, revoked_at = ?
-                WHERE agent_id = ? AND enabled = 1
-                """,
-                (now, normalized),
-            )
-            return cursor.rowcount
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = self._conn.execute(
+                    """
+                    UPDATE agent_credentials
+                    SET enabled = 0, revoked_at = ?
+                    WHERE agent_id = ? AND enabled = 1
+                    """,
+                    (now, normalized),
+                )
+                if cursor.rowcount:
+                    self._insert_audit_locked(
+                        agent_id=normalized,
+                        token_id=None,
+                        method="ADMIN",
+                        path="/admin/tokens",
+                        decision="revoked",
+                        http_status=200,
+                        reason_code="AGENT_CREDENTIALS_REVOKED",
+                    )
+                self._conn.execute("COMMIT")
+                return cursor.rowcount
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def list_tokens(self, agent_id: Optional[str] = None) -> list[dict[str, Any]]:
         query = (
@@ -317,6 +423,7 @@ class AgentSecurityStore:
             raise AgentSecurityError("request_id must be a UUID") from exc
         normalized_agent = self._validate_agent_id(agent_id)
         with self._lock:
+            self._prune_request_owners_locked()
             try:
                 self._conn.execute(
                     """
@@ -326,7 +433,7 @@ class AgentSecurityStore:
                     (
                         normalized_request_id,
                         normalized_agent,
-                        self._timestamp(self._utc_now()),
+                        time.time(),
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -340,11 +447,204 @@ class AgentSecurityStore:
         except (ValueError, TypeError, AttributeError):
             return False
         with self._lock:
+            self._prune_request_owners_locked()
             row = self._conn.execute(
                 "SELECT agent_id FROM agent_request_owners WHERE request_id = ?",
                 (normalized,),
             ).fetchone()
         return row is not None and row["agent_id"] == principal.agent_id
+
+    def consume_rate_limit(
+        self,
+        agent_id: str,
+        action: str,
+        *,
+        limit: int,
+        window_seconds: float = 60.0,
+    ) -> int:
+        """Consume one per-Agent sliding-window slot; return Retry-After seconds."""
+        normalized_agent = self._validate_agent_id(agent_id)
+        if isinstance(limit, bool) or limit < 1 or window_seconds <= 0:
+            raise AgentSecurityError("rate limit and window must be positive")
+        now = time.monotonic()
+        key = (normalized_agent, str(action))
+        with self._lock:
+            events = self._rate_events.setdefault(key, [])
+            cutoff = now - float(window_seconds)
+            events[:] = [stamp for stamp in events if stamp > cutoff]
+            if len(events) >= limit:
+                retry_after = max(1, int(math.ceil(events[0] + window_seconds - now)))
+                return retry_after
+            events.append(now)
+            return 0
+
+    def begin_execution(
+        self,
+        agent_id: str,
+        request_id: str,
+        *,
+        max_inflight: int = 1,
+        retention_seconds: int = 1800,
+    ) -> bool:
+        """Persistently reserve an in-flight EDA slot for this Agent.
+
+        Reservations outlive an uncertain pending request for twice the
+        RequestTracker retention window. A Host-A process restart therefore
+        does not immediately discard a still-uncertain execution slot.
+        """
+        normalized_agent = self._validate_agent_id(agent_id)
+        try:
+            normalized_request = str(uuid.UUID(request_id))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise AgentSecurityError("request_id must be a UUID") from exc
+        if isinstance(max_inflight, bool) or max_inflight < 1:
+            raise AgentSecurityError("max_inflight must be >= 1")
+        if isinstance(retention_seconds, bool) or retention_seconds < 1:
+            raise AgentSecurityError("retention_seconds must be >= 1")
+
+        now = time.time()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    "DELETE FROM agent_active_executions WHERE created_at <= ?",
+                    (now - retention_seconds,),
+                )
+                existing = self._conn.execute(
+                    "SELECT request_id FROM agent_active_executions WHERE request_id = ?",
+                    (normalized_request,),
+                ).fetchone()
+                count = int(
+                    self._conn.execute(
+                        "SELECT COUNT(*) FROM agent_active_executions WHERE agent_id = ?",
+                        (normalized_agent,),
+                    ).fetchone()[0]
+                )
+                if existing is not None or count >= max_inflight:
+                    self._conn.execute("COMMIT")
+                    return False
+                self._conn.execute(
+                    """
+                    INSERT INTO agent_active_executions (request_id, agent_id, created_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (normalized_request, normalized_agent, now),
+                )
+                self._conn.execute("COMMIT")
+                return True
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def end_execution(self, agent_id: str, request_id: str) -> None:
+        normalized_agent = self._validate_agent_id(agent_id)
+        try:
+            normalized_request = str(uuid.UUID(request_id))
+        except (ValueError, TypeError, AttributeError):
+            return
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM agent_active_executions WHERE request_id = ? AND agent_id = ?",
+                (normalized_request, normalized_agent),
+            )
+
+    def active_execution_count(self, agent_id: str, *, retention_seconds: int = 1800) -> int:
+        normalized_agent = self._validate_agent_id(agent_id)
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM agent_active_executions WHERE created_at <= ?",
+                (now - retention_seconds,),
+            )
+            return int(
+                self._conn.execute(
+                    "SELECT COUNT(*) FROM agent_active_executions WHERE agent_id = ?",
+                    (normalized_agent,),
+                ).fetchone()[0]
+            )
+
+    def prune_request_owners(self, *, retention_seconds: int = 1800) -> int:
+        if isinstance(retention_seconds, bool) or retention_seconds < 1:
+            raise AgentSecurityError("retention_seconds must be >= 1")
+        with self._lock:
+            return self._prune_request_owners_locked(retention_seconds)
+
+    def _prune_request_owners_locked(self, retention_seconds: int = 1800) -> int:
+        cutoff = time.time() - retention_seconds
+        cursor = self._conn.execute(
+            "DELETE FROM agent_request_owners WHERE created_at <= ?", (cutoff,)
+        )
+        return cursor.rowcount
+
+    def prune_audit(self, *, retention_days: int = 90, max_records: int = 200_000) -> int:
+        if isinstance(retention_days, bool) or retention_days < 1:
+            raise AgentSecurityError("retention_days must be >= 1")
+        if isinstance(max_records, bool) or max_records < 1:
+            raise AgentSecurityError("max_records must be >= 1")
+        cutoff = self._timestamp(
+            self._utc_now() - timedelta(days=retention_days)
+        )
+        with self._lock:
+            before = int(
+                self._conn.execute("SELECT COUNT(*) FROM agent_audit").fetchone()[0]
+            )
+            self._conn.execute(
+                "DELETE FROM agent_audit WHERE timestamp < ?", (cutoff,)
+            )
+            self._conn.execute(
+                """
+                DELETE FROM agent_audit
+                WHERE audit_id NOT IN (
+                    SELECT audit_id FROM agent_audit
+                    ORDER BY audit_id DESC LIMIT ?
+                )
+                """,
+                (max_records,),
+            )
+            self._last_audit_prune = time.monotonic()
+            after = int(
+                self._conn.execute("SELECT COUNT(*) FROM agent_audit").fetchone()[0]
+            )
+            return before - after
+
+    def _insert_audit_locked(
+        self,
+        *,
+        agent_id: Optional[str],
+        token_id: Optional[str],
+        method: str,
+        path: str,
+        decision: str,
+        http_status: int,
+        reason_code: Optional[str] = None,
+        request_id: Optional[str] = None,
+        duration_ms: Optional[int] = None,
+        payload_bytes: Optional[int] = None,
+        payload_sha256: Optional[str] = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO agent_audit
+                (timestamp, agent_id, token_id, method, path, decision,
+                 http_status, reason_code, request_id, duration_ms,
+                 payload_bytes, payload_sha256)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                self._timestamp(self._utc_now()),
+                agent_id,
+                token_id,
+                method.upper(),
+                path[:512],
+                decision,
+                int(http_status),
+                reason_code,
+                request_id,
+                duration_ms,
+                payload_bytes,
+                payload_sha256,
+            ),
+        )
 
     def audit_request(
         self,
@@ -362,28 +662,21 @@ class AgentSecurityStore:
         payload_sha256: Optional[str] = None,
     ) -> None:
         with self._lock:
-            self._conn.execute(
-                """
-                INSERT INTO agent_audit
-                    (timestamp, agent_id, token_id, method, path, decision,
-                     http_status, reason_code, request_id, duration_ms,
-                     payload_bytes, payload_sha256)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    self._timestamp(self._utc_now()),
-                    agent_id,
-                    token_id,
-                    method.upper(),
-                    path[:512],
-                    decision,
-                    int(http_status),
-                    reason_code,
-                    request_id,
-                    duration_ms,
-                    payload_bytes,
-                    payload_sha256,
-                ),
+            now = time.monotonic()
+            if now - self._last_audit_prune >= 3600:
+                self.prune_audit()
+            self._insert_audit_locked(
+                agent_id=agent_id,
+                token_id=token_id,
+                method=method,
+                path=path,
+                decision=decision,
+                http_status=http_status,
+                reason_code=reason_code,
+                request_id=request_id,
+                duration_ms=duration_ms,
+                payload_bytes=payload_bytes,
+                payload_sha256=payload_sha256,
             )
 
     def list_audit(self, *, agent_id: Optional[str] = None, limit: int = 100) -> list[dict[str, Any]]:
