@@ -32,7 +32,10 @@ class AirBridgeHttpClient:
         if not path.startswith("/api/v1/") or ".." in path:
             raise ValueError("Only fixed /api/v1 AirBridge endpoints are supported")
         body = None
-        headers = {"Accept": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self._config.agent_token}",
+        }
         if payload is not None:
             body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
                 "utf-8"

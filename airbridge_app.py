@@ -6,6 +6,7 @@ AirBridge - 物理网闸通用中继器 & EDA 自动化中枢 v2.4
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import hashlib
 import math
 import ntpath
 import os
@@ -42,6 +43,11 @@ from request_tracker import (
     encode_bounded_json_payload,
 )
 from request_broker import RequestBroker, RequestBrokerError
+from agent_security import (
+    AgentAuthenticationError,
+    AgentSecurityError,
+    AgentSecurityStore,
+)
 from runtime_adapter import (
     RuntimeExecutionContext,
     RuntimeExecutionRequest,
@@ -1677,9 +1683,19 @@ class SerialWorker(threading.Thread):
 # ==============================================================================
 class AntigravityIPCServer:
 
-  def __init__(self, worker: SerialWorker, port: int = 8888):
+  def __init__(
+    self,
+    worker: SerialWorker,
+    port: int = 8888,
+    security_store: Optional[AgentSecurityStore] = None,
+    allow_eda_execute: Optional[bool] = None,
+  ):
     self.worker = worker
     self.port = port
+    self.security_store = security_store or AgentSecurityStore.from_env()
+    if allow_eda_execute is None:
+      allow_eda_execute = os.environ.get("AIRBRIDGE_ALLOW_EDA_EXECUTE", "0").strip().lower() in ("1", "true", "yes", "on")
+    self.allow_eda_execute = bool(allow_eda_execute)
     self._server = None
     self._server_thread = None
     self._server_ready = threading.Event()
@@ -1687,6 +1703,8 @@ class AntigravityIPCServer:
 
   def start(self):
     worker_ref = self.worker
+    security_ref = self.security_store
+    allow_eda_execute = self.allow_eda_execute
 
     class Handler(BaseHTTPRequestHandler):
 
@@ -1695,18 +1713,166 @@ class AntigravityIPCServer:
 
       def _reply_json(self, status_code: int, data: dict):
         body = json.dumps(data).encode("utf-8")
-        self.send_response(status_code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+          self.send_response(status_code)
+          self.send_header("Content-Type", "application/json; charset=utf-8")
+          self.send_header("Content-Length", str(len(body)))
+          self.end_headers()
+          self.wfile.write(body)
+        finally:
+          if getattr(self, "_audit_path", "").startswith("/api/"):
+            try:
+              security_ref.audit_request(
+                  agent_id=getattr(getattr(self, "_principal", None), "agent_id", None),
+                  token_id=getattr(getattr(self, "_principal", None), "token_id", None),
+                  method=getattr(self, "_audit_method", "GET"),
+                  path=self._audit_path,
+                  decision=getattr(self, "_audit_decision", "denied"),
+                  http_status=status_code,
+                  reason_code=getattr(self, "_audit_reason", None),
+                  request_id=getattr(self, "_audit_request_id", None),
+                  duration_ms=int((time.perf_counter() - self._audit_started) * 1000)
+                  if hasattr(self, "_audit_started") else None,
+                  payload_bytes=getattr(self, "_audit_payload_bytes", None),
+                  payload_sha256=getattr(self, "_audit_payload_sha256", None),
+              )
+            except Exception:
+              # An audit write failure must not leak request data or crash the
+              # HTTP response path. Authorization itself remains fail-closed.
+              pass
+
+      @staticmethod
+      def _required_scope(method: str, path: str) -> Optional[str]:
+        if method == "GET":
+          if path == "/api/v1/runtime/capabilities":
+            return "runtime.read"
+          if path == "/api/v1/eda/versions":
+            return "eda.versions.read"
+          if path.startswith("/api/v1/requests/"):
+            return "request.read"
+          if path.startswith("/api/v1/fs/"):
+            return "filesystem.read"
+          if path.startswith("/api/v1/shell/"):
+            return "shell.read"
+        elif method == "POST":
+          if path == "/api/v1/runtime/negotiate":
+            return "runtime.manage"
+          if path in ("/api/v1/eda/execute", "/api/eda/exec"):
+            return "eda.execute"
+          if path == "/api/v1/eda/versions":
+            return "eda.versions.read"
+          if path in ("/api/v1/shell/exec", "/api/shell/exec"):
+            return "shell.execute"
+          if path in ("/api/v1/shell/kill", "/api/shell/kill"):
+            return "shell.manage"
+          if path in (
+              "/api/v1/shell/tasks", "/api/v1/shell/list", "/api/shell/tasks"
+          ):
+            return "shell.read"
+          if path == "/api/v1/message":
+            return "runtime.message"
+          if path.startswith("/api/v1/fs/"):
+            return "filesystem.write"
+        # Fail closed for new or unclassified /api routes. An explicit
+        # administrator scope is required until the route is classified.
+        return "api.admin"
+
+      def _authorize_api(self, method: str, path: str) -> bool:
+        if not path.startswith("/api/"):
+          return True
+        self._audit_method = method
+        self._audit_path = path
+        self._audit_started = time.perf_counter()
+        self._audit_decision = "denied"
+        self._audit_reason = None
+        self._audit_request_id = (
+            path.rsplit("/", 1)[-1] if path.startswith("/api/v1/requests/") else None
+        )
+        self._principal = None
+
+        try:
+          principal = security_ref.authenticate(self.headers.get("Authorization"))
+        except AgentAuthenticationError:
+          self._audit_reason = "INVALID_AGENT_TOKEN"
+          self._reply_json(401, {
+              "success": False,
+              "state": "unauthorized",
+              "error": {
+                  "code": "INVALID_AGENT_TOKEN",
+                  "message": "A valid AirBridge Agent Bearer token is required.",
+              },
+          })
+          return False
+        except Exception:
+          self._audit_reason = "AGENT_AUTH_SERVICE_UNAVAILABLE"
+          self._reply_json(503, {
+              "success": False,
+              "state": "unavailable",
+              "error": {
+                  "code": "AGENT_AUTH_SERVICE_UNAVAILABLE",
+                  "message": "Agent authentication service is unavailable.",
+              },
+          })
+          return False
+
+        required_scope = self._required_scope(method, path)
+        if not principal.allows(required_scope):
+          self._audit_reason = "AGENT_SCOPE_DENIED"
+          self._reply_json(403, {
+              "success": False,
+              "state": "forbidden",
+              "error": {
+                  "code": "AGENT_SCOPE_DENIED",
+                  "required_scope": required_scope,
+              },
+          })
+          return False
+
+        if required_scope == "eda.execute" and not allow_eda_execute:
+          self._audit_reason = "EDA_EXECUTION_DISABLED_SERVER"
+          self._reply_json(403, {
+              "success": False,
+              "state": "disabled",
+              "error": {
+                  "code": "EDA_EXECUTION_DISABLED_SERVER",
+                  "message": "EDA execution is disabled by the AirBridge server policy.",
+              },
+          })
+          return False
+
+        if required_scope == "request.read" and not security_ref.can_read_request(
+            self._audit_request_id or "", principal
+        ):
+          # Return the same result for unknown and foreign request IDs.
+          self._audit_reason = "REQUEST_NOT_FOUND_OR_NOT_OWNED"
+          self._reply_json(404, {
+              "request_id": self._audit_request_id,
+              "state": "not_found",
+              "error": "request_id is unknown or expired",
+          })
+          return False
+
+        self._principal = principal
+        self._audit_decision = "allowed"
+        return True
+
+      def _set_payload_audit(self, raw_body: str):
+        encoded = raw_body.encode("utf-8")
+        self._audit_payload_bytes = len(encoded)
+        self._audit_payload_sha256 = hashlib.sha256(encoded).hexdigest()
+
+      def _set_request_audit(self, request_id: str):
+        self._audit_request_id = request_id
 
       def do_GET(self):
         path = urlsplit(self.path).path
+        if not self._authorize_api("GET", path):
+          return
         if path == "/api/v1/runtime/capabilities":
           self._reply_json(200, worker_ref.get_session_peer_status())
         elif path.startswith("/api/v1/requests/"):
           request_id = path.rsplit("/", 1)[-1]
+          self._set_request_audit(request_id)
           try:
             result = worker_ref.request_tracker.get(request_id)
           except RequestTrackerError as exc:
@@ -1729,8 +1895,12 @@ class AntigravityIPCServer:
           self._reply_json(404, {"error": "Not Found"})
 
       def do_POST(self):
+        path = urlsplit(self.path).path
+        if not self._authorize_api("POST", path):
+          return
         content_len = int(self.headers.get("Content-Length", 0))
         raw_body = self.rfile.read(content_len).decode("utf-8", errors="ignore")
+        self._set_payload_audit(raw_body)
 
         if self.path == "/api/v1/runtime/negotiate":
           result = worker_ref.begin_session_negotiation()
@@ -1791,8 +1961,16 @@ class AntigravityIPCServer:
           except RequestTrackerError as exc:
             self._reply_json(400, {"state": "not_submitted", "error": str(exc)})
             return
+          self._set_request_audit(request_id)
           existing = worker_ref.request_tracker.get(request_id)
           if existing.get("state") != "not_found":
+            if not security_ref.can_read_request(request_id, self._principal):
+              self._reply_json(404, {
+                  "request_id": request_id,
+                  "state": "not_found",
+                  "error": "request_id is unknown or expired",
+              })
+              return
             self._reply_json(
                 409,
                 {
@@ -1802,6 +1980,15 @@ class AntigravityIPCServer:
                     "hint": "query GET /api/v1/requests/{request_id} instead of resubmitting",
                 },
             )
+            return
+          try:
+            security_ref.bind_request_owner(request_id, self._principal.agent_id)
+          except AgentSecurityError:
+            self._reply_json(409, {
+                "request_id": request_id,
+                "state": "already_registered",
+                "error": "request_id already has an owner",
+            })
             return
 
           submit_payload = {
@@ -1898,8 +2085,16 @@ class AntigravityIPCServer:
           except RequestTrackerError as exc:
             self._reply_json(400, {"state": "not_submitted", "error": str(exc)})
             return
+          self._set_request_audit(request_id)
           existing = worker_ref.request_tracker.get(request_id)
           if existing.get("state") != "not_found":
+            if not security_ref.can_read_request(request_id, self._principal):
+              self._reply_json(404, {
+                  "request_id": request_id,
+                  "state": "not_found",
+                  "error": "request_id is unknown or expired",
+              })
+              return
             self._reply_json(
                 409,
                 {
@@ -1909,6 +2104,15 @@ class AntigravityIPCServer:
                     "hint": "query GET /api/v1/requests/{request_id} instead of resubmitting",
                 },
             )
+            return
+          try:
+            security_ref.bind_request_owner(request_id, self._principal.agent_id)
+          except AgentSecurityError:
+            self._reply_json(409, {
+                "request_id": request_id,
+                "state": "already_registered",
+                "error": "request_id already has an owner",
+            })
             return
           task["request_id"] = request_id
           remote_task = {

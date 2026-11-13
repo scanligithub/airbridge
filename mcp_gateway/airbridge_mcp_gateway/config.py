@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 
@@ -63,9 +63,12 @@ class GatewayConfig:
     http_timeout_seconds: float = 20.0
     enable_eda_execute: bool = False
     max_request_body_bytes: int = 60_000
+    agent_token: str = field(default="", repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_url", _validate_loopback_http_url(self.base_url))
+        if not isinstance(self.agent_token, str) or not self.agent_token.strip():
+            raise GatewayConfigurationError("AIRBRIDGE_AGENT_TOKEN is required")
         if not 1.0 <= self.http_timeout_seconds <= 60.0:
             raise GatewayConfigurationError(
                 "AIRBRIDGE_HTTP_TIMEOUT_SECONDS must be between 1 and 60"
@@ -89,4 +92,5 @@ class GatewayConfig:
             enable_eda_execute=_parse_bool(
                 env.get("AIRBRIDGE_ENABLE_EDA_EXECUTE"), default=False
             ),
+            agent_token=env.get("AIRBRIDGE_AGENT_TOKEN", ""),
         )

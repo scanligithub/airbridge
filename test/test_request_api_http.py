@@ -2,11 +2,14 @@
 # -*- coding: utf-8 -*-
 """HTTP contract tests for the A-side correlated EDA and Shell endpoints."""
 import json
+import tempfile
 import urllib.error
 import urllib.request
 import unittest
 import uuid
+from pathlib import Path
 
+from agent_security import AgentSecurityStore
 from airbridge_app import AntigravityIPCServer
 from protocol import FrameType
 from request_tracker import RequestTracker
@@ -64,25 +67,57 @@ class FakeWorker:
 
 class CorrelatedRequestHTTPTests(unittest.TestCase):
     def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.security = AgentSecurityStore(
+            str(Path(self.temp.name) / "agent_security.sqlite3")
+        )
+        issued = self.security.issue_token(
+            "test-agent",
+            [
+                "runtime.read",
+                "runtime.manage",
+                "runtime.message",
+                "eda.versions.read",
+                "eda.execute",
+                "request.read",
+                "shell.read",
+                "shell.execute",
+                "shell.manage",
+                "filesystem.read",
+                "filesystem.write",
+            ],
+        )
+        self.token = issued["token"]
         self.worker = FakeWorker()
-        self.server = AntigravityIPCServer(self.worker, port=0)
+        self.server = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            allow_eda_execute=True,
+        )
         self.server.start()
         self.base_url = f"http://127.0.0.1:{self.server.port}"
 
     def tearDown(self):
         self.server.stop()
+        self.security.close()
+        self.temp.cleanup()
 
-    def _request_json(self, method, path, payload=None):
+    def _request_json(self, method, path, payload=None, *, token="__default__", base_url=None):
         body = (
             None
             if payload is None
             else json.dumps(payload).encode("utf-8")
         )
+        headers = {"Content-Type": "application/json"}
+        selected_token = self.token if token == "__default__" else token
+        if selected_token:
+            headers["Authorization"] = "Bearer " + selected_token
         request = urllib.request.Request(
-            self.base_url + path,
+            (base_url or self.base_url) + path,
             data=body,
             method=method,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(request, timeout=3.0) as response:
@@ -269,6 +304,89 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(len(self.worker.frames), 0)
         self.assertEqual(len(self.worker.request_tracker._records), 0)
 
+
+
+    def test_api_rejects_missing_bearer_before_any_operation(self):
+        status, body = self._request_json(
+            "GET", "/api/v1/runtime/capabilities", token=""
+        )
+        self.assertEqual(status, 401, body)
+        self.assertEqual(body["error"]["code"], "INVALID_AGENT_TOKEN")
+        self.assertEqual(self.worker.frames, [])
+
+    def test_read_only_agent_cannot_submit_eda_execution(self):
+        read_only = self.security.issue_token(
+            "readonly-agent",
+            ["runtime.read", "eda.versions.read", "request.read"],
+        )
+        status, body = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "puts should_not_run"},
+            token=read_only["token"],
+        )
+        self.assertEqual(status, 403, body)
+        self.assertEqual(body["error"]["code"], "AGENT_SCOPE_DENIED")
+        self.assertEqual(self.worker.frames, [])
+
+    def test_server_execution_kill_switch_overrides_agent_scope(self):
+        blocked = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            allow_eda_execute=False,
+        )
+        blocked.start()
+        try:
+            status, body = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts should_not_run"},
+                base_url=f"http://127.0.0.1:{blocked.port}",
+            )
+            self.assertEqual(status, 403, body)
+            self.assertEqual(body["error"]["code"], "EDA_EXECUTION_DISABLED_SERVER")
+            self.assertEqual(self.worker.frames, [])
+        finally:
+            blocked.stop()
+
+    def test_request_status_is_not_visible_to_another_agent(self):
+        self.worker.auto_complete = False
+        status, pending = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "puts pending", "wait_timeout_ms": 0},
+        )
+        self.assertEqual(status, 202, pending)
+        request_id = pending["request_id"]
+
+        other = self.security.issue_token("other-agent", ["request.read"])
+        other_status, hidden = self._request_json(
+            "GET",
+            f"/api/v1/requests/{request_id}",
+            token=other["token"],
+        )
+        self.assertEqual(other_status, 404, hidden)
+        self.assertEqual(hidden["state"], "not_found")
+
+        owner_status, visible = self._request_json(
+            "GET", f"/api/v1/requests/{request_id}"
+        )
+        self.assertEqual(owner_status, 202, visible)
+        self.assertEqual(visible["state"], "pending")
+
+    def test_authorization_attempts_are_audited_without_script_body(self):
+        status, _ = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "secret-script-text"},
+            token="",
+        )
+        self.assertEqual(status, 401)
+        records = self.security.list_audit(limit=10)
+        self.assertTrue(records)
+        self.assertEqual(records[0]["decision"], "denied")
+        self.assertNotIn("secret-script-text", str(records))
 
 if __name__ == "__main__":
     unittest.main()

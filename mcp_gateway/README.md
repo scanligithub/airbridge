@@ -56,6 +56,7 @@ An example client configuration is:
       "args": ["-m", "airbridge_mcp_gateway.server"],
       "env": {
         "AIRBRIDGE_BASE_URL": "http://127.0.0.1:8888",
+        "AIRBRIDGE_AGENT_TOKEN": "REPLACE_WITH_TOKEN_ISSUED_ON_HOST_A",
         "AIRBRIDGE_ENABLE_EDA_EXECUTE": "0"
       }
     }
@@ -73,15 +74,39 @@ network listener is created by the stdio gateway.
 |---|---|---|
 | AIRBRIDGE_BASE_URL | http://127.0.0.1:8888 | Local AirBridge API base URL; loopback only |
 | AIRBRIDGE_HTTP_TIMEOUT_SECONDS | 20 | Base HTTP timeout, 1–60 seconds; execute calls extend it to cover wait_timeout_ms |
-| AIRBRIDGE_ENABLE_EDA_EXECUTE | 0 | Explicit opt-in required to expose remote script execution |
+| AIRBRIDGE_ENABLE_EDA_EXECUTE | 0 | Gateway-side execution switch; explicit opt-in required |
+| AIRBRIDGE_AGENT_TOKEN | required | Per-Agent Bearer credential issued by the local AirBridge administrator |
 
 airbridge_eda_execute can run code in the remote EDA process. Keep it disabled
 unless the MCP client is trusted and the user intends to grant execution access.
-MCP tool annotations are only client hints, not authorization. This first
-iteration does not add authentication to AirBridge's HTTP API; loopback binding
-is not a per-agent authorization boundary. Do not expose port 8888 to a LAN or
-the Internet. Agent identity, server-side authorization, and audit records are
-M2.3 work.
+MCP tool annotations are only client hints, not authorization. Each Gateway
+process must use its own `AIRBRIDGE_AGENT_TOKEN`; the AirBridge HTTP API
+validates the Bearer token and applies server-side scopes. The token is never
+accepted as an MCP tool argument.
+
+Issue a read-only token on Host A from the repository root:
+
+```powershell
+py -3.10 tools/airbridge_agent_admin.py issue --agent-id antigravity --scope runtime.read --scope eda.versions.read --scope request.read
+py -3.10 tools/airbridge_agent_admin.py issue --agent-id opencode --scope runtime.read --scope eda.versions.read --scope request.read
+```
+
+Copy each token once into only that Host's MCP configuration under
+`AIRBRIDGE_AGENT_TOKEN`. The local administrator tool stores only a SHA-256
+digest in `%LOCALAPPDATA%\\AirBridge\\agent_security.sqlite3`. To revoke a
+token, use `py -3.10 tools/airbridge_agent_admin.py revoke --token-id <token_id>`;
+to revoke all credentials for one Agent, use `--agent-id <agent_id>`.
+
+The AirBridge server has a separate global execution kill switch,
+`AIRBRIDGE_ALLOW_EDA_EXECUTE`, which defaults to `0`. Even when enabled,
+execution still requires both a Gateway opt-in and an Agent token with
+`eda.execute`. The initial Antigravity / OpenCode credentials above are
+read-only and do not receive that scope.
+
+Loopback binding is not an OS-level isolation boundary for processes running
+under the same Windows account. Do not expose port 8888 to a LAN or the
+Internet. Per-Agent tokens do not create independent Runtime Sessions or
+Capture interpreters.
 
 ## Request behaviour
 
