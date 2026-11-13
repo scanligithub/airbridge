@@ -9,7 +9,9 @@
   - AirBridge 通用 Runtime Session 架构设计 v1.0
   - AirBridge Runtime Session Protocol v1
 
-> 本文前半记录早期真实 Capture 17.2 原型实测证据；第 8 节记录 P1.6 正式 Python Adapter / 生成式 Tcl Bridge 的实现与软件 CI；第 9 节补充 2026-11-12 在真实主机 B / Capture 17.2 / Tcl 8.6 上完成的正式 Bridge、进程生命周期及 Dbo 命令清单验收。云端 CI 本身仍使用确定性模拟器，不会启动真实 Cadence Capture；实机结论以第 9 节记录的主机 B 证据为准。
+> 本文前半记录早期真实 Capture 17.2 原型实测证据；第 8 节记录 P1.6 正式 Python Adapter / 生成式 Tcl Bridge 的实现与软件 CI；第 9 节补充 2026-11-12 在真实主机 B / Capture 17.2 / Tcl 8.6 上完成的正式 Bridge、进程生命周期及命令枚举证据。云端 CI 本身仍使用确定性模拟器，不会启动真实 Cadence Capture；实机结论以第 9 节记录为准。
+>
+> **职责边界说明（2026-11-13）：** 本文是 Capture Runtime Adapter 的接入与现场验收记录，不是 Dbo API 使用手册。第 9 节保留的 DboSession / DboDesign 命令名称仅作为当时 Tcl Interpreter 的历史观察证据，不构成 Adapter API 或版本兼容承诺。Dbo API 调用签名、对象模型、版本差异和工作流属于 Capture Skill；对应资料目前临时留档于《Capture Dbo API Tcl 示例索引》，待 Capture Skill 项目建立后迁移。
 
 ---
 

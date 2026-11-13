@@ -1,22 +1,22 @@
-# Capture Dbo API：Tcl 示例索引与验证基线 v1.0
+# Capture Skill：Dbo API Tcl 示例索引与验证基线 v1.0
 
 - 文档编号：AB-CAPTURE-DBO-001
 - 版本：1.0
 - 日期：2026-11-12
-- 对应项目：AirBridge / Capture 17.2
-- 状态：**源码整理完成；部分接口已有 Capture 17.2 实测证据；Start Page 状态下 GetActiveDesign 的实际返回仍待单项验证**
+- 对应项目：Capture Skill（当前临时归档于 AirBridge 仓库）
+- 状态：**Capture Skill 专业 API 研究资料；DBO-V01 Start Page 三种 Active Design 入口实机 PASS；DBO-V02 迭代器探测按架构边界暂停，待 Capture Skill 阶段继续**
 - 主要来源：
   - 资料库：/orcad_tclscripts/tclscripts.zip
   - 资料库：OrCAD_Capture_TclTk_Extensions.pdf
   - 项目文档：Capture_Tcl_Bridge_实测基线_v1.0.md
 
-> 本文是基于现有 Tcl 示例的调用索引和验证指导，不是 OrCAD API 的完整参考手册。文中的 API 名称及示例调用来自现有资料；不同 Capture/SPB 版本的实际行为仍以目标环境为准。不能仅凭 Tcl 命令已注册，就推断其参数和行为均已通过实测。
+> 本文是 Capture Skill 的专业 API 研究资料，不是 AirBridge Core 或 Runtime Adapter 的接口规范，也不是 OrCAD API 的完整参考手册。本文暂时保留在 AirBridge 仓库仅为保存已经收集的研究证据；后续应迁入独立 Capture Skill 项目。文中的 API 名称及示例调用来自现有资料；不同 Capture/SPB 版本的实际行为仍以目标环境为准。不能仅凭 Tcl 命令已注册，就推断其参数和行为均已通过实测。
 
 ---
 
 ## 1. 整理目标与来源范围
 
-本次整理不是把 4,393 个归档条目逐个复制到 AirBridge，而是筛出后续 AirBridge / Capture Skill 最常用、最值得复用的 Dbo API 模式：
+本次整理不是把 4,393 个归档条目逐个复制到 Capture Skill，而是筛出 Capture Skill 最常用、最值得复用的 Dbo API 模式：
 
 1. 获取 Capture 当前 Dbo Session；
 2. 获取当前活动 Design；
@@ -365,7 +365,7 @@ tclscripts/capDB/capLibPropUtil.tcl
 
 ### DBO-V01：Start Page 下 GetActiveDesign 的实际返回
 
-<badge>实机 PASS · 2026-11-12</badge>
+<badge>实机 PASS · 2026-11-12，补充三入口一致性验证</badge>
 
 **优先级：P0 / 已完成。**
 
@@ -423,7 +423,9 @@ tclscripts/capDB/capLibPropUtil.tcl
 
 ### DBO-V02：当前 Session 的 Open Design / Open Library 枚举
 
-**优先级：P1 / 当前下一条验证。**
+**优先级：P1 / 暂停，待 Capture Skill 阶段继续。**
+
+由于 2026-11-13 已冻结 AirBridge 与 Skill 的职责边界，本项不再作为 AirBridge 工作继续执行。该测试涉及 Dbo API 调用约定，应由 Capture Skill 在其版本化 API 验证计划中安排。
 
 **第一阶段前置条件：** Capture 17.2 保持 Start Page 状态，没有打开 DSN / OPJ；不传 target_file。先枚举当前 Session 中实际已打开的 Design / Library，不预设两类对象都为空（尤其不预设 Library 数量）。
 
