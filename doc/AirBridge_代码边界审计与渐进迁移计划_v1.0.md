@@ -5,9 +5,9 @@
 - 日期：2026-11-13
 - 审计分支：`feature/runtime-session-p1-2`
 - 审计基线：`42ff121fecf3aa25dc792bb9a223088efa04f606`
-- 状态：**静态代码审计完成；未修改运行代码；迁移顺序建议已确定，尚未执行代码拆分**
+- 状态：**静态代码审计完成；M1 Capture Session 生命周期迁移已实现并通过软件 CI；Host B Capture 17.2 实机复验待执行**
 
-> 本文依据上述分支的实际源码进行职责审计。它记录的是当前代码现状，不把目标架构描述成已经实现。代码路径和行号对应审计基线；后续代码变化后应重新核对。
+> 本文第 2–4 节记录审计基线 `42ff121` 的代码现状，不把当时的目标架构描述成已经实现。第 5 节之后追加 M1 的实际实施记录；代码路径和结论应以各实施提交及其 CI 为准。
 
 ---
 
@@ -205,6 +205,40 @@ Adapter 不应因某版本缺少某个 Dbo 方法就被判定为通信或进程�
 - 不再通过 EDAExecutor 保存 Capture Adapter 进程句柄；
 - A/B Host B 实机回归。
 
+#### M1 实施记录（2026-11-13）
+
+**代码状态：已实施；软件 CI PASS；真实 Capture 实机验收待执行。**
+
+实现提交：
+
+- 生命周期迁移：`173302f24ff50d30259c3a3a5b8fb1f6dbcff17c`
+- READY 测试夹具修正：`83d73da080cbdd774d3fc4e03bb7fa78aacdb28e`
+
+实际变更：
+
+1. `capture_tcl_bridge.py` 新增 `CaptureTclRuntimeManager`，由 Capture Runtime Adapter 内部持有。它负责 Capture 安装选择、capAutoLoad 路径发现、Bridge Session 创建、Capture 进程启动、READY 检查、运行状态和关闭。
+2. `CaptureTclAdapter` 增加 `ensure_session()`、`status()`、`close_session()` 生命周期入口；原有 `execute` 路径继续使用相同 Tcl payload、Request ID 和 Bridge 结果结构。Registry 对外仍只登记原有 `execute` operation。
+3. `SerialWorker` 不再定义 `_ensure_capture_tcl_bridge()`，也不再保存 `capture_tcl_bridge`、Capture 专用锁或 Capture 进程句柄；初始化时仅向 Adapter 提供通用 workspace 路径。
+4. Capture 的关闭请求现在交由 Adapter。Allegro 关闭继续使用 `EDAExecutor.close_application()`，保持原有 Legacy 路径。
+5. `ProcessSupervisor.close_owned_process()` 新增定向关闭能力：先按应用规格核实指定 PID，再检查模态对话框和可见主窗口，只对该 PID 发送 WM_CLOSE 并等待退出。其他同名 Capture 进程不会被本操作关闭；关闭超时不强杀。
+6. 进程退出后 Adapter 释放内存中的进程/Session 引用，但保留 Session 历史目录及结果文件。
+
+**软件验收：PASS**
+
+GitHub Actions [Runtime Session CI Run 43347480171](https://github.com/scanligithub/airbridge/actions/runs/43347480171) 对提交 `83d73da` 执行成功，覆盖：
+
+- Runtime Session Protocol 与 RequestTracker；
+- `airbridge_app.py`、Runtime Adapter、Capture Bridge、ProcessSupervisor、Host-A E2E harness 的 Python 编译；
+- Capture Session E2E harness 单测；
+- ProcessSupervisor 单测（含指定 PID 关闭与模态对话框保护）；
+- Capture Tcl Bridge 单测（含 Adapter 启动、复用、状态、执行和关闭）；
+- Runtime Adapter / Profile 单测；
+- RequestBroker 单测；
+- A/B 双端生产 `SerialWorker` 模拟；
+- HTTP 相关请求 API 集成测试。
+
+**尚未完成的验收：Host B 真实 Capture 17.2 / Tcl 8.6 回归。** 软件 CI 不代表真实 Capture 已验证。待实机复验：capAutoLoad 自动初始化、READY nonce/PID、同 PID 多请求与 Tcl 全局状态复用、错误恢复、并发串行、WM_CLOSE 正常退出，以及关闭后重新创建 Session。保存提示、多实例和无响应进程等边界仍不得标记为已通过。
+
 ### M2：把 Cadence 软件发现代码移入 Runtime Adapter 包
 
 将 `CadenceVersionManager`、`find_cadence_tool`、`find_cap_autoload_dirs`、Cadence 运行环境生成从 `eda_engine.py` 拆出。
@@ -270,9 +304,9 @@ Adapter 不应因某版本缺少某个 Dbo 方法就被判定为通信或进程�
 
 ---
 
-## 7. 本轮不做的事情
+## 7. 初次静态审计时未做的事情
 
-本次审计没有修改任何 Python/Tcl 代码，也没有：
+以下事项描述的是审计基线 `42ff121` 时的范围；M1 后续实施情况以第 5 节的实施记录为准。初次审计当时没有修改任何 Python/Tcl 代码，也没有：
 
 - 删除 `ORCAD_TCL_POLYFILL` 或 `ALLEGRO_SKILL_POLYFILL`；
 - 改变旧 EDA HTTP API 或 ABFP 帧；
