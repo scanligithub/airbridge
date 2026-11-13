@@ -2,7 +2,7 @@
 
 - 日期：2026-11-13
 - 版本：1.0
-- 状态：M2.3.1 / M2.3.2 代码已实现，Windows CI（Python 3.10 / 3.11 / 3.12）首轮验证通过；最新配额、审计保留和持久化在途限制改动等待新一轮 CI；Host A 双 Token 实测待进行
+- 状态：M2.3.1 / M2.3.2 代码与 CI PASS（提交 63f767e）；Host A 双 Token 配置和 Antigravity / OpenCode 安全实测待进行
 - 代码基线：M1 `43c0900b5728d9d13710e265bd87647804be2227`
 - 依赖阶段：M2.1 / M2.2 MCP Gateway 双 Host 安全模式验收已通过
 
@@ -209,18 +209,29 @@ M2.3 首批默认值（由 AirBridge 服务端环境变量配置）：
 
 尚待：Host A 安装、分别签发 Antigravity / OpenCode Token、更新两端 MCP 配置和实机验收。未启用真实 EDA 执行。
 
-### M2.3.2 — 审计加固、配额与生命周期治理：代码已实现，最新 CI 待复验
+### M2.3.2 — 审计加固、配额与生命周期治理：代码实现 / Windows CI PASS
 - API Admission 审计必须先持久化成功，失败返回 503 并且不进入 Runtime。
 - 最近 90 天、最多 200,000 条审计记录；按小时清理。
 - 请求所有权记录保留 1,800 秒；跨 Agent 请求结果读取返回与 not_found 等价的 404。
 - 服务端每 Agent 滑动窗口：普通 API 60/min、状态查询 120/min、EDA 提交 5/min；超限返回 429 和 Retry-After。
 - 每 Agent 最多一个未完成 EDA 请求；在途预留写入 SQLite，AirBridge 进程重启不会立即丢失，结果未知时保留至 1,800 秒保守期限。
 - Token 签发和撤销写入审计记录。
-- 已加入配额、持久化预留、审计清理、审计失败闭锁和 legacy EDA alias 认证测试；最新提交推送后等待 Windows CI 复验。
+- 已加入配额、持久化预留、审计清理、审计失败闭锁、legacy EDA alias、串口发送状态不确定及拒绝请求不生成可轮询 ID 等测试。
+- 最新代码提交：`63f767ed8c142312c117e28f2ca3d974a1476d6f`。
+- Windows CI：Agent Security Python 3.10 / 3.11 / 3.12 每个版本均通过 14 项凭证/存储测试和 20 项 HTTP 集成测试；MCP Gateway Python 3.11 / 3.12 每个版本均通过 12 项测试。
 
-限制：滑动窗口计数在 AirBridge 当前服务进程内维护，服务重启会重置窗口；在途执行预留和请求所有权记录持久化。
+限制：滑动窗口计数在 AirBridge 当前服务进程内维护，服务重启会重置窗口；在途执行预留和请求所有权记录持久化。串口发送异常时视为 `unknown`，保留原 request_id 和额度预留；在提交前被拒绝的 HTTP 请求不会伪造一个可轮询的 request_id。
 
-### M2.3.3 — 双 Host 安全验收：待实机
+
+### M2.3.3 — Host A 部署与双 Host 安全验收：待实机
+- 在 Host A 本地签发独立只读 Token：Antigravity 与 OpenCode 各一枚。
+- 设置 AirBridge 服务端 `AIRBRIDGE_ALLOW_EDA_EXECUTE=0`；两端 Gateway 继续 `AIRBRIDGE_ENABLE_EDA_EXECUTE=0`。
+- 更新两个 MCP Host 配置，分别注入各自 Token；不在对话中暴露 Token。
+- 复验 capabilities、EDA versions 和 request status；无 Token / 错误 Token 返回 401，缺少 scope 返回 403。
+- 两 Agent 各自请求归属隔离、撤销 Token 立即失效、审计 CLI 可见且无 Token/脚本文本。
+- 直接 HTTP 调用 EDA execute（只发空请求体、只读 Token）应在服务端 scope 层 403 拦截，不发送 ABFP 帧；保持服务端和 Gateway 执行开关关闭。
+- 不执行任何真实 Tcl / SKILL，不进行 EDA 写入验收。
+### M2.3.4 — 双 Host 安全验收与边界复核：待实机
 - Antigravity / OpenCode 分别使用不同 Token。
 - 两个只读 Token 均可读取各自允许的三项接口。
 - 无 Token、错误 Token、撤销 Token、scope 不足分别得到预期 401 / 403。

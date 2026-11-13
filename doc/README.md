@@ -17,7 +17,7 @@
 | [Capture Tcl Bridge 实测基线](Capture_Tcl_Bridge_实测基线_v1.0.md) | Capture 17.2 Runtime Adapter / Bridge 接入实测、capAutoLoad / Session、多请求和进程生命周期；附带历史 Dbo 命令枚举证据 | 2026-11-13 M1 真实 A/B 完整回归 PASS；当前新 Session PID 3156，Session ID 52f1184b-a3cf-413e-b6a0-6f02dafa9399；Dbo 命令清单不是 Adapter API 契约 |
 | [AirBridge MCP Gateway：M2.1 / M2.2 实施设计](AirBridge_MCP_Gateway_M2_实施设计_v1.0.md) | 主机 A 独立 MCP stdio Gateway、四个通用 Tools、HTTP 转发、安全默认值和验收边界 | 2026-11-13：11 项单测、Python 3.11/3.12 CI、Antigravity / OpenCode 双 Host 只读和执行关闭验收 PASS；真实 EDA 脚本执行未开放 |
 | [AirBridge MCP Gateway：M2.1 / M2.2 双 Host 验收记录 v1.0](AirBridge_MCP_Gateway_M2.1_M2.2_双Host验收记录_v1.0.md) | 11 项单测、CI 双 Python 版本、Host A HTTP API、Antigravity / OpenCode 四工具发现与只读调用、执行关闭保护 | 2026-11-13 双 Host PASS；未执行 Tcl / SKILL |
-| [AirBridge M2.3：Agent 身份认证、权限控制与审计设计 v1.0](AirBridge_MCP_Gateway_M2.3_Agent_Identity_Authorization_Design_v1.0.md) | 每 Agent 独立 Bearer Token、服务端 scopes、请求所有权、审计、配额和明确的非目标 | M2.3.1 代码和 CI PASS；M2.3.2 配额/审计加固已实现、最新 CI 待复验；Host A 双 Token 实测待完成 |
+| [AirBridge M2.3：Agent 身份认证、权限控制与审计设计 v1.0](AirBridge_MCP_Gateway_M2.3_Agent_Identity_Authorization_Design_v1.0.md) | 每 Agent 独立 Bearer Token、服务端 scopes、请求所有权、审计、配额和明确的非目标 | M2.3.1 / 2.3.2 代码和 CI PASS（Python 3.10–3.12）；Host A 双 Token 实测待完成 |
 | [GitHub Actions Runtime Session CI 验收配置](GitHub_Actions_Runtime_Session_AB验收配置.md) | GitHub 托管 Windows Runner、协议单测、生产 SerialWorker 双端模拟和验收边界 | 云端 CI 配置；物理串口实测不在该 CI 范围 |
 | [Capture Dbo API Tcl 示例索引 v1.0（临时归档）](Capture_Dbo_API_Tcl_示例索引_v1.0.md) | Capture Skill 的 DboSession / Design / Schematic / Page / 属性读取研究资料；仅为迁移前历史归档，不属于 AirBridge API 契约 | 后续归入 Capture Skill；不得作为 AirBridge Core / Adapter 的专业 API 契约 |
 

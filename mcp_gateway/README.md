@@ -134,8 +134,10 @@ the operation.
 
 - The gateway creates a UUID request_id for every accepted execute call.
 - The returned request_id must be retained by the caller.
-- If the HTTP response is unconfirmed, call airbridge_request_status with the
-  same ID. Do not submit a new execution merely because the caller timed out.
+- If the HTTP response is unconfirmed or the server reports `state=unknown`, call
+  `airbridge_request_status` with the same ID. Never submit a new ID as a retry.
+- Requests rejected before submission (for example 401 / 403 / 429 or payload
+  validation) do not receive a pollable request ID.
 - The gateway rejects script requests whose serialized JSON body exceeds
   60,000 bytes, leaving margin below the ABFP frame payload ceiling.
 - Larger payloads require a future/explicit artifact-RFS integration; this
