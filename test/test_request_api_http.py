@@ -20,6 +20,7 @@ class FakeWorker:
         self.request_tracker = RequestTracker()
         self.connected = True
         self.auto_complete = True
+        self.raise_on_send = False
         self.frames = []
 
     def is_serial_connected(self):
@@ -33,6 +34,8 @@ class FakeWorker:
 
     def send_frame(self, frame_type, payload=b""):
         self.frames.append((frame_type, payload))
+        if self.raise_on_send:
+            raise OSError("serial write outcome is uncertain")
         if not self.auto_complete:
             return
 
@@ -555,6 +558,38 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         )
         self.assertEqual(status, 403, body)
         self.assertEqual(body["error"]["code"], "AGENT_SCOPE_DENIED")
+
+    def test_uncertain_serial_send_is_unknown_and_keeps_inflight_reservation(self):
+        self.worker.raise_on_send = True
+        status, body = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "puts uncertain"},
+        )
+        self.assertEqual(status, 503, body)
+        self.assertEqual(body["state"], "unknown")
+        self.assertEqual(
+            body["error"]["code"], "EDA_FRAME_SUBMISSION_UNCONFIRMED"
+        )
+        request_id = body["request_id"]
+        self.assertEqual(self.security.active_execution_count("test-agent"), 1)
+
+        poll_status, polled = self._request_json(
+            "GET", f"/api/v1/requests/{request_id}"
+        )
+        self.assertEqual(poll_status, 503, polled)
+        self.assertEqual(polled["state"], "unknown")
+
+        second_status, second = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "puts must_wait"},
+        )
+        self.assertEqual(second_status, 429, second)
+        self.assertEqual(
+            second["error"]["code"], "AGENT_EXECUTION_IN_FLIGHT_LIMIT"
+        )
+        self.assertEqual(len(self.worker.frames), 1)
 
 if __name__ == "__main__":
     unittest.main()

@@ -2106,14 +2106,35 @@ class AntigravityIPCServer:
           }
           try:
             worker_ref.request_tracker.register(request_id, "eda.execute")
+          except Exception as exc:
+            security_ref.end_execution(self._principal.agent_id, request_id)
+            self._reply_json(503, {
+                "request_id": request_id,
+                "state": "not_submitted",
+                "error": str(exc),
+            })
+            return
+
+          try:
             worker_ref.send_frame(
                 FrameType.EDA_TASK_SUBMIT,
                 json.dumps(submit_payload, ensure_ascii=False).encode("utf-8"),
             )
           except Exception as exc:
-            worker_ref.request_tracker.fail(request_id, str(exc))
-            security_ref.end_execution(self._principal.agent_id, request_id)
-            self._reply_json(503, {"request_id": request_id, "state": "not_submitted", "error": str(exc)})
+            # A write failure can occur after some bytes reached the serial
+            # transport. Do not claim "not submitted", release the quota, or
+            # encourage a retry with a new request_id.
+            worker_ref.request_tracker.fail(request_id, str(exc), state="unknown")
+            self._audit_reason = "EDA_FRAME_SUBMISSION_UNCONFIRMED"
+            self._reply_json(503, {
+                "request_id": request_id,
+                "state": "unknown",
+                "error": {
+                    "code": "EDA_FRAME_SUBMISSION_UNCONFIRMED",
+                    "message": str(exc),
+                    "next_step": "Query this request_id; do not submit a new request.",
+                },
+            })
             return
 
           try:
