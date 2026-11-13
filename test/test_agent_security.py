@@ -126,6 +126,7 @@ class AgentSecurityStoreTests(unittest.TestCase):
     def test_per_agent_inflight_execution_limit(self):
         first = "d20f8b2c-6d01-4f9b-9c18-53ddf5dcae31"
         second = "a20f8b2c-6d01-4f9b-9c18-53ddf5dcae32"
+        third = "b20f8b2c-6d01-4f9b-9c18-53ddf5dcae33"
         self.assertTrue(
             self.store.begin_execution("antigravity", first, max_inflight=1)
         )
@@ -133,12 +134,13 @@ class AgentSecurityStoreTests(unittest.TestCase):
             self.store.begin_execution("antigravity", second, max_inflight=1)
         )
         self.assertEqual(self.store.active_execution_count("antigravity"), 1)
+        # A different Agent has an independent slot and a distinct request ID.
         self.assertTrue(
             self.store.begin_execution("opencode", second, max_inflight=1)
         )
         self.store.end_execution("antigravity", first)
         self.assertTrue(
-            self.store.begin_execution("antigravity", second, max_inflight=1)
+            self.store.begin_execution("antigravity", third, max_inflight=1)
         )
         self.assertEqual(self.store.active_execution_count("antigravity"), 1)
 
