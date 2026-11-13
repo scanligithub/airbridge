@@ -405,11 +405,11 @@ class _FakeManagedProcess:
 
 
 class _FakeManagedSession:
-    def __init__(self, target_file=""):
+    def __init__(self, target_file="", session_root=None):
         self.session_id = str(uuid.uuid4())
         self.runtime_version = "17.2"
         self.target_file = os.path.normcase(os.path.abspath(target_file)) if target_file else ""
-        self.ready_path = Path(tempfile.gettempdir()) / (self.session_id + ".ready")
+        self.ready_path = Path(session_root or tempfile.gettempdir()) / (self.session_id + ".ready")
         self.process = None
         self.execute_calls = []
 
@@ -417,6 +417,7 @@ class _FakeManagedSession:
         self.process = process
 
     def wait_ready(self, timeout_seconds=60, expected_pid=None):
+        self.ready_path.touch()
         return {
             "runtime_pid": str(expected_pid or self.process.pid),
             "tcl_version": "8.6.0",
@@ -465,7 +466,7 @@ class CaptureRuntimeManagerTests(unittest.TestCase):
             )
             adapter = CaptureTclAdapter(runtime_manager=manager)
             process = _FakeManagedProcess()
-            session = _FakeManagedSession(str(target))
+            session = _FakeManagedSession(str(target), temp_dir)
             logs = []
             context = RuntimeExecutionContext(log_callback=logs.append)
             info = {
