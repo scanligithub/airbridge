@@ -142,7 +142,7 @@ Profile 只声明可执行范围和能力；它不在本阶段保存 Cadence 安
 
 两个 Profile 通过 Engine Provider 延迟取得底层 Engine，避免 Registry 注册后测试替换或主程序重建 Engine 时持有过期对象引用。
 
-当前 Runtime Session 握手仍返回 profiles: []。P1.5 的 Registry 是本机执行内部抽象；在 P1.6 完成真实 Capture Adapter、验证 Profile 主机可用性以及明确 A/B 端角色前，不对对端宣称已安装可用的专业 Runtime Profile。
+当前 Runtime Session 握手仍返回 profiles: []。B 端本机 Registry 已注册 Capture Adapter，且 Capture 17.2 Bridge 已完成 Host B 实机接入验证；但这不等同于 A 端已经完成对端 Profile 发现、版本/能力核验与授权。只有主机级 Profile 发现和验证完成后，才可通过 CAPABILITIES 对外发布可用 Profile。在此之前继续保持 profiles=[]。
 
 ## 5. 执行路径与兼容性
 

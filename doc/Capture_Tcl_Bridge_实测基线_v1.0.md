@@ -23,7 +23,7 @@
 2. 自动加载的 Tcl Bridge 可以在 Capture 事件循环中使用 after 定时轮询本地任务队列。
 3. 同一个 Capture Tcl Interpreter 可以连续执行多条独立请求。
 4. 不同请求之间，全局变量、namespace 和自定义 Tcl proc 均保持存在。
-5. Bridge 可以执行 Capture Tcl 命令、Project Manager 操作和 Dbo API。
+5. Bridge 提供通用 Capture Tcl 脚本文本的执行与结果回传通道；历史原型曾通过该通道调用 Project Manager / Dbo API，但这些专业 API 的方法语义和工作流不属于 Runtime Adapter 契约。
 6. 每条请求可以返回独立的成功/失败状态、结果、错误栈和 Capture PID。
 7. 主机 A 可通过现有 AirBridge Remote Shell / 串口路径间接投递请求，并取得 Capture 的执行结果。
 

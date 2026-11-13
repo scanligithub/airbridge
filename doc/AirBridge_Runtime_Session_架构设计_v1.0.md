@@ -3,7 +3,7 @@
 - 文档编号：AB-ARCH-SESSION-001
 - 版本：1.0
 - 状态：**目标架构设计基线；P1.2–P1.7 软件层已通过相应 CI；2026-11-12 Capture 17.2 / Tcl 8.6 新版 Bridge、Start Page 正常关闭与重启已在主机 B 实机 PASS；P1.8 完整 Capture Skill E2E、专用 Session Create / Close 协议、完整 FIFO Broker 和 Allegro 生命周期扩展仍待完成**
-- 日期：2026-11-12
+- 日期：2026-11-13
 - 适用范围：AirBridge 主机 A / 主机 B；未来所有通过 Agent Skill 使用远端专业软件的场景
 
 > 本文定义目标架构，不代表当前分支已经实现 Session Create / Close API、统一 Session Request 帧或完整的专业软件生命周期。P1.6 Capture Tcl Adapter / Bridge 与 P1.7 Process Supervisor 已完成软件实现；新版 Bridge、Capture Start Page 正常关闭及关闭后重启已于 2026-11-12 在主机 B 实机验证。AirBridge 与专业 Skill 的规范性职责边界见《AirBridge 职责边界与 Skill 集成规范 v1.0》。

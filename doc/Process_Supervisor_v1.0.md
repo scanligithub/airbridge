@@ -4,7 +4,7 @@
 - 版本：1.0
 - 日期：2026-11-12
 - 对应阶段：P1.7
-- 状态：**实现与 GitHub Actions 软件 CI PASS；真实 Cadence GUI 进程关闭验收待主机 B 实机执行**
+- 状态：**实现与 GitHub Actions 软件 CI PASS；2026-11-12 Capture 17.2 Start Page PID 6648 的 WM_CLOSE 与实际进程退出已在主机 B 实机 PASS；保存提示、多手动实例、无主窗口和无响应场景仍待实机验收**
 
 ## 1. 目标与安全原则
 
