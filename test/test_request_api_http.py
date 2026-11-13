@@ -447,6 +447,7 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             self.assertEqual(
                 second["error"]["code"], "AGENT_EXECUTION_IN_FLIGHT_LIMIT"
             )
+            self.assertNotIn("request_id", second)
             self.assertEqual(len(self.worker.frames), frame_count)
         finally:
             limited.stop()

@@ -125,6 +125,7 @@ class GatewayTests(unittest.TestCase):
         result = self.gateway.execute_eda(script="x" * 61_000)
         self.assertEqual(result["state"], "not_submitted")
         self.assertEqual(result["error"]["code"], "REQUEST_TOO_LARGE")
+        self.assertNotIn("request_id", result)
         self.assertEqual(_State.requests, [])
 
     def test_request_status_requires_uuid_and_uses_existing_endpoint(self):
@@ -153,6 +154,20 @@ class GatewayTests(unittest.TestCase):
         with self.assertRaises(GatewayConfigurationError):
             GatewayConfig.from_env({})
 
+
+    def test_server_rejection_does_not_fabricate_a_pollable_request_id(self):
+        class RejectingClient:
+            def execute_eda(self, *_args, **_kwargs):
+                return {
+                    "success": False,
+                    "state": "rate_limited",
+                    "error": {"code": "AGENT_RATE_LIMITED"},
+                }
+
+        gateway = AirBridgeGateway(self.config, client=RejectingClient())
+        result = gateway.execute_eda(script="puts rejected")
+        self.assertEqual(result["state"], "rate_limited")
+        self.assertNotIn("request_id", result)
 
 if __name__ == "__main__":
     unittest.main()

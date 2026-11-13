@@ -2076,12 +2076,15 @@ class AntigravityIPCServer:
             self._reply_json(429, {
                 "success": False,
                 "state": "rate_limited",
-                "request_id": request_id,
                 "error": {
                     "code": "AGENT_EXECUTION_IN_FLIGHT_LIMIT",
                     "max_pending": max_pending_eda_per_agent,
+                    "message": (
+                        "An earlier EDA request is still pending or indeterminate; "
+                        "query its request_id before submitting another request."
+                    ),
                 },
-            }, extra_headers={"Retry-After": "1"})
+            })
             return
 
           try:

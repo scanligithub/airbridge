@@ -82,7 +82,6 @@ class AirBridgeGateway:
             return {
                 "success": False,
                 "state": "not_submitted",
-                "request_id": request_id,
                 "error": {
                     "code": "REQUEST_TOO_LARGE",
                     "message": (
@@ -102,7 +101,16 @@ class AirBridgeGateway:
                 payload,
                 http_timeout_seconds=http_timeout,
             )
-            result.setdefault("request_id", request_id)
+            if result.get("state") not in {
+                "disabled",
+                "not_submitted",
+                "rate_limited",
+                "forbidden",
+                "unauthorized",
+                "unavailable",
+                "not_found",
+            }:
+                result.setdefault("request_id", request_id)
             return result
         except AirBridgeTransportError as exc:
             return {
