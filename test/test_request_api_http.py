@@ -2,11 +2,14 @@
 # -*- coding: utf-8 -*-
 """HTTP contract tests for the A-side correlated EDA and Shell endpoints."""
 import json
+import tempfile
 import urllib.error
 import urllib.request
 import unittest
 import uuid
+from pathlib import Path
 
+from agent_security import AgentSecurityStore
 from airbridge_app import AntigravityIPCServer
 from protocol import FrameType
 from request_tracker import RequestTracker
@@ -17,6 +20,7 @@ class FakeWorker:
         self.request_tracker = RequestTracker()
         self.connected = True
         self.auto_complete = True
+        self.raise_on_send = False
         self.frames = []
 
     def is_serial_connected(self):
@@ -30,6 +34,8 @@ class FakeWorker:
 
     def send_frame(self, frame_type, payload=b""):
         self.frames.append((frame_type, payload))
+        if self.raise_on_send:
+            raise OSError("serial write outcome is uncertain")
         if not self.auto_complete:
             return
 
@@ -64,30 +70,65 @@ class FakeWorker:
 
 class CorrelatedRequestHTTPTests(unittest.TestCase):
     def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.security = AgentSecurityStore(
+            str(Path(self.temp.name) / "agent_security.sqlite3")
+        )
+        issued = self.security.issue_token(
+            "test-agent",
+            [
+                "runtime.read",
+                "runtime.manage",
+                "runtime.message",
+                "eda.versions.read",
+                "eda.execute",
+                "request.read",
+                "shell.read",
+                "shell.execute",
+                "shell.manage",
+                "filesystem.read",
+                "filesystem.write",
+            ],
+        )
+        self.token = issued["token"]
         self.worker = FakeWorker()
-        self.server = AntigravityIPCServer(self.worker, port=0)
+        self.server = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            allow_eda_execute=True,
+        )
         self.server.start()
         self.base_url = f"http://127.0.0.1:{self.server.port}"
 
     def tearDown(self):
         self.server.stop()
+        self.security.close()
+        self.temp.cleanup()
 
-    def _request_json(self, method, path, payload=None):
+    def _request_json(self, method, path, payload=None, *, token="__default__", base_url=None):
+        self.last_headers = {}
         body = (
             None
             if payload is None
             else json.dumps(payload).encode("utf-8")
         )
+        headers = {"Content-Type": "application/json"}
+        selected_token = self.token if token == "__default__" else token
+        if selected_token:
+            headers["Authorization"] = "Bearer " + selected_token
         request = urllib.request.Request(
-            self.base_url + path,
+            (base_url or self.base_url) + path,
             data=body,
             method=method,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(request, timeout=3.0) as response:
+                self.last_headers = dict(response.headers.items())
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
+            self.last_headers = dict(exc.headers.items())
             return exc.code, json.loads(exc.read().decode("utf-8"))
 
     def test_eda_post_returns_correlated_structured_result(self):
@@ -269,6 +310,287 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(len(self.worker.frames), 0)
         self.assertEqual(len(self.worker.request_tracker._records), 0)
 
+
+
+    def test_api_rejects_missing_bearer_before_any_operation(self):
+        status, body = self._request_json(
+            "GET", "/api/v1/runtime/capabilities", token=""
+        )
+        self.assertEqual(status, 401, body)
+        self.assertEqual(body["error"]["code"], "INVALID_AGENT_TOKEN")
+        self.assertEqual(self.worker.frames, [])
+
+    def test_read_only_agent_cannot_submit_eda_execution(self):
+        read_only = self.security.issue_token(
+            "readonly-agent",
+            ["runtime.read", "eda.versions.read", "request.read"],
+        )
+        status, body = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "puts should_not_run"},
+            token=read_only["token"],
+        )
+        self.assertEqual(status, 403, body)
+        self.assertEqual(body["error"]["code"], "AGENT_SCOPE_DENIED")
+        self.assertEqual(self.worker.frames, [])
+
+    def test_server_execution_kill_switch_overrides_agent_scope(self):
+        blocked = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            allow_eda_execute=False,
+        )
+        blocked.start()
+        try:
+            status, body = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts should_not_run"},
+                base_url=f"http://127.0.0.1:{blocked.port}",
+            )
+            self.assertEqual(status, 403, body)
+            self.assertEqual(body["error"]["code"], "EDA_EXECUTION_DISABLED_SERVER")
+            self.assertEqual(self.worker.frames, [])
+        finally:
+            blocked.stop()
+
+    def test_request_status_is_not_visible_to_another_agent(self):
+        self.worker.auto_complete = False
+        status, pending = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "puts pending", "wait_timeout_ms": 0},
+        )
+        self.assertEqual(status, 202, pending)
+        request_id = pending["request_id"]
+
+        other = self.security.issue_token("other-agent", ["request.read"])
+        other_status, hidden = self._request_json(
+            "GET",
+            f"/api/v1/requests/{request_id}",
+            token=other["token"],
+        )
+        self.assertEqual(other_status, 404, hidden)
+        self.assertEqual(hidden["state"], "not_found")
+
+        owner_status, visible = self._request_json(
+            "GET", f"/api/v1/requests/{request_id}"
+        )
+        self.assertEqual(owner_status, 202, visible)
+        self.assertEqual(visible["state"], "pending")
+
+    def test_authorization_attempts_are_audited_without_script_body(self):
+        status, _ = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "secret-script-text"},
+            token="",
+        )
+        self.assertEqual(status, 401)
+        records = self.security.list_audit(limit=10)
+        self.assertTrue(records)
+        self.assertEqual(records[0]["decision"], "denied")
+        self.assertNotIn("secret-script-text", str(records))
+
+    def test_read_rate_limit_returns_429_and_retry_after_header(self):
+        limited = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            read_requests_per_minute=1,
+        )
+        limited.start()
+        try:
+            base = f"http://127.0.0.1:{limited.port}"
+            first_status, _ = self._request_json(
+                "GET", "/api/v1/runtime/capabilities", base_url=base
+            )
+            second_status, second = self._request_json(
+                "GET", "/api/v1/runtime/capabilities", base_url=base
+            )
+            self.assertEqual(first_status, 200)
+            self.assertEqual(second_status, 429, second)
+            self.assertEqual(second["error"]["code"], "AGENT_RATE_LIMITED")
+            self.assertIn("Retry-After", self.last_headers)
+        finally:
+            limited.stop()
+
+    def test_per_agent_inflight_eda_limit_rejects_second_pending_request(self):
+        self.worker.auto_complete = False
+        limited = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            allow_eda_execute=True,
+            max_pending_eda_per_agent=1,
+        )
+        limited.start()
+        try:
+            base = f"http://127.0.0.1:{limited.port}"
+            first_status, first = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts first", "wait_timeout_ms": 0},
+                base_url=base,
+            )
+            self.assertEqual(first_status, 202, first)
+            frame_count = len(self.worker.frames)
+            second_status, second = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts second", "wait_timeout_ms": 0},
+                base_url=base,
+            )
+            self.assertEqual(second_status, 429, second)
+            self.assertEqual(
+                second["error"]["code"], "AGENT_EXECUTION_IN_FLIGHT_LIMIT"
+            )
+            self.assertNotIn("request_id", second)
+            self.assertEqual(len(self.worker.frames), frame_count)
+        finally:
+            limited.stop()
+
+    def test_audit_admission_failure_fails_closed_before_runtime_access(self):
+        original = self.security.audit_request
+
+        def fail_audit(**_kwargs):
+            raise OSError("simulated audit database failure")
+
+        self.security.audit_request = fail_audit
+        try:
+            status, body = self._request_json(
+                "GET", "/api/v1/runtime/capabilities"
+            )
+            self.assertEqual(status, 503, body)
+            self.assertEqual(body["error"]["code"], "AGENT_AUDIT_UNAVAILABLE")
+            self.assertEqual(self.worker.frames, [])
+        finally:
+            self.security.audit_request = original
+
+    def test_read_rate_limit_returns_429_and_retry_after_header(self):
+        limited = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            read_requests_per_minute=1,
+        )
+        limited.start()
+        try:
+            base = f"http://127.0.0.1:{limited.port}"
+            first_status, _ = self._request_json(
+                "GET", "/api/v1/runtime/capabilities", base_url=base
+            )
+            second_status, second = self._request_json(
+                "GET", "/api/v1/runtime/capabilities", base_url=base
+            )
+            self.assertEqual(first_status, 200)
+            self.assertEqual(second_status, 429, second)
+            self.assertEqual(second["error"]["code"], "AGENT_RATE_LIMITED")
+        finally:
+            limited.stop()
+
+    def test_per_agent_inflight_eda_limit_rejects_second_pending_request(self):
+        self.worker.auto_complete = False
+        limited = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            allow_eda_execute=True,
+            max_pending_eda_per_agent=1,
+        )
+        limited.start()
+        try:
+            base = f"http://127.0.0.1:{limited.port}"
+            first_status, first = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts first", "wait_timeout_ms": 0},
+                base_url=base,
+            )
+            self.assertEqual(first_status, 202, first)
+            frame_count = len(self.worker.frames)
+            second_status, second = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts second", "wait_timeout_ms": 0},
+                base_url=base,
+            )
+            self.assertEqual(second_status, 429, second)
+            self.assertEqual(
+                second["error"]["code"], "AGENT_EXECUTION_IN_FLIGHT_LIMIT"
+            )
+            self.assertEqual(len(self.worker.frames), frame_count)
+        finally:
+            limited.stop()
+
+    def test_audit_admission_failure_fails_closed_before_runtime_access(self):
+        original = self.security.audit_request
+
+        def fail_audit(**_kwargs):
+            raise OSError("simulated audit database failure")
+
+        self.security.audit_request = fail_audit
+        try:
+            status, body = self._request_json(
+                "GET", "/api/v1/runtime/capabilities"
+            )
+            self.assertEqual(status, 503, body)
+            self.assertEqual(body["error"]["code"], "AGENT_AUDIT_UNAVAILABLE")
+            self.assertEqual(self.worker.frames, [])
+        finally:
+            self.security.audit_request = original
+
+    def test_legacy_eda_execute_alias_requires_authentication(self):
+        status, body = self._request_json(
+            "POST",
+            "/api/eda/exec",
+            {"script": "puts must_not_run"},
+            token="",
+        )
+        self.assertEqual(status, 401, body)
+        self.assertEqual(body["error"]["code"], "INVALID_AGENT_TOKEN")
+        self.assertEqual(self.worker.frames, [])
+
+    def test_unclassified_api_route_requires_admin_scope(self):
+        status, body = self._request_json(
+            "GET", "/api/v1/future-sensitive-route"
+        )
+        self.assertEqual(status, 403, body)
+        self.assertEqual(body["error"]["code"], "AGENT_SCOPE_DENIED")
+
+    def test_uncertain_serial_send_is_unknown_and_keeps_inflight_reservation(self):
+        self.worker.raise_on_send = True
+        status, body = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "puts uncertain"},
+        )
+        self.assertEqual(status, 503, body)
+        self.assertEqual(body["state"], "unknown")
+        self.assertEqual(
+            body["error"]["code"], "EDA_FRAME_SUBMISSION_UNCONFIRMED"
+        )
+        request_id = body["request_id"]
+        self.assertEqual(self.security.active_execution_count("test-agent"), 1)
+
+        poll_status, polled = self._request_json(
+            "GET", f"/api/v1/requests/{request_id}"
+        )
+        self.assertEqual(poll_status, 503, polled)
+        self.assertEqual(polled["state"], "unknown")
+
+        second_status, second = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "puts must_wait"},
+        )
+        self.assertEqual(second_status, 429, second)
+        self.assertEqual(
+            second["error"]["code"], "AGENT_EXECUTION_IN_FLIGHT_LIMIT"
+        )
+        self.assertEqual(len(self.worker.frames), 1)
 
 if __name__ == "__main__":
     unittest.main()

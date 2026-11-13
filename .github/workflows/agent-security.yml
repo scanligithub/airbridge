@@ -1,0 +1,69 @@
+name: AirBridge Agent Security
+
+on:
+  push:
+    branches:
+      - feature/m2-agent-security
+    paths:
+      - "agent_security.py"
+      - "airbridge_app.py"
+      - "tools/airbridge_agent_admin.py"
+      - "test/test_agent_security.py"
+      - "test/test_request_api_http.py"
+      - ".github/workflows/agent-security.yml"
+  pull_request:
+    paths:
+      - "agent_security.py"
+      - "airbridge_app.py"
+      - "tools/airbridge_agent_admin.py"
+      - "test/test_agent_security.py"
+      - "test/test_request_api_http.py"
+      - ".github/workflows/agent-security.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security-unit:
+    name: Agent security tests (Python 3.10–3.12)
+    runs-on: windows-2025
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Checkout tested revision
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install AirBridge HTTP test dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --disable-pip-version-check "PySide6==6.8.3" "pyserial==3.5"
+
+      - name: Compile security and HTTP server modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m py_compile agent_security.py airbridge_app.py tools/airbridge_agent_admin.py
+
+      - name: Run Agent credential, scope, ownership and audit tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m unittest discover -s test -p "test_agent_security.py" -v
+
+      - name: Run authenticated HTTP API integration tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m unittest discover -s test -p "test_request_api_http.py" -v
