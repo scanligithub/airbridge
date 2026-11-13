@@ -196,6 +196,56 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertEqual(report.state, "ready")
         self.assertEqual(backend.close_requests, [])
 
+
+    def test_close_owned_process_only_targets_the_adapter_owned_pid(self):
+        owned = ProcessInfo(801, "Capture.exe", r"D:\Cadence\Capture.exe")
+        unrelated = ProcessInfo(802, "Capture.exe", r"C:\User\Capture.exe")
+        backend = FakeProcessBackend(
+            processes=[owned, unrelated],
+            windows={
+                801: [ProcessWindow(8001, "Owned Capture", "MainWnd", True)],
+                802: [ProcessWindow(8002, "Manual Capture", "MainWnd", True)],
+            },
+            exit_on_wait={801},
+        )
+        supervisor = ProcessSupervisor(backend=backend, specs=self.specs)
+
+        class OwnedHandle:
+            pid = 801
+
+            def poll(self):
+                return None
+
+        report = supervisor.close_owned_process(
+            "capture", OwnedHandle(), timeout_seconds=5
+        )
+
+        self.assertEqual(report.state, "closed")
+        self.assertEqual([pid for pid, _ in backend.close_requests], [801])
+        self.assertEqual([pid for pid, _ in backend.wait_calls], [801])
+        self.assertEqual([item.pid for item in backend.processes], [802])
+
+    def test_close_owned_process_refuses_a_modal_dialog_without_sending_wm_close(self):
+        owned = ProcessInfo(803, "Capture.exe", "")
+        backend = FakeProcessBackend(
+            processes=[owned],
+            windows={803: [ProcessWindow(8003, "Save Design?", "#32770", True)]},
+        )
+        supervisor = ProcessSupervisor(backend=backend, specs=self.specs)
+
+        class OwnedHandle:
+            pid = 803
+
+            def poll(self):
+                return None
+
+        with self.assertRaises(ProcessSupervisorError) as raised:
+            supervisor.close_owned_process("capture", OwnedHandle(), timeout_seconds=5)
+
+        self.assertEqual(backend.close_requests, [])
+        self.assertEqual(backend.wait_calls, [])
+        self.assertEqual(raised.exception.report.outcomes[0].status, "blocked_by_dialog")
+
     @unittest.skipUnless(__import__("os").name == "nt", "Windows process backend only")
     def test_windows_backend_can_discover_current_python_process(self):
         import os

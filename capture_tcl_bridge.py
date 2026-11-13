@@ -4,9 +4,9 @@
 
 The bridge is loaded by Capture's capAutoLoad mechanism and polls a
 session-specific file queue from Capture's own Tcl event loop. No Cadence
-Communication Server is required. This module does not force-terminate a
-Capture process and deliberately refuses to launch alongside an unknown
-Capture.exe instance; cross-process lifecycle management belongs to P1.7.
+Communication Server is required. The Capture Runtime Adapter owns the
+launched process handle and Bridge Session lifecycle; graceful close is
+delegated to the generic ProcessSupervisor and never force-terminates.
 """
 import base64
 import csv
@@ -654,6 +654,254 @@ catch {{file delete -force {q_hook}}}
         return removed
 
 
+class CaptureTclRuntimeManager:
+    """Own Capture discovery, launch, Bridge READY and graceful close lifecycle."""
+
+    def __init__(
+        self,
+        workspace_dir: str,
+        process_supervisor=None,
+        session_root: Optional[str] = None,
+    ):
+        if not isinstance(workspace_dir, str) or not workspace_dir.strip():
+            raise CaptureTclBridgeError("workspace_dir must be a non-empty path")
+        if process_supervisor is None:
+            from process_supervisor import ProcessSupervisor
+            process_supervisor = ProcessSupervisor()
+        self.workspace_dir = os.path.abspath(workspace_dir)
+        self.process_supervisor = process_supervisor
+        self.session_root = session_root
+        self._lock = threading.RLock()
+        self._session = None
+        self._process = None
+
+    def _log_report(self, report, context) -> None:
+        for outcome in getattr(report, "outcomes", []) or []:
+            context.log(
+                f"[Process Supervisor] PID={outcome.process.pid} "
+                f"status={outcome.status}: {outcome.message}"
+            )
+
+    def ensure_session(
+        self,
+        payload: Mapping[str, Any],
+        context: RuntimeExecutionContext,
+    ) -> CaptureTclBridgeSession:
+        with self._lock:
+            session = self._session
+            process = self._process
+            if session is not None and process is not None and process.poll() is None:
+                timeout = float(payload.get("startup_timeout", 60) or 60)
+                session.wait_ready(timeout_seconds=timeout, expected_pid=process.pid)
+                return session
+
+            # A dead session is detached from the adapter, but its directory
+            # and result records are deliberately retained for diagnosis.
+            self._session = None
+            self._process = None
+
+            from eda_engine import CadenceVersionManager, find_cap_autoload_dirs
+            from process_supervisor import ProcessSupervisorError
+
+            close_timeout = float(payload.get("process_close_timeout", 60) or 60)
+            try:
+                process_report = self.process_supervisor.ensure_exclusive(
+                    "capture",
+                    timeout_seconds=close_timeout,
+                )
+            except ProcessSupervisorError as exc:
+                report = getattr(exc, "report", None)
+                if report is not None:
+                    self._log_report(report, context)
+                raise CaptureTclBridgeError(
+                    f"Capture startup blocked by Process Supervisor: {exc}"
+                ) from exc
+            self._log_report(process_report, context)
+
+            requested_version = str(payload.get("version", "auto") or "auto")
+            script_content = str(
+                payload.get("script") or payload.get("script_content") or ""
+            )
+            info, reason = CadenceVersionManager.select_best_installation(
+                requested_version=requested_version,
+                script_content=script_content,
+                target_file=str(payload.get("target_file") or ""),
+            )
+            if not info or not info.get("capture_exe"):
+                raise CaptureTclBridgeError(
+                    f"Capture installation not found for version "
+                    f"{requested_version!r}: {reason}"
+                )
+
+            capture_exe = info["capture_exe"]
+            autoload_dirs = find_cap_autoload_dirs(
+                capture_exe, info.get("cdsroot", "")
+            )
+            if not autoload_dirs:
+                raise CaptureTclBridgeError(
+                    "Capture capAutoLoad directory not found; "
+                    "persistent Tcl Bridge cannot be initialized"
+                )
+
+            target_file = str(payload.get("target_file") or "").strip()
+            command = [capture_exe]
+            bridge_target = ""
+            if target_file:
+                extension = os.path.splitext(target_file)[1].lower()
+                if not os.path.isfile(target_file):
+                    raise CaptureTclBridgeError(
+                        f"Capture target file does not exist: {target_file}"
+                    )
+                if extension == ".dsn":
+                    command.append(target_file)
+                    bridge_target = target_file
+                elif extension != ".opj":
+                    raise CaptureTclBridgeError(
+                        "Capture target_file must be a .dsn or .opj file"
+                    )
+
+            root = self.session_root
+            if not root:
+                local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+                root = (
+                    os.path.join(local_app_data, "AirBridge", "capture_sessions")
+                    if local_app_data
+                    else os.path.join(self.workspace_dir, "capture_sessions")
+                )
+            session = CaptureTclBridgeSession.create(
+                session_root=root,
+                autoload_dir=autoload_dirs[0],
+                runtime_version=str(info.get("version", "unknown")),
+                target_file=bridge_target,
+            )
+            env = CadenceVersionManager.build_isolated_env(info.get("cdsroot", ""))
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=self.workspace_dir,
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.STDOUT,
+                )
+            except Exception as exc:
+                try:
+                    session.hook_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise CaptureTclBridgeError(f"cannot launch Capture: {exc}") from exc
+
+            session.attach_process(process)
+            # The adapter, not EDAExecutor, is the sole owner of this handle.
+            self._session = session
+            self._process = process
+            context.log(
+                f"[Capture Adapter] started Capture {info.get('version', 'unknown')} "
+                f"PID={process.pid}; {reason}"
+            )
+            try:
+                ready = session.wait_ready(
+                    timeout_seconds=float(payload.get("startup_timeout", 60) or 60),
+                    expected_pid=process.pid,
+                )
+            except CaptureTclBridgeError:
+                # Keep the handle and Bridge files for diagnosis/retry. A
+                # startup timeout is not permission to kill or discard the GUI.
+                raise
+            context.log(
+                f"[Capture Adapter] Bridge READY session={session.session_id} "
+                f"PID={ready['runtime_pid']} Tcl={ready['tcl_version']}"
+            )
+            return session
+
+    def status(self) -> Dict[str, Any]:
+        with self._lock:
+            session = self._session
+            process = self._process
+            if session is None or process is None:
+                return {"state": "not_started", "managed_by_adapter": True}
+            try:
+                exit_code = process.poll()
+            except Exception as exc:
+                return {
+                    "state": "unknown",
+                    "managed_by_adapter": True,
+                    "pid": getattr(process, "pid", None),
+                    "error": str(exc),
+                }
+            if exit_code is not None:
+                return {
+                    "state": "exited",
+                    "managed_by_adapter": True,
+                    "pid": process.pid,
+                    "exit_code": exit_code,
+                    "session_id": session.session_id,
+                    "runtime_version": session.runtime_version,
+                }
+            ready = session.ready_path.is_file()
+            return {
+                "state": "ready" if ready else "starting",
+                "managed_by_adapter": True,
+                "pid": process.pid,
+                "session_id": session.session_id,
+                "runtime_version": session.runtime_version,
+                "target_file": session.target_file,
+            }
+
+    def close_session(
+        self,
+        context: Optional[RuntimeExecutionContext] = None,
+        grace_seconds: float = 15.0,
+    ):
+        context = context or RuntimeExecutionContext()
+        with self._lock:
+            session = self._session
+            process = self._process
+            if process is None:
+                message = (
+                    "[EDA Close] 没有由 Capture Adapter 跟踪的实例；"
+                    "不会关闭用户手动启动的 Capture 进程"
+                )
+                context.log(message)
+                return False, message
+
+            if process.poll() is not None:
+                self._session = None
+                self._process = None
+                message = (
+                    f"[EDA Close] Capture 已经退出 (PID={process.pid})；"
+                    "保留 Session 历史目录和结果"
+                )
+                context.log(message)
+                return True, message
+
+            try:
+                report = self.process_supervisor.close_owned_process(
+                    "capture",
+                    process,
+                    timeout_seconds=float(grace_seconds),
+                )
+            except Exception as exc:
+                report = getattr(exc, "report", None)
+                if report is not None:
+                    self._log_report(report, context)
+                message = (
+                    f"[EDA Close] Capture 正常关闭未完成 (PID={process.pid})：{exc}。"
+                    "未强制结束，请在主机 B 上检查"
+                )
+                context.log(message)
+                return False, message
+
+            self._log_report(report, context)
+            self._session = None
+            self._process = None
+            message = (
+                f"[EDA Close] Capture 已正常退出 (PID={process.pid})；"
+                "Session 历史目录和结果仍保留"
+            )
+            context.log(message)
+            return True, message
+
+
 class CaptureTclAdapter(RuntimeAdapter):
     """Runtime Adapter that submits Tcl to an already managed Bridge session."""
 
@@ -669,13 +917,66 @@ class CaptureTclAdapter(RuntimeAdapter):
 
     def __init__(
         self,
-        session_provider: Callable[
-            [Mapping[str, Any], RuntimeExecutionContext], CaptureTclBridgeSession
-        ],
+        session_provider: Optional[
+            Callable[[Mapping[str, Any], RuntimeExecutionContext], CaptureTclBridgeSession]
+        ] = None,
+        *,
+        runtime_manager: Optional[CaptureTclRuntimeManager] = None,
+        workspace_dir: Optional[str] = None,
+        process_supervisor=None,
     ):
-        if not callable(session_provider):
+        if session_provider is not None and runtime_manager is not None:
+            raise CaptureTclBridgeError(
+                "provide either session_provider or runtime_manager, not both"
+            )
+        if session_provider is not None and not callable(session_provider):
             raise CaptureTclBridgeError("session_provider must be callable")
+        if runtime_manager is None and session_provider is None:
+            if not workspace_dir:
+                raise CaptureTclBridgeError(
+                    "workspace_dir is required when the adapter owns its Capture lifecycle"
+                )
+            runtime_manager = CaptureTclRuntimeManager(
+                workspace_dir=workspace_dir,
+                process_supervisor=process_supervisor,
+            )
         self._session_provider = session_provider
+        self._runtime_manager = runtime_manager
+
+    def ensure_session(
+        self,
+        payload: Mapping[str, Any],
+        context: RuntimeExecutionContext,
+    ) -> CaptureTclBridgeSession:
+        if self._runtime_manager is not None:
+            return self._runtime_manager.ensure_session(payload, context)
+        return self._session_provider(payload, context)
+
+    def status(self) -> Dict[str, Any]:
+        if self._runtime_manager is None:
+            return {
+                "state": "externally_managed",
+                "managed_by_adapter": False,
+            }
+        return self._runtime_manager.status()
+
+    def close_session(
+        self,
+        context: Optional[RuntimeExecutionContext] = None,
+        grace_seconds: float = 15.0,
+    ):
+        if self._runtime_manager is None:
+            message = (
+                "Capture session lifecycle is externally managed; "
+                "this adapter does not own a process handle"
+            )
+            if context is not None:
+                context.log(message)
+            return False, message
+        return self._runtime_manager.close_session(
+            context=context,
+            grace_seconds=grace_seconds,
+        )
 
     def execute(
         self,
@@ -695,7 +996,7 @@ class CaptureTclAdapter(RuntimeAdapter):
         if timeout_seconds < 0:
             raise CaptureTclBridgeError("Capture timeout must be >= 0")
 
-        bridge = self._session_provider(payload, context)
+        bridge = self.ensure_session(payload, context)
         target_file = payload.get("target_file", "") or ""
         if target_file:
             extension = Path(target_file).suffix.lower()

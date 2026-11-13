@@ -399,6 +399,154 @@ class ProcessSupervisor:
         if len(self._specs) != len(supplied):
             raise ValueError("ProcessSpec app_id values must be unique")
 
+    def close_owned_process(
+        self,
+        app_id: str,
+        process_handle,
+        timeout_seconds: float = 15.0,
+    ) -> ProcessSupervisorReport:
+        """Gracefully close only the explicitly supplied, AirBridge-owned PID.
+
+        Unlike ensure_exclusive(), this method never closes other processes
+        matching the same executable name. It also refuses modal dialogs and
+        processes without a visible main window; it never force-terminates.
+        """
+        spec = self._specs.get(app_id)
+        if spec is None:
+            raise ProcessSupervisorError(f"unknown managed application: {app_id}")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if process_handle is None or not hasattr(process_handle, "pid"):
+            raise ProcessSupervisorError("an owned process handle is required")
+
+        try:
+            pid = int(process_handle.pid)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ProcessSupervisorError("owned process handle has an invalid PID") from exc
+        if pid <= 0:
+            raise ProcessSupervisorError("owned process handle has an invalid PID")
+
+        report = ProcessSupervisorReport(app_id=app_id, state="closing_owned")
+        poll = getattr(process_handle, "poll", None)
+        if callable(poll) and poll() is not None:
+            report.state = "already_exited"
+            return report
+
+        discovered = self.backend.discover_processes(spec.image_names)
+        owned = next((item for item in discovered if item.pid == pid), None)
+        if owned is None:
+            if callable(poll) and poll() is not None:
+                report.state = "already_exited"
+                return report
+            placeholder = ProcessInfo(pid, spec.image_names[0])
+            report.state = "blocked"
+            report.remaining = [placeholder]
+            raise ProcessSupervisorError(
+                f"{spec.display_name} owned PID={pid} is not discoverable; "
+                "refusing to send a close message to an unverified process",
+                report,
+            )
+
+        report.discovered = [owned]
+        windows = self.backend.list_windows(pid)
+        dialogs = [
+            window for window in windows
+            if window.visible and window.is_dialog
+        ]
+        if dialogs:
+            report.outcomes = [
+                ProcessCloseOutcome(
+                    owned,
+                    "blocked_by_dialog",
+                    "visible modal/save/confirmation dialog detected; "
+                    "no window message was sent",
+                    dialogs,
+                )
+            ]
+            report.remaining = [owned]
+            report.state = "blocked"
+            raise ProcessSupervisorError(
+                f"{spec.display_name} PID={pid} has a visible modal dialog; "
+                "manual handling is required",
+                report,
+            )
+
+        main_windows = [
+            window for window in windows
+            if window.visible and not window.is_dialog
+        ]
+        if not main_windows:
+            report.outcomes = [
+                ProcessCloseOutcome(
+                    owned,
+                    "blocked_no_main_window",
+                    "no visible main window was found; refusing to infer "
+                    "that the owned process can be closed safely",
+                    windows,
+                )
+            ]
+            report.remaining = [owned]
+            report.state = "blocked"
+            raise ProcessSupervisorError(
+                f"{spec.display_name} PID={pid} has no visible main window; "
+                "refusing an unsafe close",
+                report,
+            )
+
+        sent, errors = self.backend.request_close(owned, main_windows)
+        if sent <= 0 or errors:
+            message = "; ".join(errors) if errors else "no WM_CLOSE message was accepted"
+            report.outcomes = [
+                ProcessCloseOutcome(owned, "close_request_failed", message, main_windows)
+            ]
+            report.remaining = [owned]
+            report.state = "blocked"
+            raise ProcessSupervisorError(
+                f"{spec.display_name} PID={pid} WM_CLOSE request failed: {message}",
+                report,
+            )
+
+        outcome = ProcessCloseOutcome(
+            owned,
+            "close_requested",
+            f"sent WM_CLOSE to {sent} visible main window(s); waiting for process exit",
+            main_windows,
+        )
+        report.outcomes = [outcome]
+        exited = self.backend.wait_for_exit(pid, float(timeout_seconds))
+        handle_exited = callable(poll) and poll() is not None
+        remaining = [
+            item for item in self.backend.discover_processes(spec.image_names)
+            if item.pid == pid
+        ]
+        if exited or handle_exited or not remaining:
+            outcome.status = "exited"
+            outcome.message = "owned process exited gracefully after WM_CLOSE"
+            report.state = "closed"
+            report.remaining = []
+            return report
+
+        latest_windows = self.backend.list_windows(pid)
+        latest_dialogs = [
+            window for window in latest_windows
+            if window.visible and window.is_dialog
+        ]
+        outcome.status = "blocked_by_dialog" if latest_dialogs else "timeout"
+        outcome.message = (
+            "process remains alive with a visible modal/save prompt; "
+            "no automatic dialog interaction or force termination was attempted"
+            if latest_dialogs
+            else f"process did not exit within {timeout_seconds:.1f}s after WM_CLOSE"
+        )
+        outcome.windows = latest_dialogs or latest_windows
+        report.state = "blocked"
+        report.remaining = remaining
+        raise ProcessSupervisorError(
+            f"{spec.display_name} owned PID={pid} did not exit after WM_CLOSE; "
+            "the process was not force-terminated",
+            report,
+        )
+
     def ensure_exclusive(
         self,
         app_id: str,

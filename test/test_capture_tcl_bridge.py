@@ -14,12 +14,15 @@ import threading
 import time
 import unittest
 import uuid
+from unittest import mock
+from types import SimpleNamespace
 from pathlib import Path
 
 from capture_tcl_bridge import (
     CaptureTclAdapter,
     CaptureTclBridgeError,
     CaptureTclBridgeSession,
+    CaptureTclRuntimeManager,
     _decode_record,
     _encode_record,
 )
@@ -389,6 +392,148 @@ class CaptureTclBridgeTests(unittest.TestCase):
             paths.append(path)
         removed = self.session.prune_results(retention_seconds=50, max_records=2)
         self.assertEqual(removed, 3)
+
+
+
+class _FakeManagedProcess:
+    def __init__(self, pid=9101):
+        self.pid = pid
+        self.returncode = None
+
+    def poll(self):
+        return self.returncode
+
+
+class _FakeManagedSession:
+    def __init__(self, target_file=""):
+        self.session_id = str(uuid.uuid4())
+        self.runtime_version = "17.2"
+        self.target_file = os.path.normcase(os.path.abspath(target_file)) if target_file else ""
+        self.ready_path = Path(tempfile.gettempdir()) / (self.session_id + ".ready")
+        self.process = None
+        self.execute_calls = []
+
+    def attach_process(self, process):
+        self.process = process
+
+    def wait_ready(self, timeout_seconds=60, expected_pid=None):
+        return {
+            "runtime_pid": str(expected_pid or self.process.pid),
+            "tcl_version": "8.6.0",
+        }
+
+    def execute(self, script, request_id, timeout_seconds):
+        self.execute_calls.append((script, request_id, timeout_seconds))
+        return {
+            "success": True,
+            "request_state": "completed",
+            "returncode": 0,
+            "request_id": request_id,
+            "capture_pid": self.process.pid,
+        }
+
+
+class _FakeCaptureProcessSupervisor:
+    def __init__(self):
+        self.ensure_calls = []
+        self.close_calls = []
+
+    def ensure_exclusive(self, app_id, timeout_seconds):
+        self.ensure_calls.append((app_id, timeout_seconds))
+        return SimpleNamespace(outcomes=[])
+
+    def close_owned_process(self, app_id, process_handle, timeout_seconds):
+        self.close_calls.append((app_id, process_handle, timeout_seconds))
+        return SimpleNamespace(state="closed", outcomes=[])
+
+
+class CaptureRuntimeManagerTests(unittest.TestCase):
+    def test_adapter_manager_owns_startup_reuse_status_and_close(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            autoload = Path(temp_dir) / "capAutoLoad"
+            autoload.mkdir()
+            target = Path(temp_dir) / "demo.dsn"
+            target.write_text("test design", encoding="utf-8")
+
+            supervisor = _FakeCaptureProcessSupervisor()
+            manager = CaptureTclRuntimeManager(
+                workspace_dir=str(workspace),
+                process_supervisor=supervisor,
+                session_root=str(Path(temp_dir) / "sessions"),
+            )
+            adapter = CaptureTclAdapter(runtime_manager=manager)
+            process = _FakeManagedProcess()
+            session = _FakeManagedSession(str(target))
+            logs = []
+            context = RuntimeExecutionContext(log_callback=logs.append)
+            info = {
+                "capture_exe": r"C:\Cadence\SPB_17.2\tools\bin\Capture.exe",
+                "cdsroot": r"C:\Cadence\SPB_17.2",
+                "version": "17.2",
+            }
+
+            with mock.patch(
+                "eda_engine.CadenceVersionManager.select_best_installation",
+                return_value=(info, "selected 17.2"),
+            ) as select_installation, mock.patch(
+                "eda_engine.CadenceVersionManager.build_isolated_env",
+                return_value={"PATH": "isolated"},
+            ), mock.patch(
+                "eda_engine.find_cap_autoload_dirs",
+                return_value=[str(autoload)],
+            ), mock.patch(
+                "capture_tcl_bridge.CaptureTclBridgeSession.create",
+                return_value=session,
+            ) as create_session, mock.patch(
+                "capture_tcl_bridge.subprocess.Popen",
+                return_value=process,
+            ) as popen:
+                first = adapter.ensure_session(
+                    {
+                        "version": "17.2",
+                        "script": "puts ready",
+                        "target_file": str(target),
+                        "startup_timeout": 2,
+                    },
+                    context,
+                )
+                second = adapter.ensure_session(
+                    {"version": "17.2", "startup_timeout": 2},
+                    context,
+                )
+
+            self.assertIs(first, session)
+            self.assertIs(second, session)
+            self.assertEqual(supervisor.ensure_calls, [("capture", 60.0)])
+            self.assertEqual(popen.call_count, 1)
+            self.assertEqual(create_session.call_count, 1)
+            self.assertEqual(
+                popen.call_args.kwargs["cwd"],
+                str(workspace),
+            )
+            self.assertEqual(popen.call_args.args[0][-1], str(target))
+            self.assertEqual(select_installation.call_args.kwargs["script_content"], "puts ready")
+            self.assertEqual(adapter.status()["state"], "ready")
+            self.assertIn("Bridge READY", "\n".join(logs))
+
+            request_id = str(uuid.uuid4())
+            result = adapter.execute(
+                RuntimeExecutionRequest(
+                    operation="execute",
+                    request_id=request_id,
+                    payload={"script": "puts 42", "timeout": 3},
+                ),
+                context,
+            )
+            self.assertTrue(result["success"])
+            self.assertEqual(session.execute_calls[0][0], "puts 42")
+
+            closed, message = adapter.close_session(context, grace_seconds=7)
+            self.assertTrue(closed, message)
+            self.assertEqual(supervisor.close_calls, [("capture", process, 7.0)])
+            self.assertEqual(adapter.status()["state"], "not_started")
 
 
 if __name__ == "__main__":
