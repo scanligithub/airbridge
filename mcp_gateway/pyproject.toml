@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "airbridge-mcp-gateway"
+version = "0.1.0"
+description = "Standalone stdio MCP Gateway for the AirBridge local HTTP API"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+dependencies = ["mcp==2.3.0"]
+
+[project.scripts]
+airbridge-mcp-gateway = "airbridge_mcp_gateway.server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["airbridge_mcp_gateway*"]
