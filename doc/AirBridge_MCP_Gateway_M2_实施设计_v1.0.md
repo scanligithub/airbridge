@@ -2,7 +2,7 @@
 
 - 日期：2026-11-13
 - 版本：1.0
-- 状态：功能分支实现中；MCP SDK 注册测试等待 GitHub Actions 验证；主机 A 实机接入尚未验收
+- 状态：功能分支实现中；MCP SDK 注册与 in-process Client 测试等待 GitHub Actions 验证；主机 A 实机接入尚未验收
 - 基线：M1 合并提交 43c0900b5728d9d13710e265bd87647804be2227
 
 ## 1. 目标与边界
@@ -71,7 +71,7 @@ Gateway 配置只接受 loopback HTTP 地址，默认 127.0.0.1:8888。stdio 不
 
 本地已完成 8 项 HTTP Gateway 单元测试，覆盖现有端点路由、请求 ID、脚本不透明透传、默认禁用、参数验证、请求体大小、非 UUID 状态查询和 loopback URL 限制。
 
-另有 2 项 MCP Server 注册测试，验证四个工具的名称与执行工具的 destructive / non-idempotent 注解；该测试依赖 MCP SDK，需要由新建 GitHub Actions 工作流执行。
+另有 3 项 MCP SDK 测试，覆盖四个工具注册、执行工具的 destructive / non-idempotent 注解，以及官方 SDK in-process Client 对工具列表和工具调用的测试。这些测试依赖 MCP SDK，需要由新建 GitHub Actions 工作流执行。
 
 尚未完成：
 - GitHub Actions 两个 Python 版本的实际结果；
