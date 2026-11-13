@@ -2,7 +2,7 @@
 
 - 日期：2026-11-13
 - 版本：1.0
-- 状态：功能分支实现中；MCP SDK 注册与 in-process Client 测试等待 GitHub Actions 验证；主机 A 实机接入尚未验收
+- 状态：M2.1 / M2.2 的代码、CI、Antigravity / OpenCode 双 Host 只读调用与执行默认关闭验收已 PASS；实际脚本执行仍未开放；M2.3 设计见《AirBridge M2.3：Agent 身份认证、权限控制与审计设计 v1.0》
 - 基线：M1 合并提交 43c0900b5728d9d13710e265bd87647804be2227
 
 ## 1. 目标与边界
@@ -67,17 +67,15 @@ Gateway 配置只接受 loopback HTTP 地址，默认 127.0.0.1:8888。stdio 不
 - Agent 身份认证、服务端授权、审计和配额属于 M2.3；
 - 每 Agent 独立 Runtime Session 尚未实现。
 
-## 7. 验证范围
+## 7. 验证范围与实测状态
 
-本地已完成 8 项 HTTP Gateway 单元测试，覆盖现有端点路由、请求 ID、脚本不透明透传、默认禁用、参数验证、请求体大小、非 UUID 状态查询和 loopback URL 限制。
+2026-11-13 已完成：
+- 本机 11 项单元测试全部 PASS：8 项 HTTP Gateway 测试、3 项 MCP SDK 注册与 in-process Client 测试；
+- compileall PASS；
+- GitHub Actions Python 3.11 / 3.12 两个 Job 均 PASS；
+- Antigravity 与 OpenCode 均发现四个工具，并成功调用 capabilities、EDA versions 和 request status；
+- 两个 Host 均调用 EDA execute 的空脚本关闭保护，返回 `state=disabled` / `EDA_EXECUTION_DISABLED`；未提交执行请求。
 
-另有 3 项 MCP SDK 测试，覆盖四个工具注册、执行工具的 destructive / non-idempotent 注解，以及官方 SDK in-process Client 对工具列表和工具调用的测试。这些测试依赖 MCP SDK，需要由新建 GitHub Actions 工作流执行。
+双 Host 验收详见《AirBridge MCP Gateway：M2.1 / M2.2 双 Host 验收记录 v1.0》。
 
-尚未完成：
-- GitHub Actions 两个 Python 版本的实际结果；
-- 主机 A 安装独立 Python 3.11 环境；
-- 至少一个真实 MCP Host 的工具发现与只读调用；
-- 在用户明确开启执行权限后，使用当前运行 Capture Session 做一次 EDA execute / request status 实机点到点验证；
-- 第二个独立 Agent MCP Client 的并发联调。
-
-完成上述验收后，才将 M2.1 / M2.2 标记为 PASS。
+M2.1 / M2.2 的 MCP 接入、只读接口、请求状态查询和默认关闭保护验收 PASS。真实 Tcl / SKILL 执行测试仍未开放，不属于本次 PASS 范围；身份认证、服务端 scope 授权、审计、配额和请求所有权属于 M2.3。
