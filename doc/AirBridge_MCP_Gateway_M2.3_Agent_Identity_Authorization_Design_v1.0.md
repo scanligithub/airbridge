@@ -2,7 +2,7 @@
 
 - 日期：2026-11-13
 - 版本：1.0
-- 状态：设计基线；尚未实现服务端认证代码
+- 状态：M2.3.1 已在 feature/m2-agent-security 实现并通过 Windows CI（Python 3.10 / 3.11 / 3.12）；Host A 凭证配置和双 Host 安全验收待进行；配额与审计加固待 M2.3.2
 - 代码基线：M1 `43c0900b5728d9d13710e265bd87647804be2227`
 - 依赖阶段：M2.1 / M2.2 MCP Gateway 双 Host 安全模式验收已通过
 
@@ -16,7 +16,7 @@
 
 本阶段不把 Agent 身份扩展为 Runtime Session 身份，不创建新的 Session，也不改变 M1 已验收的 Capture Runtime 生命周期、ABFP 协议或串口链路。
 
-## 2. 当前代码事实与风险
+## 2. 当前代码事实与风险（M2.3.1 实施前基线）
 
 代码审查确认：
 
@@ -27,7 +27,7 @@
 5. Host A 的 `RequestTracker` 默认记录保留期为 900 秒；MCP Gateway 的状态查询应依赖返回的 `state`，不能假定记录永久存在。
 6. 多个 Gateway 子进程目前共用同一个 AirBridge HTTP 服务、同一个 Runtime Session 和同一个 Capture Interpreter。
 
-因此，仅在 MCP 配置文件添加 Agent 名称、或只在 Gateway 检查权限，都不足以构成服务端身份认证与授权。
+因此，仅在 MCP 配置文件添加 Agent 名称、或只在 Gateway 检查权限，都不足以构成服务端身份认证与授权。\n\nM2.3.1 已在独立堆叠分支 `feature/m2-agent-security` 实现第一批服务端保护，但尚未部署到用户 Host A：SQLite 凭证库、一次性显示 Token 的本地管理 CLI、Gateway Bearer Header、HTTP route scopes、请求所有权绑定、服务端 EDA kill switch 和审计元数据已加入代码。GitHub Actions 的 Python 3.10 / 3.11 / 3.12 测试已通过；真实 Host A 凭证签发与 Antigravity / OpenCode 双 Token 验收仍待执行。
 
 ## 3. 威胁模型与信任边界
 
@@ -185,30 +185,33 @@ M2.3 初始建议值（实现时应可配置，最终以测试和实际负载验
 
 不能把认证代码放进 Capture Tcl / Dbo、Allegro SKILL 或 Runtime Adapter 的专业业务逻辑；它属于 Host A HTTP 接入边界。
 
-## 10. 实施分期
+## 10. 实施分期与当前状态
 
-### M2.3.1 — 服务端身份认证
-- SQLite 凭证库与 Token 管理 CLI。
-- Gateway Token 配置与 Authorization Header。
-- API v1 和 legacy 写入别名统一认证入口。
-- 未认证访问返回 401。
-- 不开放任何新执行权限。
+### M2.3.1 — 身份认证与初始服务端授权：代码实现 / CI PASS
 
-### M2.3.2 — Scope 授权与请求所有权
-- 实现 route -> scope 映射及 default-deny。
-- 初始两个 Agent 均仅有只读 scopes。
-- EDA execute 三重门禁，服务端全局开关默认 false。
-- request_id owner 检查和跨 Agent 查询拒绝。
-- Shell scopes 不发给 MCP Agent。
+已在 `feature/m2-agent-security` 实现：
+- SQLite 凭证库；Token 使用密码学安全随机值，数据库仅存 SHA-256 摘要。
+- 本地 CLI 支持 issue / list / revoke / audit；签发时明文 Token 只显示一次。
+- Gateway 必须配置独立的 `AIRBRIDGE_AGENT_TOKEN`，并为所有 HTTP API 请求附加 Bearer Header。
+- AirBridge HTTP Handler 统一认证 `/api/` 路由；未认证返回 401，scope 不足返回 403，未分类路由默认要求 `api.admin`。
+- 初始支持 runtime / EDA versions / request / EDA execute / Shell / filesystem scopes；初始 Agent Token 仅规划只读三个 scope。
+- EDA / Shell request_id 与 agent_id 绑定；其他 Agent 查询该 ID 返回等同 not_found 的 404。
+- 服务端 `AIRBRIDGE_ALLOW_EDA_EXECUTE` kill switch 默认关闭，与 Gateway 本地开关和 Token scope 形成三重门禁。
+- 审计表记录身份、路径、状态、请求 ID、正文长度和 SHA-256，不存 Token 或脚本正文。
+- Windows CI：Agent Security 的 Python 3.10 / 3.11 / 3.12 全部 PASS；MCP Gateway 的 Python 3.11 / 3.12 全部 PASS。
 
-### M2.3.3 — 审计与配额
-- 持久化审计记录，禁止保存 Token 和脚本正文。
-- 实施每 Agent API 速率和 EDA 在途请求限制。
-- Token 撤销后立即生效；错误响应不泄露 Token 是否存在等敏感信息。
+尚待：Host A 安装、分别签发 Antigravity / OpenCode Token、更新两端 MCP 配置和实机验收。未启用真实 EDA 执行。
 
-### M2.3.4 — 双 Host 安全验收
+### M2.3.2 — 审计加固、配额与生命周期治理：待实现
+- 审计写入失败时的 fail-closed admission / finalization 语义。
+- 审计保留期、请求归属记录清理和数据容量策略。
+- 每 Agent API 速率限制、EDA 提交速率及最大在途执行限制，超限返回 429。
+- 审计 CLI 查询和导出边界测试。
+- Token 撤销、轮换、过期和并发访问压力测试。
+
+### M2.3.3 — 双 Host 安全验收：待实机
 - Antigravity / OpenCode 分别使用不同 Token。
-- 只读 Token 均可读取各自允许的三项接口。
+- 两个只读 Token 均可读取各自允许的三项接口。
 - 无 Token、错误 Token、撤销 Token、scope 不足分别得到预期 401 / 403。
 - Agent A 不能查询 Agent B 的 request_id。
 - 只读 Token 调用 EDA Execute 得到 403；Gateway 关闭开关得到本地 disabled；服务端总开关关闭时即使 Gateway 打开也不能提交。
