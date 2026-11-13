@@ -6,6 +6,7 @@
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
+| [AirBridge 代码边界审计与渐进迁移计划 v1.0](AirBridge_代码边界审计与渐进迁移计划_v1.0.md) | 基于当前代码审计 Core / Adapter / Skill 混合点，提出 Capture Session 生命周期抽取、Polyfill 解耦、显式 Profile 路由与 Session 协议实施顺序 | 2026-11-13 静态审计完成；M1 代码迁移待开始 |
 | [AirBridge 职责边界与 Skill 集成规范 v1.0](AirBridge_职责边界与Skill集成规范_v1.0.md) | 冻结 Core、Runtime Adapter、软件内 Bridge 与 Agent Skill 的职责边界；Capture / Allegro API 归属、版本兼容、代码迁移和验收分层 | 2026-11-13 架构边界基线已建立；现有兼容代码待渐进迁移 |
 | [通用 Runtime Session 架构设计 v1.0](AirBridge_Runtime_Session_架构设计_v1.0.md) | Agent Skill、AirBridge Client、Session Broker、Process Supervisor、Runtime Adapter 的边界与生命周期 | P1.2–P1.7 软件层通过 CI；Capture Bridge / Start Page 关闭重启实机 PASS；专用 Session 生命周期、完整 FIFO Broker 和 Allegro 实机验收仍待后续阶段 |
 | [Runtime Session Protocol v1](AirBridge_Session_Protocol_v1.0.md) | Session / Request / Result 数据结构、ABFP 帧、HTTP API、幂等、超时和取消语义 | P1.2–P1.7 已实现软件部分通过 CI；Session Create / Close 专用协议与 FIFO Broker 待实现 |
