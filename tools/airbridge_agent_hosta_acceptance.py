@@ -154,6 +154,12 @@ def authenticate_local_token(
 
 def run(args: argparse.Namespace) -> int:
     probe = ReadOnlyApiProbe(args.base_url)
+    db_path = AgentSecurityStore.default_db_path()
+    if db_path != ":memory:" and not Path(db_path).expanduser().exists():
+        raise RuntimeError(
+            "Agent credential database does not exist at the configured path; "
+            "check AIRBRIDGE_AGENT_SECURITY_DB and start the matching AirBridge server first."
+        )
     store = AgentSecurityStore.from_env()
     failures = 0
     try:
