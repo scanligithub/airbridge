@@ -8,6 +8,7 @@ on:
       - "agent_security.py"
       - "airbridge_app.py"
       - "tools/airbridge_agent_admin.py"
+      - "tools/airbridge_agent_hosta_acceptance.py"
       - "test/test_agent_security.py"
       - "test/test_request_api_http.py"
       - ".github/workflows/agent-security.yml"
@@ -16,6 +17,7 @@ on:
       - "agent_security.py"
       - "airbridge_app.py"
       - "tools/airbridge_agent_admin.py"
+      - "tools/airbridge_agent_hosta_acceptance.py"
       - "test/test_agent_security.py"
       - "test/test_request_api_http.py"
       - ".github/workflows/agent-security.yml"
@@ -54,7 +56,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python -m py_compile agent_security.py airbridge_app.py tools/airbridge_agent_admin.py
+          python -m py_compile agent_security.py airbridge_app.py tools/airbridge_agent_admin.py tools/airbridge_agent_hosta_acceptance.py
 
       - name: Run Agent credential, scope, ownership and audit tests
         shell: pwsh
