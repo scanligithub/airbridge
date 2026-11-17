@@ -4,6 +4,7 @@
 - 适用分支：feature/m2-agent-security
 - 当前 PR：#5（目标 main；Ready for review；尚未合并）
 - 验收工具：tools/airbridge_agent_hosta_acceptance.py
+- 独立合成所有权探针：tools/airbridge_agent_hosta_ownership_probe.py（临时数据库、假 Worker、随机 loopback HTTP 服务；不连接正式服务）
 
 ## 1. 验收目标与安全边界
 
@@ -19,7 +20,7 @@
 
 **本操作不执行 EDA 或 Shell 请求。** 验收脚本只发送 loopback HTTP GET，不发送 POST，不产生 ABFP 帧，不调用 Capture Tcl 或 Allegro SKILL。EDA 执行开关在整个阶段保持关闭。
 
-本次 Host A 实测不能证明真实请求的跨 Agent 所有权隔离：只读 Agent 不会创建真实 EDA request_id。该隔离已有 Agent Security / HTTP CI 测试覆盖；如需 Host A 实测，必须另行设计不触发 EDA 的合成请求 fixture，不能用真实 EDA 执行来换取一个 request_id。
+真实 EDA request_id 的跨 Agent 隔离与合成请求隔离需要区分。为避免执行真实 EDA，本项目增加了独立探针 `tools/airbridge_agent_hosta_ownership_probe.py`：它在临时 SQLite 数据库、内存 RequestTracker、假 Worker 和随机 loopback 端口上启动隔离 HTTP 服务，预置一条由 fixture-owner 拥有的合成完成请求，再只发送 GET 查询。它验证请求所有者得到 HTTP 200、另一 Agent 得到 HTTP 404 / not_found，且非所有者与随机未知 UUID 的公开错误完全一致；同时验证无 request.read scope 返回 403，以及状态查询限额返回 429 / Retry-After。本探针不访问正式 AirBridge 8888 服务、不使用生产凭据库、不连接串口、不发送 POST、不发送 ABFP 帧，也不执行 Capture Tcl / Allegro SKILL。2026-11-17 Host-A 实测全部通过。该结果验证了 HTTP 层的合成请求归属隔离，不等同于真实 EDA 请求端到端隔离验收。
 
 ## 2. 更新 Host A 工作区
 
@@ -152,6 +153,18 @@ py -3.10 tools/airbridge_agent_hosta_acceptance.py --check-eda-versions
 
 这仍然只是 GET 查询，不会执行 EDA 脚本。
 
+### 6.1 独立合成所有权 / 403 / 429 探针
+
+完成正式只读探针后，可单独运行以下探针，验证 HTTP 层的请求归属隔离和只读状态查询授权边界：
+
+```powershell
+py -3.10 tools/airbridge_agent_hosta_ownership_probe.py
+```
+
+该脚本在临时目录中创建临时 SQLite 凭证库，以内存 RequestTracker 和禁止发送帧的假 Worker 启动随机 loopback 端口上的隔离 HTTP 服务。它预置一条合成完成请求，并且只发送 GET 请求。预期检查包括：请求所有者查询返回 200；另一 Agent 查询返回 404 / not_found；非所有者与随机未知 UUID 的公开错误完全一致；缺少 request.read scope 返回 403；状态查询超过测试配额后返回 429 并带 Retry-After；全过程发送帧次数为 0，Tracker 仅保留预置的合成请求。
+
+该探针不需要正式 Agent Token，不连接正式 AirBridge 8888 服务，不读取生产凭据数据库，不访问 Host B 或串口，不发送 POST / ABFP 帧，也不执行 EDA、Shell、Capture Tcl 或 Allegro SKILL。临时数据库随脚本退出而清理。2026-11-17 本机实测全部通过。此项只证明隔离 HTTP 服务上的合成请求归属，不替代真实 EDA request_id 的端到端验收。
+
 ## 7. 验证撤销与审计
 
 建议只使用一枚临时探针 Token 验证撤销，不要撤销 Antigravity / OpenCode 正式 Token：
@@ -190,8 +203,8 @@ py -3.10 tools/airbridge_agent_admin.py audit --agent-id opencode --limit 30
 - 不向 /api/v1/eda/execute、/api/v1/shell/exec 或旧版执行别名发送 POST。
 - 不切换 AIRBRIDGE_ALLOW_EDA_EXECUTE 或 AIRBRIDGE_ENABLE_EDA_EXECUTE 为 1。
 - 不为制造 request_id 而执行空 Tcl、测试 Tcl、SKILL 或其他脚本。
-- 不通过密集请求人为触发正式 Agent 的配额限制；配额 429 和 Retry-After 已由 Windows CI 集成测试覆盖。
-- 不把随机 UUID 返回的 404 描述为真实跨 Agent 所有权隔离验收。真实归属隔离由 CI 测试覆盖，Host A 的无执行合成 fixture 留待单独设计。
+- 不通过密集请求人为触发正式 Agent 的配额限制；HTTP 429 / Retry-After 已由隔离的 Host-A 合成探针本机验证，并由 Windows CI 集成测试覆盖。
+- 随机 UUID 返回的 404 单独看不能证明跨 Agent 隔离。Host-A synthetic ownership probe 已在隔离临时 HTTP 服务中验证 owner 200、non-owner 404，且 non-owner 与 random-unknown 的公开错误一致；该验证属于 HTTP 层合成 fixture，不是真实 EDA request_id 端到端验收。
 
 ## 9. 验收结果记录
 
@@ -207,6 +220,9 @@ py -3.10 tools/airbridge_agent_admin.py audit --agent-id opencode --limit 30
 - 临时 Token 撤销：
 - Agent 审计记录：
 - Host B EDA versions（已连接时）：
+- Host-A synthetic ownership / missing-scope 403 / status-quota 429 probe：
+- Synthetic probe 日期：
+- Synthetic probe 运行时 Git HEAD（未提交改动另行注明）：
 - EDA 两个执行开关是否保持 0：
 
 本轮全部通过后，M2.3 Host-A 只读身份与授权基础验收通过。PR #5 的合并仍按项目审查和 GitHub 流程另行决定。

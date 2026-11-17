@@ -56,6 +56,29 @@
 
 正式只读探针基础验收结果：8 项 PASS，0 项 FAIL。
 
+## 3.1 Host-A 合成请求归属 / 403 / 429 探针
+
+独立探针：`tools/airbridge_agent_hosta_ownership_probe.py`。执行日期：2026-11-17。
+
+本探针不依赖正式双 Agent EXE 或生产凭据库。脚本使用 `tempfile.TemporaryDirectory` 创建临时 SQLite 数据库，以内存 `RequestTracker` 预置一条归属于 `fixture-owner` 的合成完成请求；使用禁止发送帧的 `SyntheticWorker` 和随机 loopback 端口启动独立 HTTP 服务。整个探针只发送 GET 请求，不访问正式 `127.0.0.1:8888` 服务。
+
+| 检查 | 实测结果 |
+|---|---|
+| Owner 查询预置合成请求 | HTTP 200，state=`completed` |
+| 另一 Agent 查询该请求 | HTTP 404，`not_found` |
+| Non-owner 与 random-unknown 的公开响应 | 均为 HTTP 404 / `not_found`，错误文本完全一致 |
+| 缺少 `request.read` scope | HTTP 403 |
+| 状态查询超过测试配额 | HTTP 429，含 `Retry-After: 60` |
+| ABFP frame 发送次数 | 0 |
+| RequestTracker 中请求数 | 仅预置的 1 条合成请求 |
+| 临时凭据数据库 | 脚本退出时由临时目录清理 |
+
+**结果：8 项检查全部 PASS，0 项 FAIL。** 脚本输出明确确认只向临时 in-process 服务发送 loopback GET，没有使用生产数据库、串口、EDA / Shell POST 或 ABFP 帧，也没有执行 Capture Tcl / Allegro SKILL。
+
+本次探针运行时 Git HEAD：`101d8baf5787f36dad3b67ae274b9626e09d5321`。该 HEAD 是当时工作区的基线；合成探针脚本及本次文档变更尚未提交，因此不能把这些新增文件描述为已包含在该 commit 中。
+
+该结果验证的是 HTTP 层合成请求归属隔离，以及只读状态查询路径的 scope / quota 响应；不等同于真实 EDA request_id 的端到端跨 Agent 验收，也不覆盖 EDA Execute 403、Shell scope 拒绝或真实 EDA 429。
+
 ## 4. Token 撤销与审计
 
 使用临时 Agent `m23-revoke-probe` 创建一枚临时只读 Token，随即撤销：
@@ -85,17 +108,39 @@
 - [Redirect security regression Run #22](https://github.com/scanligithub/airbridge/actions/runs/44030460636)：Python 3.11、3.12 的 GET / EDA POST 重定向凭据不转发回归测试通过。
 - 当前 PR #5 HEAD：`173791844e47704e972d9d3b8c4d48d721e1fbaa`。PR 描述记录的 Agent Security 与 Gateway CI 已在该 HEAD 通过。
 
+### 5.2 后续代码 HEAD 与 CI 验证（2026-11-17）
+
+原 Host-A 双 Agent EXE 的构建 / 实机验收基线仍为本文档顶部记录的 `173791844e47704e972d9d3b8c4d48d721e1fbaa`，不因后续代码更新而改变。
+
+后续 PR 代码 HEAD 更新至 `101d8baf5787f36dad3b67ae274b9626e09d5321`，其中包含 Shell 串口提交异常处理修复（commit `101d8ba fix(shell): mark uncertain serial submissions unknown`）：提交结果不确定时将请求标记为 `unknown`，返回 HTTP 503 和结构化错误，保留原 request_id 供轮询，并记录 `SHELL_FRAME_SUBMISSION_UNCONFIRMED`，避免客户端误以为可安全重提。
+
+该代码 HEAD 的回归验证结果：
+
+- Python 3.10 全量测试：133 / 133 PASS。
+- `test_request_api_http.py`：21 / 21 PASS，包含 uncertain Shell submission 状态与轮询回归测试。
+- MCP Gateway 专用虚拟环境：14 / 14 PASS。
+- `git diff --check`：PASS（Shell 修复提交前的变更检查）。
+
+GitHub Actions 对 `101d8baf...` 的验证：
+
+- [Agent Security PR Run #38](https://github.com/scanligithub/airbridge/actions/runs/44044449477)：Python 3.10、3.11、3.12 全部成功。
+- [Agent Security push Run #37](https://github.com/scanligithub/airbridge/actions/runs/44044438830)：Python 3.10、3.11、3.12 全部成功。
+- [MCP Gateway PR Run #41](https://github.com/scanligithub/airbridge/actions/runs/44044449488)：Python 3.11、3.12 全部成功。
+- 上述 3 个 workflow run 均为 `completed / success`，合计 8 个 matrix jobs 全部成功。
+
+**范围说明：** 上述 GitHub Actions 和本机回归结果验证的是 `101d8ba` 代码 HEAD。新增的 `tools/airbridge_agent_hosta_ownership_probe.py` 及本次验收文档改动是在该 HEAD 之后加入工作区、尚未包含在该 commit / CI run 中；合成探针已另行在本机独立执行并通过，不能把它描述为已由上述 CI 运行验证。
+
 ## 6. 明确未执行 / 未覆盖项目
 
 - 未发送 EDA Execute 或 Shell POST。
 - 未产生 ABFP 执行帧。
 - 未执行 Capture Tcl、Allegro SKILL 或任何真实 EDA 操作。
 - 未验证 Host-B 在线时的 EDA versions 查询。
-- Host-A 随机未归属 UUID 的 404 **不等于**真实跨 Agent 请求所有权隔离实测；Host-A 本轮没有创建真实 EDA request ID。真实跨 Agent 请求状态隔离由 CI HTTP 集成测试 `test_request_status_is_not_visible_to_another_agent` 覆盖。
-- 没有在 Host-A 直接测试 EDA Execute 的 403 / 429 路径或 Shell scope 拒绝；相应服务端行为由 CI 覆盖，执行开关始终保持关闭。
+- 原双 Agent 正式只读探针中的随机未归属 UUID 404 **不等于**跨 Agent 请求所有权隔离实测。新增的 Host-A synthetic ownership probe 已在隔离临时 HTTP 服务中预置 owner 请求，并验证 owner 200、non-owner 404，以及 non-owner 与 random-unknown 的公开错误完全一致。这证明 HTTP 层合成请求归属隔离，但 Host-A 仍未创建或查询真实 EDA request_id，因此不属于真实 EDA 端到端验收。真实请求状态归属隔离另有 CI HTTP 集成测试 `test_request_status_is_not_visible_to_another_agent` 覆盖。
+- Host-A synthetic probe 已直接验证缺少 `request.read` scope 的 HTTP 403，以及状态查询配额超限的 HTTP 429 / `Retry-After`。它没有测试 EDA Execute 403、Shell scope 拒绝、真实 EDA 执行请求的 429，也没有发送任何 EDA / Shell POST；这些具体路径仍不属于本次 Host-A 实测范围，执行开关始终保持关闭。
 
 ## 7. 验收结论
 
-**M2.3 Host-A 双 Agent 身份认证、最小只读授权、loopback API 接入、MCP 连接、Token 即时撤销和审计验收通过。**
+**M2.3 Host-A 双 Agent 身份认证、最小只读授权、loopback API 接入、MCP 连接、Token 即时撤销和审计验收通过；独立 synthetic ownership probe 的 HTTP 层请求归属隔离、缺少 request.read scope 的 403、状态查询配额 429 / Retry-After 也已实测通过。**
 
-此结论仅覆盖本记录列出的 Host-A 只读范围，不代表 Host-B EDA 端到端验收完成，也不代表 Agent 获得独立 Runtime Session / Capture Interpreter。PR #5 仍按 GitHub 审查与合并流程另行决定。
+此结论仅覆盖本记录列出的 Host-A 只读与合成 HTTP 测试范围，不代表 Host-B EDA versions 查询或真实 EDA request_id 端到端验收完成，也不代表 EDA Execute / Shell 403、真实 EDA 执行配额 429 已在 Host-A 实测，更不代表 Agent 获得独立 Runtime Session / Capture Interpreter。PR #5 仍按 GitHub 审查与合并流程另行决定。
