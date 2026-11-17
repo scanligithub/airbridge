@@ -3,7 +3,7 @@
 - 文档创建日期：2026-11-13
 - 本次更新：2026-11-17
 - 版本：1.0
-- 状态：M2.3.1 / M2.3.2 代码与 Windows CI PASS（当前 Agent Security 提交 `50e65f4`；Gateway 安全修复提交 `6298348`）；PR #5 已 Ready for review，尚未合并；Host A 双 Token 配置和 Antigravity / OpenCode 安全实测待进行
+- 状态：M2.3.1 / M2.3.2 代码与 Windows CI PASS（当前 Agent Security 代码提交 `7b262df`；PR HEAD `1da56bc`；Gateway 安全修复提交 `6298348`）；PR #5 已 Ready for review，尚未合并；Host A 双 Token 配置和 Antigravity / OpenCode 安全实测待进行
 - 代码基线：M1 `43c0900b5728d9d13710e265bd87647804be2227`
 - 依赖阶段：M2.1 / M2.2 MCP Gateway 双 Host 安全模式验收已通过
 
@@ -218,9 +218,10 @@ M2.3 首批默认值（由 AirBridge 服务端环境变量配置）：
 - 每 Agent 最多一个未完成 EDA 请求；在途预留写入 SQLite，AirBridge 进程重启不会立即丢失，结果未知时保留至 1,800 秒保守期限。
 - Token 签发和撤销写入审计记录。
 - 已加入配额、持久化预留、审计清理、审计失败闭锁、legacy EDA alias、串口发送状态不确定及拒绝请求不生成可轮询 ID 等测试。
-- 最新 Agent Security 代码提交：`50e65f43027ec628254ee70990ae16faaea7e6ce`。
-- Agent Security Windows CI Run #18：Python 3.10 / 3.11 / 3.12 每个版本均通过 14 项凭证/存储测试和 20 项 HTTP 集成测试。
-- MCP Gateway Windows CI Run #22：Python 3.11 / 3.12 每个版本均通过 14 项 Gateway / MCP SDK 测试，包含 GET / POST 重定向不转发 Bearer Token 的回归测试。
+- 最新 Agent Security 代码提交：`7b262df824e5703cc491928d10ab8718cb82a305`；PR HEAD `1da56bc23f647a3134d125d1aad5c6aa0c703a18`。
+- Agent Security Windows CI PR Run #26（测试代码树 `e513ff4`）：Python 3.10 / 3.11 / 3.12 每个版本均通过 14 项凭证/存储测试和 20 项 HTTP 集成测试；编译检查包含 Host-A 只读验收探针。
+- MCP Gateway Windows CI PR Run #30：Python 3.11 / 3.12 每个版本均通过 14 项 Gateway / MCP SDK 测试。
+- Redirect-token regression CI Run #22：Python 3.11 / 3.12 的 GET / POST 重定向不转发 Bearer Token 测试通过。
 - 清理了 HTTP 集成测试中重复定义的方法，确保 Retry-After 与提交前拒绝不生成 request_id 的断言实际执行；清理了 SQLite 初始化中的重复 DDL。
 
 限制：滑动窗口计数在 AirBridge 当前服务进程内维护，服务重启会重置窗口；在途执行预留和请求所有权记录持久化。串口发送异常时视为 `unknown`，保留原 request_id 和额度预留；在提交前被拒绝的 HTTP 请求不会伪造一个可轮询的 request_id。
@@ -228,13 +229,12 @@ M2.3 首批默认值（由 AirBridge 服务端环境变量配置）：
 
 ### M2.3.3 — Host A 部署与双 Host 安全验收：待实机
 - PR #5 当前目标分支为 `main`，状态 Ready for review、尚未合并；最新 CI 已通过。
-- 在 Host A 本地签发独立只读 Token：Antigravity 与 OpenCode 各一枚。
-- 设置 AirBridge 服务端 `AIRBRIDGE_ALLOW_EDA_EXECUTE=0`；两端 Gateway 继续 `AIRBRIDGE_ENABLE_EDA_EXECUTE=0`。
-- 更新两个 MCP Host 配置，分别注入各自 Token；不在对话中暴露 Token。
-- 复验 capabilities、EDA versions 和 request status；无 Token / 错误 Token 返回 401，缺少 scope 返回 403。
-- 两 Agent 各自请求归属隔离、撤销 Token 立即失效、审计 CLI 可见且无 Token/脚本文本。
-- 直接 HTTP 调用 EDA execute（只发空请求体、只读 Token）应在服务端 scope 层 403 拦截，不发送 ABFP 帧；保持服务端和 Gateway 执行开关关闭。
-- 不执行任何真实 Tcl / SKILL，不进行 EDA 写入验收。
+- 已新增 [Host A 只读安全验收操作手册](AirBridge_M2.3_HostA_ReadOnly_Acceptance_Runbook_v1.0.md) 和 `tools/airbridge_agent_hosta_acceptance.py`，但尚未在用户 Host A 执行。
+- 在 Host A 从当前 M2.3 分支构建 / 启动 AirBridge；签发 Antigravity、OpenCode 各自独立的只读 Token，并注入各自 MCP 配置。
+- 设置服务端 `AIRBRIDGE_ALLOW_EDA_EXECUTE=0`；两端 Gateway 继续 `AIRBRIDGE_ENABLE_EDA_EXECUTE=0`。
+- 只读探针仅发送 loopback GET：验证无 Token / 错误 Token 的 401、两 Agent capabilities 的 200、request.read scope（随机未归属 UUID 返回 404 / not_found）、撤销 Token 的 401 及审计记录；EDA versions 查询可在 Host B 在线时附加执行。
+- 本轮不发送 EDA / Shell POST，不产生 ABFP 帧，不执行 Tcl / SKILL。只读 Token 的 EDA scope 拒绝、跨 Agent request_id 隔离、429 配额等继续由 CI 集成测试覆盖。
+- Host A 实时跨 Agent 所有权测试尚未进行：只读 Agent 不会创建真实 EDA request_id；如需实机验证，需另行开发不触发 EDA 的合成请求 fixture。
 ### M2.3.4 — 双 Host 安全验收与边界复核：待实机
 - Antigravity / OpenCode 分别使用不同 Token。
 - 两个只读 Token 均可读取各自允许的三项接口。
