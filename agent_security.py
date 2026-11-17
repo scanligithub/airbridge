@@ -131,13 +131,6 @@ class AgentSecurityStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_active_executions_agent
                     ON agent_active_executions(agent_id, created_at);
-                CREATE TABLE IF NOT EXISTS agent_active_executions (
-                    request_id TEXT PRIMARY KEY,
-                    agent_id TEXT NOT NULL,
-                    created_at REAL NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_agent_active_executions_agent
-                    ON agent_active_executions(agent_id, created_at);
                 CREATE TABLE IF NOT EXISTS agent_audit (
                     audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp TEXT NOT NULL,
