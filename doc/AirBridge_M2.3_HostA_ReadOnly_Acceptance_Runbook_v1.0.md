@@ -53,7 +53,7 @@ py -3.10 -m PyInstaller --distpath dist_m23_hosta --workpath build_m23_hosta Air
 构建完成后，后续从设置好安全环境变量的同一个 PowerShell 启动：
 
 ```powershell
-Start-Process -FilePath (Resolve-Path ".\dist_m23_hosta\AirBridge.exe")
+Start-Process -FilePath (Resolve-Path ".\dist_m23_hosta\AirBridge.exe").Path
 ```
 
 如按源码方式运行，则用项目现有 Python 3.10 环境从当前分支启动 `airbridge_app.py`。不要从 Explorer 启动一个继承不到本终端环境变量的旧进程。
