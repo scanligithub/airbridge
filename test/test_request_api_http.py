@@ -335,6 +335,20 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(body["error"]["code"], "AGENT_SCOPE_DENIED")
         self.assertEqual(self.worker.frames, [])
 
+        denial = next(
+            (
+                record
+                for record in self.security.list_audit(limit=20)
+                if record["path"] == "/api/v1/eda/execute"
+                and record["reason_code"] == "AGENT_SCOPE_DENIED"
+            ),
+            None,
+        )
+        self.assertIsNotNone(denial)
+        self.assertEqual(denial["agent_id"], "readonly-agent")
+        self.assertEqual(denial["token_id"], read_only["token_id"])
+        self.assertEqual(denial["http_status"], 403)
+
     def test_server_execution_kill_switch_overrides_agent_scope(self):
         blocked = AntigravityIPCServer(
             self.worker,

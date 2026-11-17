@@ -1848,6 +1848,7 @@ class AntigravityIPCServer:
           })
           return False
 
+        self._principal = principal
         required_scope = self._required_scope(method, path)
         if not principal.allows(required_scope):
           self._audit_reason = "AGENT_SCOPE_DENIED"
@@ -1913,7 +1914,6 @@ class AntigravityIPCServer:
           })
           return False
 
-        self._principal = principal
         self._audit_decision = "allowed"
         try:
           # Persist an admission record before the API handler can reach the
