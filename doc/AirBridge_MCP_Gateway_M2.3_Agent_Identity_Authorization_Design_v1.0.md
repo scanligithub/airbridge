@@ -3,7 +3,7 @@
 - 文档创建日期：2026-11-13
 - 本次更新：2026-11-17
 - 版本：1.0
-- 状态：M2.3.1 / M2.3.2 代码与 Windows CI PASS；2026-11-17 Host-A 双 Agent 只读实机验收 PASS（见 [Host-A 验收记录](AirBridge_M2.3_HostA_Acceptance_Record_20261117.md)）；PR #5 已 Ready for review，尚未合并；Host-B EDA versions 与额外跨 Agent Host-A 合成 fixture 仍待验证
+- 状态：M2.3.1 / M2.3.2 代码 PASS；Agent Security Windows CI（Python 3.10–3.12）与 MCP Gateway Linux CI（Python 3.11–3.12）PASS；2026-11-17 Host-A 双 Agent 只读实机验收 PASS（见 [Host-A 验收记录](AirBridge_M2.3_HostA_Acceptance_Record_20261117.md)）；PR #5 已 Ready for review，尚未合并；Host-B EDA versions 与额外跨 Agent Host-A 合成 fixture 仍待验证
 - 代码基线：M1 `43c0900b5728d9d13710e265bd87647804be2227`
 - 依赖阶段：M2.1 / M2.2 MCP Gateway 双 Host 安全模式验收已通过
 
@@ -242,16 +242,6 @@ Host-A 双 Agent 独立 Token、MCP Gateway 配置、服务端认证、只读接
 - 若需要 Host-A 实测真实跨 Agent 所有权隔离，应另行设计不发送 EDA / Shell 请求的合成请求 fixture。
 - Host-B 在线时的 EDA versions GET 查询尚待执行；本轮没有验证 Host-B / 串口链路。
 - Scope 拒绝、EDA 执行开关、配额 429 与无执行帧等路径继续由 CI 覆盖；本轮 Host-A 不发送执行类 POST。
-### M2.3.4 — 双 Host 安全验收与边界复核：待实机
-- Antigravity / OpenCode 分别使用不同 Token。
-- 两个只读 Token 均可读取各自允许的三项接口。
-- 无 Token、错误 Token、撤销 Token、scope 不足分别得到预期 401 / 403。
-- Agent A 不能查询 Agent B 的 request_id。
-- 只读 Token 调用 EDA Execute 得到 403；Gateway 关闭开关得到本地 disabled；服务端总开关关闭时即使 Gateway 打开也不能提交。
-- 超限返回 429，且没有执行帧。
-- 审计可按 Agent / request_id 查询，不包含脚本正文和 Token。
-- A/B 实机确认 AirBridge Runtime 正常，未触发未授权的 Capture 操作。
-
 ## 11. 验收边界与后续
 
 M2.3 完成后，能够对两个本地 MCP Agent 进行应用层身份识别、最小权限授权、请求结果归属检查、审计和基础限流。
