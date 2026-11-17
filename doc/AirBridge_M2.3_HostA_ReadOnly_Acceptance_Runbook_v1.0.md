@@ -25,36 +25,51 @@
 
 在 Host A 仓库根目录打开 PowerShell：
 
-\`\`\`powershell
+```powershell
 git status --short --branch
 git branch --show-current
 git fetch origin
 git pull --ff-only origin feature/m2-agent-security
 git rev-parse --short HEAD
-\`\`\`
+```
 
 确认当前分支为 feature/m2-agent-security，且 HEAD 已包含本操作手册和只读验收工具。若存在未提交的 tracked 修改，先停止并检查，不要自动 stash、reset 或覆盖。历史 build_* / dist_* 目录属于未跟踪构建产物，不要删除。
 
 本地更新后可先运行：
 
-\`\`\`powershell
+```powershell
 py -3.10 -m py_compile agent_security.py tools/airbridge_agent_admin.py tools/airbridge_agent_hosta_acceptance.py
 py -3.10 -m unittest discover -s test -p "test_agent_security.py" -v
 py -3.10 -m unittest discover -s test -p "test_request_api_http.py" -v
-\`\`\`
+```
+
+Host A 必须运行包含 M2.3 代码的程序，不能继续使用旧的 M1 / main 分支 EXE。若用 PyInstaller EXE，建议使用独立输出目录构建，避免覆盖历史 build / dist 产物：
+
+```powershell
+py -3.10 -m PyInstaller --version
+py -3.10 -m PyInstaller --distpath dist_m23_hosta --workpath build_m23_hosta AirBridge.spec
+```
+
+构建完成后，后续从设置好安全环境变量的同一个 PowerShell 启动：
+
+```powershell
+Start-Process -FilePath (Resolve-Path ".\dist_m23_hosta\AirBridge.exe")
+```
+
+如按源码方式运行，则用项目现有 Python 3.10 环境从当前分支启动 `airbridge_app.py`。不要从 Explorer 启动一个继承不到本终端环境变量的旧进程。
 
 ## 3. 确认服务端安全配置
 
 在启动 AirBridge 桌面进程的 PowerShell 环境中设置：
 
-\`\`\`powershell
+```powershell
 $env:AIRBRIDGE_AGENT_SECURITY_DB = Join-Path $env:LOCALAPPDATA "AirBridge\agent_security.sqlite3"
 $env:AIRBRIDGE_ALLOW_EDA_EXECUTE = "0"
 $env:AIRBRIDGE_AGENT_READ_RPM = "60"
 $env:AIRBRIDGE_AGENT_STATUS_RPM = "120"
 $env:AIRBRIDGE_AGENT_EXECUTE_RPM = "5"
 $env:AIRBRIDGE_AGENT_MAX_PENDING_EDA = "1"
-\`\`\`
+```
 
 若你原来使用自定义 AIRBRIDGE_AGENT_SECURITY_DB，必须把该变量设置为原数据库的准确路径；不要创建第二个数据库。管理员 CLI、AirBridge 服务端必须使用相同 Windows 用户及相同数据库路径。
 
@@ -62,10 +77,10 @@ $env:AIRBRIDGE_AGENT_MAX_PENDING_EDA = "1"
 
 确认 8888 只监听 loopback：
 
-\`\`\`powershell
+```powershell
 Get-NetTCPConnection -State Listen -LocalPort 8888 |
   Format-Table LocalAddress, LocalPort, OwningProcess
-\`\`\`
+```
 
 预期 LocalAddress 为 127.0.0.1。若显示 0.0.0.0 或 LAN 地址，停止验收并先修复监听范围。
 
@@ -73,19 +88,19 @@ Get-NetTCPConnection -State Listen -LocalPort 8888 |
 
 在仓库根目录执行，每个命令只运行一次：
 
-\`\`\`powershell
+```powershell
 py -3.10 tools/airbridge_agent_admin.py issue --agent-id antigravity --scope runtime.read --scope eda.versions.read --scope request.read --label host-a-antigravity
 py -3.10 tools/airbridge_agent_admin.py issue --agent-id opencode --scope runtime.read --scope eda.versions.read --scope request.read --label host-a-opencode
-\`\`\`
+```
 
 Token 明文只在签发时显示一次。将每个 Token 直接复制到对应 MCP Host 的本地配置，不要贴入聊天、Issue、PR、日志或仓库文件。不要把两个 Token 互换。
 
 检查凭证元数据和 scope：
 
-\`\`\`powershell
+```powershell
 py -3.10 tools/airbridge_agent_admin.py list --agent-id antigravity
 py -3.10 tools/airbridge_agent_admin.py list --agent-id opencode
-\`\`\`
+```
 
 必须确认两个 Agent 各有一枚 enabled 凭证，scope 恰好是 runtime.read、eda.versions.read、request.read；没有 eda.execute、Shell、api.admin 或通配权限。
 
@@ -93,7 +108,7 @@ py -3.10 tools/airbridge_agent_admin.py list --agent-id opencode
 
 分别在 Antigravity 和 OpenCode 的 MCP Gateway 配置中设置：
 
-\`\`\`json
+```json
 {
   "env": {
     "AIRBRIDGE_BASE_URL": "http://127.0.0.1:8888",
@@ -101,7 +116,7 @@ py -3.10 tools/airbridge_agent_admin.py list --agent-id opencode
     "AIRBRIDGE_ENABLE_EDA_EXECUTE": "0"
   }
 }
-\`\`\`
+```
 
 保持两边 Gateway 执行开关均为 0。保存配置并按客户端的正常方式重启 MCP Host / Gateway 子进程。配置文件应只允许当前 Windows 用户读取；不要把包含 Token 的完整配置文件上传或提交到 Git。
 
@@ -109,9 +124,9 @@ py -3.10 tools/airbridge_agent_admin.py list --agent-id opencode
 
 在设置了与 AirBridge 服务端相同的 AIRBRIDGE_AGENT_SECURITY_DB 环境变量的 PowerShell 中执行：
 
-\`\`\`powershell
+```powershell
 py -3.10 tools/airbridge_agent_hosta_acceptance.py
-\`\`\`
+```
 
 探针会通过隐藏输入分别读取两枚 Token。Token 不会被打印或写入文件。脚本先用本地 SQLite 校验 Agent ID 和精确的只读 scope，再发送 HTTP GET：
 
@@ -126,9 +141,9 @@ py -3.10 tools/airbridge_agent_hosta_acceptance.py
 
 若 Host B / 串口链路已正常连接，可增加 EDA versions 检查：
 
-\`\`\`powershell
+```powershell
 py -3.10 tools/airbridge_agent_hosta_acceptance.py --check-eda-versions
-\`\`\`
+```
 
 这仍然只是 GET 查询，不会执行 EDA 脚本。
 
@@ -136,31 +151,31 @@ py -3.10 tools/airbridge_agent_hosta_acceptance.py --check-eda-versions
 
 建议只使用一枚临时探针 Token 验证撤销，不要撤销 Antigravity / OpenCode 正式 Token：
 
-\`\`\`powershell
+```powershell
 py -3.10 tools/airbridge_agent_admin.py issue --agent-id m23-revoke-probe --scope runtime.read --scope eda.versions.read --scope request.read --label temporary-revocation-test
-\`\`\`
+```
 
 记下输出中的 token_id 和 Token 明文。然后撤销该临时 Token：
 
-\`\`\`powershell
+```powershell
 py -3.10 tools/airbridge_agent_admin.py revoke --token-id <上一步的-token_id>
-\`\`\`
+```
 
 用以下命令验证撤销记录：
 
-\`\`\`powershell
+```powershell
 py -3.10 tools/airbridge_agent_admin.py list --agent-id m23-revoke-probe
 py -3.10 tools/airbridge_agent_hosta_acceptance.py --check-revoked
-\`\`\`
+```
 
 探针会隐藏输入已撤销的临时 Token，并验证本地凭证库和正在运行的 HTTP 服务均拒绝它（401）。完成后无需删除审计记录；保留撤销元数据作为验收证据。
 
 检查两枚正式 Token 的审计记录：
 
-\`\`\`powershell
+```powershell
 py -3.10 tools/airbridge_agent_admin.py audit --agent-id antigravity --limit 30
 py -3.10 tools/airbridge_agent_admin.py audit --agent-id opencode --limit 30
-\`\`\`
+```
 
 确认记录只包含 Agent、路径、HTTP 状态、decision / reason_code、request_id（如有）、payload 长度和摘要；不得包含 Bearer Token 或脚本正文。
 
