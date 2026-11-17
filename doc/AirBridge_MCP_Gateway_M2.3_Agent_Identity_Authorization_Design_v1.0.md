@@ -188,7 +188,7 @@ M2.3 首批默认值（由 AirBridge 服务端环境变量配置）：
 - `mcp_gateway/airbridge_mcp_gateway/config.py`：读取并校验 `AIRBRIDGE_AGENT_TOKEN`。
 - `mcp_gateway/airbridge_mcp_gateway/http_client.py`：附加 Authorization Header。
 - `mcp_gateway/airbridge_mcp_gateway/service.py`：将 401 / 403 / 429 保留为结构化业务结果，不自动重试写请求。
-- `tools/airbridge_agent_admin.py`：本机管理员 CLI，支持 issue / list / revoke / rotate；明文 Token 仅签发时输出一次。
+- `tools/airbridge_agent_admin.py`：本机管理员 CLI，支持 issue / list / revoke / audit；Token 轮换通过先签发新 Token、再撤销旧 Token 完成，明文仅签发时输出一次。
 - `test/test_agent_security.py` 与 `mcp_gateway/tests/test_gateway.py`：覆盖服务端策略及 Gateway HTTP Header 契约。
 
 不能把认证代码放进 Capture Tcl / Dbo、Allegro SKILL 或 Runtime Adapter 的专业业务逻辑；它属于 Host A HTTP 接入边界。
@@ -220,7 +220,7 @@ Host-A 双 Agent 独立 Token、MCP Gateway 配置、服务端认证、只读接
 - 已加入配额、持久化预留、审计清理、审计失败闭锁、legacy EDA alias、串口发送状态不确定及拒绝请求不生成可轮询 ID 等测试。
 - 最新 Agent Security 代码提交：`7b262df824e5703cc491928d10ab8718cb82a305`；本次 Host-A 验收对应代码树 HEAD：`173791844e47704e972d9d3b8c4d48d721e1fbaa`。
 - Agent Security Windows CI PR Run #32：Python 3.10 / 3.11 / 3.12 每个版本均通过 14 项凭据/Scope/请求归属/审计测试和 20 项 HTTP 集成测试；编译检查包含 Host-A 只读验收探针。
-- MCP Gateway Windows CI PR Run #36：Python 3.11 / 3.12 每个版本均通过 14 项 Gateway / MCP SDK 测试。
+- MCP Gateway CI PR Run #36（Linux runners）：Python 3.11 / 3.12 每个版本均通过 14 项 Gateway / MCP SDK 测试。
 - Redirect-token regression CI Run #22：Python 3.11 / 3.12 的 GET / POST 重定向不转发 Bearer Token 测试通过。
 - 清理了 HTTP 集成测试中重复定义的方法，确保 Retry-After 与提交前拒绝不生成 request_id 的断言实际执行；清理了 SQLite 初始化中的重复 DDL。
 
