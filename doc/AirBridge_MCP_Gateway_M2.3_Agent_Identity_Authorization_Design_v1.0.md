@@ -1,8 +1,9 @@
 # AirBridge M2.3：Agent 身份认证、权限控制与审计设计
 
-- 日期：2026-11-13
+- 文档创建日期：2026-11-13
+- 本次更新：2026-11-17
 - 版本：1.0
-- 状态：M2.3.1 / M2.3.2 代码与 CI PASS（提交 63f767e）；Host A 双 Token 配置和 Antigravity / OpenCode 安全实测待进行
+- 状态：M2.3.1 / M2.3.2 代码与 Windows CI PASS（当前 Agent Security 提交 `50e65f4`；Gateway 安全修复提交 `6298348`）；PR #5 已 Ready for review，尚未合并；Host A 双 Token 配置和 Antigravity / OpenCode 安全实测待进行
 - 代码基线：M1 `43c0900b5728d9d13710e265bd87647804be2227`
 - 依赖阶段：M2.1 / M2.2 MCP Gateway 双 Host 安全模式验收已通过
 
@@ -29,7 +30,7 @@
 
 因此，仅在 MCP 配置文件添加 Agent 名称、或只在 Gateway 检查权限，都不足以构成服务端身份认证与授权。
 
-M2.3.1 已在独立堆叠分支 `feature/m2-agent-security` 实现第一批服务端保护，但尚未部署到用户 Host A：SQLite 凭证库、一次性显示 Token 的本地管理 CLI、Gateway Bearer Header、HTTP route scopes、请求所有权绑定、服务端 EDA kill switch 和审计元数据已加入代码。GitHub Actions 的 Python 3.10 / 3.11 / 3.12 测试已通过；真实 Host A 凭证签发与 Antigravity / OpenCode 双 Token 验收仍待执行。
+M2.3.1 已在 `feature/m2-agent-security` 实现第一批服务端保护，但尚未部署到用户 Host A：SQLite 凭证库、一次性显示 Token 的本地管理 CLI、Gateway Bearer Header、HTTP route scopes、请求所有权绑定、服务端 EDA kill switch 和审计元数据已加入代码。Gateway HTTP 客户端已禁用自动重定向，防止 Bearer Token 被转发到重定向目标。最新 Windows CI 已验证 Python 3.10 / 3.11 / 3.12；真实 Host A 凭证签发与 Antigravity / OpenCode 双 Token 验收仍待执行。
 
 ## 3. 威胁模型与信任边界
 
@@ -205,7 +206,7 @@ M2.3 首批默认值（由 AirBridge 服务端环境变量配置）：
 - EDA / Shell request_id 与 agent_id 绑定；其他 Agent 查询该 ID 返回等同 not_found 的 404。
 - 服务端 `AIRBRIDGE_ALLOW_EDA_EXECUTE` kill switch 默认关闭，与 Gateway 本地开关和 Token scope 形成三重门禁。
 - 审计表记录身份、路径、状态、请求 ID、正文长度和 SHA-256，不存 Token 或脚本正文。
-- Windows CI：Agent Security 的 Python 3.10 / 3.11 / 3.12 全部 PASS；MCP Gateway 的 Python 3.11 / 3.12 全部 PASS。
+- Windows CI：Agent Security 的 Python 3.10 / 3.11 / 3.12 全部 PASS；MCP Gateway 的 Python 3.11 / 3.12 全部 PASS。Gateway 客户端的 GET 和 EDA Execute POST 重定向凭据不转发回归测试通过。
 
 尚待：Host A 安装、分别签发 Antigravity / OpenCode Token、更新两端 MCP 配置和实机验收。未启用真实 EDA 执行。
 
@@ -217,13 +218,16 @@ M2.3 首批默认值（由 AirBridge 服务端环境变量配置）：
 - 每 Agent 最多一个未完成 EDA 请求；在途预留写入 SQLite，AirBridge 进程重启不会立即丢失，结果未知时保留至 1,800 秒保守期限。
 - Token 签发和撤销写入审计记录。
 - 已加入配额、持久化预留、审计清理、审计失败闭锁、legacy EDA alias、串口发送状态不确定及拒绝请求不生成可轮询 ID 等测试。
-- 最新代码提交：`63f767ed8c142312c117e28f2ca3d974a1476d6f`。
-- Windows CI：Agent Security Python 3.10 / 3.11 / 3.12 每个版本均通过 14 项凭证/存储测试和 20 项 HTTP 集成测试；MCP Gateway Python 3.11 / 3.12 每个版本均通过 12 项测试。
+- 最新 Agent Security 代码提交：`50e65f43027ec628254ee70990ae16faaea7e6ce`。
+- Agent Security Windows CI Run #18：Python 3.10 / 3.11 / 3.12 每个版本均通过 14 项凭证/存储测试和 20 项 HTTP 集成测试。
+- MCP Gateway Windows CI Run #22：Python 3.11 / 3.12 每个版本均通过 14 项 Gateway / MCP SDK 测试，包含 GET / POST 重定向不转发 Bearer Token 的回归测试。
+- 清理了 HTTP 集成测试中重复定义的方法，确保 Retry-After 与提交前拒绝不生成 request_id 的断言实际执行；清理了 SQLite 初始化中的重复 DDL。
 
 限制：滑动窗口计数在 AirBridge 当前服务进程内维护，服务重启会重置窗口；在途执行预留和请求所有权记录持久化。串口发送异常时视为 `unknown`，保留原 request_id 和额度预留；在提交前被拒绝的 HTTP 请求不会伪造一个可轮询的 request_id。
 
 
 ### M2.3.3 — Host A 部署与双 Host 安全验收：待实机
+- PR #5 当前目标分支为 `main`，状态 Ready for review、尚未合并；最新 CI 已通过。
 - 在 Host A 本地签发独立只读 Token：Antigravity 与 OpenCode 各一枚。
 - 设置 AirBridge 服务端 `AIRBRIDGE_ALLOW_EDA_EXECUTE=0`；两端 Gateway 继续 `AIRBRIDGE_ENABLE_EDA_EXECUTE=0`。
 - 更新两个 MCP Host 配置，分别注入各自 Token；不在对话中暴露 Token。
