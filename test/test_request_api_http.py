@@ -199,6 +199,48 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         submitted = json.loads(sent_frame[1].decode("utf-8"))
         self.assertEqual(submitted["request_id"], body["request_id"])
 
+    def test_uncertain_shell_serial_send_is_unknown_and_request_can_be_polled(self):
+        self.worker.raise_on_send = True
+        status, body = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "command": "Write-Output uncertain",
+                "timeout": 5,
+                "async": False,
+            },
+        )
+
+        self.assertEqual(status, 503, body)
+        self.assertEqual(body["state"], "unknown")
+        self.assertEqual(
+            body["error"]["code"], "SHELL_FRAME_SUBMISSION_UNCONFIRMED"
+        )
+        self.assertIn("Query this request_id", body["error"]["next_step"])
+        request_id = body["request_id"]
+        self.assertEqual(len(self.worker.frames), 1)
+        self.assertEqual(
+            self.worker.request_tracker._records[request_id]["state"], "unknown"
+        )
+
+        poll_status, polled = self._request_json(
+            "GET", f"/api/v1/requests/{request_id}"
+        )
+        self.assertEqual(poll_status, 503, polled)
+        self.assertEqual(polled["state"], "unknown")
+        self.assertEqual(len(self.worker.frames), 1)
+
+        audit = next(
+            (
+                record
+                for record in self.security.list_audit(limit=20)
+                if record["path"] == "/api/v1/shell/exec"
+                and record["reason_code"] == "SHELL_FRAME_SUBMISSION_UNCONFIRMED"
+            ),
+            None,
+        )
+        self.assertIsNotNone(audit)
+
     def test_async_shell_returns_acceptance_not_false_completion(self):
         status, body = self._request_json(
             "POST",

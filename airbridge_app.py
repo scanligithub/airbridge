@@ -2300,8 +2300,17 @@ class AntigravityIPCServer:
                 json.dumps(remote_task, ensure_ascii=False).encode("utf-8"),
             )
           except Exception as exc:
-            worker_ref.request_tracker.fail(request_id, str(exc))
-            self._reply_json(503, {"request_id": request_id, "state": "not_submitted", "error": str(exc)})
+            worker_ref.request_tracker.fail(request_id, str(exc), state="unknown")
+            self._audit_reason = "SHELL_FRAME_SUBMISSION_UNCONFIRMED"
+            self._reply_json(503, {
+                "request_id": request_id,
+                "state": "unknown",
+                "error": {
+                    "code": "SHELL_FRAME_SUBMISSION_UNCONFIRMED",
+                    "message": str(exc),
+                    "next_step": "Query this request_id; do not submit a new request.",
+                },
+            })
             return
 
           default_wait = 10000 if is_async else min(
