@@ -3,7 +3,7 @@
 - 文档创建日期：2026-11-13
 - 本次更新：2026-11-17
 - 版本：1.0
-- 状态：M2.3.1 / M2.3.2 代码与 Windows CI PASS（当前 Agent Security 代码提交 `7b262df`；PR HEAD `1da56bc`；Gateway 安全修复提交 `6298348`）；PR #5 已 Ready for review，尚未合并；Host A 双 Token 配置和 Antigravity / OpenCode 安全实测待进行
+- 状态：M2.3.1 / M2.3.2 代码与 Windows CI PASS（当前 Agent Security 代码提交 `7b262df`；PR HEAD `76c1561`；Gateway 安全修复提交 `6298348`）；PR #5 已 Ready for review，尚未合并；Host A 双 Token 配置和 Antigravity / OpenCode 安全实测待进行
 - 代码基线：M1 `43c0900b5728d9d13710e265bd87647804be2227`
 - 依赖阶段：M2.1 / M2.2 MCP Gateway 双 Host 安全模式验收已通过
 
