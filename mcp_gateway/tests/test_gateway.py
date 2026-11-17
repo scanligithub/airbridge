@@ -8,12 +8,29 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
 from airbridge_mcp_gateway.config import GatewayConfig, GatewayConfigurationError
+from airbridge_mcp_gateway.http_client import AirBridgeTransportError
 from airbridge_mcp_gateway.service import AirBridgeGateway
 
 
 class _State:
     requests: list[tuple[str, str, dict | None]] = []
     authorization_headers: list[str | None] = []
+    redirect_target_authorization_headers: list[str | None] = []
+    redirect_execute: bool = False
+
+
+class _RedirectTargetHandler(BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        return
+
+    def do_GET(self):
+        _State.redirect_target_authorization_headers.append(self.headers.get("Authorization"))
+        raw = json.dumps({"unexpected": "redirect target reached"}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -39,6 +56,11 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/api/v1/requests/"):
             request_id = unquote(path.rsplit("/", 1)[-1])
             self._send(200, {"request_id": request_id, "state": "completed", "result": {"success": True}})
+        elif path == "/api/v1/runtime/capabilities-redirect":
+            self.send_response(302)
+            self.send_header("Location", GatewayTests.redirect_target_url)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         else:
             self._send(404, {"error": "not found"})
 
@@ -49,6 +71,12 @@ class _Handler(BaseHTTPRequestHandler):
         _State.requests.append(("POST", path, payload))
         _State.authorization_headers.append(self.headers.get("Authorization"))
         if path == "/api/v1/eda/execute":
+            if _State.redirect_execute:
+                self.send_response(302)
+                self.send_header("Location", GatewayTests.redirect_target_url)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             self._send(200, {
                 "request_id": payload["request_id"],
                 "state": "completed",
@@ -66,15 +94,27 @@ class GatewayTests(unittest.TestCase):
         cls.thread.start()
         cls.base_url = f"http://127.0.0.1:{cls.httpd.server_address[1]}"
 
+        cls.redirect_target = ThreadingHTTPServer(("127.0.0.1", 0), _RedirectTargetHandler)
+        cls.redirect_target_thread = threading.Thread(
+            target=cls.redirect_target.serve_forever, daemon=True
+        )
+        cls.redirect_target_thread.start()
+        cls.redirect_target_url = f"http://127.0.0.1:{cls.redirect_target.server_address[1]}/target"
+
     @classmethod
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
         cls.thread.join(timeout=2)
+        cls.redirect_target.shutdown()
+        cls.redirect_target.server_close()
+        cls.redirect_target_thread.join(timeout=2)
 
     def setUp(self):
         _State.requests.clear()
         _State.authorization_headers.clear()
+        _State.redirect_target_authorization_headers.clear()
+        _State.redirect_execute = False
         self.config = GatewayConfig(
             base_url=self.base_url,
             enable_eda_execute=True,
@@ -95,6 +135,27 @@ class GatewayTests(unittest.TestCase):
             [item[1] for item in _State.requests],
             ["/api/v1/runtime/capabilities", "/api/v1/eda/versions"],
         )
+
+    def test_http_client_rejects_redirect_without_forwarding_bearer_token(self):
+        with self.assertRaisesRegex(AirBridgeTransportError, "redirects are disabled"):
+            self.gateway.client.request_json(
+                "GET", "/api/v1/runtime/capabilities-redirect"
+            )
+
+        # The configured local endpoint received the request, but the redirect target did not.
+        self.assertEqual(_State.authorization_headers, ["Bearer test-agent-token"])
+        self.assertEqual(_State.redirect_target_authorization_headers, [])
+        self.assertEqual(len(_State.requests), 1)
+
+    def test_execute_redirect_is_unconfirmed_and_does_not_forward_bearer_token(self):
+        _State.redirect_execute = True
+        result = self.gateway.execute_eda(script="puts redirect probe")
+
+        self.assertEqual(result["state"], "unconfirmed")
+        self.assertEqual(str(uuid.UUID(result["request_id"])), result["request_id"])
+        self.assertEqual(_State.authorization_headers, ["Bearer test-agent-token"])
+        self.assertEqual(_State.redirect_target_authorization_headers, [])
+        self.assertEqual(len(_State.requests), 1)
 
     def test_execute_generates_uuid_and_preserves_opaque_script(self):
         script = 'puts "gateway probe"\nputs [pid]'

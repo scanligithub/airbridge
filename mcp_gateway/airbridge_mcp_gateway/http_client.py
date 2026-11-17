@@ -6,7 +6,7 @@ import json
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .config import GatewayConfig
 
@@ -15,11 +15,19 @@ class AirBridgeTransportError(RuntimeError):
     """The local HTTP endpoint could not return a trustworthy API response."""
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Reject redirects so an Agent Bearer token cannot leave the configured origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise HTTPError(req.full_url, code, msg, headers, fp)
+
+
 class AirBridgeHttpClient:
     """Calls only the public HTTP endpoints implemented by AirBridge on Host A."""
 
     def __init__(self, config: GatewayConfig):
         self._config = config
+        self._opener = build_opener(_NoRedirectHandler())
 
     def request_json(
         self,
@@ -53,9 +61,14 @@ class AirBridgeHttpClient:
             else timeout_seconds
         )
         try:
-            with urlopen(request, timeout=timeout) as response:
+            with self._opener.open(request, timeout=timeout) as response:
                 return self._decode_response(response.status, response.read())
         except HTTPError as exc:
+            if 300 <= exc.code < 400:
+                exc.close()
+                raise AirBridgeTransportError(
+                    f"AirBridge returned redirect response (HTTP {exc.code}); redirects are disabled"
+                ) from exc
             return self._decode_response(exc.code, exc.read())
         except (URLError, TimeoutError, OSError) as exc:
             raise AirBridgeTransportError(str(exc)) from exc
