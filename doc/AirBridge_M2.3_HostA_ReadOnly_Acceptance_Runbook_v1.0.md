@@ -47,14 +47,19 @@ Host A 必须运行包含 M2.3 代码的程序，不能继续使用旧的 M1 / m
 
 ```powershell
 py -3.10 -m PyInstaller --version
-py -3.10 -m PyInstaller --distpath dist_m23_hosta --workpath build_m23_hosta AirBridge.spec
+$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$distDir = "dist_m23_hosta_$stamp"
+$buildDir = "build_m23_hosta_$stamp"
+py -3.10 -m PyInstaller --distpath $distDir --workpath $buildDir AirBridge.spec
 ```
 
 构建完成后，后续从设置好安全环境变量的同一个 PowerShell 启动：
 
 ```powershell
-Start-Process -FilePath (Resolve-Path ".\dist_m23_hosta\AirBridge.exe").Path
+Start-Process -FilePath (Resolve-Path "$distDir\AirBridge.exe").Path
 ```
+
+每次使用新的带时间戳目录，不覆盖以前的 build / dist 产物；失败构建目录也先保留，不要清理。
 
 如按源码方式运行，则用项目现有 Python 3.10 环境从当前分支启动 `airbridge_app.py`。不要从 Explorer 启动一个继承不到本终端环境变量的旧进程。
 
