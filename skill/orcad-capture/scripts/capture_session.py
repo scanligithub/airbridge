@@ -254,7 +254,10 @@ class SessionManifest:
             raise CaptureSessionError("session_id must be a UUID") from exc
         if not isinstance(self.startup_nonce, str) or len(self.startup_nonce) < 32:
             raise CaptureSessionError("startup_nonce must contain at least 32 characters")
-        if self.schema_version != 1:
+        if (
+            isinstance(self.schema_version, bool)
+            or self.schema_version != 1
+        ):
             raise CaptureSessionError("unsupported Session Manifest schema version")
         try:
             self.state = SessionState(self.state).value
@@ -437,7 +440,15 @@ class CaptureSession:
         return SessionState(self.manifest.state)
 
     def transition(self, target: SessionState | str) -> None:
+        """Allow callers to request read-only inspection, not bypass guards."""
         next_state = SessionState(target)
+        if next_state is not SessionState.INSPECTING:
+            raise CaptureStateTransitionError(
+                "use the corresponding CaptureSession method for guarded transitions"
+            )
+        self._move_to(next_state)
+
+    def _move_to(self, next_state: SessionState) -> None:
         current = self.state
         if (
             next_state is SessionState.STARTING
@@ -463,7 +474,7 @@ class CaptureSession:
         self.transition(SessionState.INSPECTING)
 
     def begin_start(self) -> None:
-        self.transition(SessionState.STARTING)
+        self._move_to(SessionState.STARTING)
 
     def record_process_identity(self, identity: ProcessIdentity) -> None:
         if self.state is not SessionState.STARTING:
@@ -518,9 +529,13 @@ class CaptureSession:
             self.manifest.remote_session_dir = str(remote_session_dir)
         if hook_path:
             self.manifest.hook_path = str(hook_path)
-        self.transition(SessionState.BRIDGE_PENDING)
+        self._move_to(SessionState.BRIDGE_PENDING)
 
     def mark_ready(self, evidence: BridgeReadyEvidence) -> None:
+        if self.manifest.reconciliation_required:
+            raise CaptureStateTransitionError(
+                "this session has an unresolved prior outcome and cannot become READY"
+            )
         if self.state is not SessionState.BRIDGE_PENDING:
             raise CaptureStateTransitionError(
                 "Bridge READY is only valid while bridge_pending"
@@ -555,9 +570,13 @@ class CaptureSession:
         if expected_digest and not hmac.compare_digest(digest, expected_digest):
             raise CaptureIdentityError("READY Bridge hash does not match the deployed file")
         self.manifest.tcl_version = actual_tcl
-        self.transition(SessionState.READY)
+        self._move_to(SessionState.READY)
 
     def begin_operation(self, request_id: str) -> None:
+        if self.manifest.reconciliation_required:
+            raise CaptureStateTransitionError(
+                "resolve the previous UNKNOWN request before submitting another Tcl operation"
+            )
         if self.state is not SessionState.READY:
             raise CaptureStateTransitionError(
                 "Tcl operation requires a READY Capture session"
@@ -566,7 +585,7 @@ class CaptureSession:
             normalized = str(uuid.UUID(request_id))
         except (ValueError, TypeError, AttributeError) as exc:
             raise CaptureSessionError("operation request_id must be a UUID") from exc
-        self.transition(SessionState.BUSY)
+        self._move_to(SessionState.BUSY)
         self.manifest.active_request_id = normalized
 
     def complete_operation(self, request_id: str) -> None:
@@ -586,7 +605,7 @@ class CaptureSession:
             raise CaptureStateTransitionError(
                 "an absent or closed session cannot become unknown"
             )
-        self.transition(SessionState.UNKNOWN)
+        self._move_to(SessionState.UNKNOWN)
         self.manifest.reconciliation_required = True
         self.manifest.last_error_code = str(code or "OUTCOME_UNKNOWN")[:128]
         self.manifest.last_error_message = str(message or "Remote outcome is unknown")[:512]
@@ -594,7 +613,7 @@ class CaptureSession:
         # query the same Request ID rather than submitting a duplicate operation.
 
     def mark_failed(self, code: str, message: str) -> None:
-        self.transition(SessionState.FAILED)
+        self._move_to(SessionState.FAILED)
         self.manifest.last_error_code = str(code or "CAPTURE_SESSION_FAILED")[:128]
         self.manifest.last_error_message = str(message or "Capture session failed")[:512]
 
@@ -607,7 +626,7 @@ class CaptureSession:
             raise CaptureStateTransitionError(
                 "Capture can only begin graceful close from READY"
             )
-        self.transition(SessionState.CLOSING)
+        self._move_to(SessionState.CLOSING)
 
     def mark_closed(self, *, process_confirmed_exited: bool) -> None:
         if self.state is not SessionState.CLOSING:
@@ -616,4 +635,4 @@ class CaptureSession:
             raise CaptureIdentityError(
                 "Capture cannot be marked closed until its original PID is confirmed exited"
             )
-        self.transition(SessionState.CLOSED)
+        self._move_to(SessionState.CLOSED)
