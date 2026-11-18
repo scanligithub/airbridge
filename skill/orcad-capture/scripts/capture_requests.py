@@ -575,6 +575,21 @@ class CaptureTclQueue:
                 )
             self.sleep_fn(min(self.config.poll_interval_seconds, 1.0))
 
+    def read_result(self, request_id: str) -> Optional[CaptureTclResult]:
+        """Read and validate one original result without changing Session state.
+
+        Unlike reconcile(), this low-level read does not require the original
+        Capture process to remain alive. That is important for lifecycle Skills
+        whose request intentionally causes the process to exit. It performs
+        only bounded RFS reads and never writes Host B or mutates the Manifest.
+        """
+        rid = _uuid(request_id, "request_id")
+        _record_path, record = self._load_record(rid)
+        raw = self._read_result_envelope(record["result_path"], rid)
+        if raw is None:
+            return None
+        return self._parse_result(raw, rid, record)
+
     def reconcile(self, request_id: str) -> Optional[CaptureTclResult]:
         """Read the original result and original process identity; never mutate Host B."""
         rid = _uuid(request_id, "request_id")
