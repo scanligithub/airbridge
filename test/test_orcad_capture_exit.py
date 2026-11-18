@@ -132,6 +132,26 @@ class CaptureExitTests(TestCase):
         self.assertTrue(self.coordinator.context_path.exists())
         self.assertEqual(self.session.state, SessionState.READY)
 
+    def test_exit_prepare_tcl_probe_uses_dbo_session_wrapper_and_start_page_guard(self):
+        tcl = tkinter.Tcl()
+        if not tcl.eval("info patchlevel").startswith("8.6."):
+            self.skipTest("Tcl 8.6 is required")
+        runtime_pid = int(tcl.eval("pid"))
+        tcl.eval("""
+            set ::DboSession_s_pDboSession mockSession
+            proc DboSession {args} { return "" }
+            proc mockSession {method args} {
+                if {$method eq "GetActiveDesign"} { return NULL }
+                error "unexpected Dbo method"
+            }
+        """)
+        raw = tcl.eval(build_exit_prepare_script(SESSION_ID, runtime_pid, TCL))
+        report = parse_exit_prepare_report(
+            raw, session_id=SESSION_ID, pid=runtime_pid, tcl_version=TCL
+        )
+        self.assertFalse(report["active_design_present"])
+        self.assertEqual(report["active_design_name"], "")
+
     def test_prepare_report_rejects_wrong_pid(self):
         value = prepare_report().replace("tcl_pid=" + str(PID), "tcl_pid=9999")
         with self.assertRaises(Exception):
