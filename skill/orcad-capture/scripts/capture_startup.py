@@ -28,6 +28,7 @@ from capture_process import (
     CaptureProcessCandidate,
     CaptureProcessDisposition,
     CaptureProcessInspector,
+    CaptureProcessInventoryError,
 )
 from capture_session import (
     BridgeReadyEvidence,
@@ -564,7 +565,11 @@ class CaptureStartupCoordinator:
             )
             self._save_manifest(session, manifest_path)
             raise
-        except (CaptureIdentityError, CaptureSessionError) as exc:
+        except (
+            CaptureIdentityError,
+            CaptureSessionError,
+            CaptureProcessInventoryError,
+        ) as exc:
             self._mark_unknown(
                 session,
                 "CAPTURE_PROCESS_IDENTITY_MISMATCH",
