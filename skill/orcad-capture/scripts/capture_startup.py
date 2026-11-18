@@ -228,40 +228,38 @@ def render_capture_hook(
         "bridge_sha256": _utf8_base64(bridge_sha256.lower()),
     }
     return """# AirBridge Capture Skill Hook; owned by Session {sid}
+namespace eval ::AirBridgeSkillHook {{}}
+proc ::AirBridgeSkillHook::run {{sid nonce session_dir bridge_path bridge_hash}} {{
+    # The hook is shared by all Capture launches. Only the exact Start-Process
+    # child carrying this short-lived Session ID / Nonce may load the Bridge.
+    if {{![info exists ::env(AB_CAPTURE_SKILL_SESSION_ID)]}} {{ return }}
+    if {{![info exists ::env(AB_CAPTURE_SKILL_STARTUP_NONCE)]}} {{ return }}
+    if {{$::env(AB_CAPTURE_SKILL_SESSION_ID) ne $sid}} {{ return }}
+    if {{$::env(AB_CAPTURE_SKILL_STARTUP_NONCE) ne $nonce}} {{ return }}
+    unset ::env(AB_CAPTURE_SKILL_SESSION_ID)
+    unset ::env(AB_CAPTURE_SKILL_STARTUP_NONCE)
+
+    if {{[catch {{source $bridge_path}} source_error]}} {{
+        puts stderr "AirBridge Capture Skill: Bridge source failed: $source_error"
+        return
+    }}
+    if {{![llength [info commands ::AirBridgeSkill::bootstrap]]}} {{
+        puts stderr "AirBridge Capture Skill: Bridge bootstrap command is unavailable"
+        return
+    }}
+    if {{[catch {{
+        ::AirBridgeSkill::bootstrap $sid $nonce $session_dir $bridge_hash
+    }} bootstrap_error]}} {{
+        puts stderr "AirBridge Capture Skill: READY bootstrap failed: $bootstrap_error"
+        return
+    }}
+}}
 set ::ab_skill_sid [encoding convertfrom utf-8 [binary decode base64 "{sid_b64}"]]
 set ::ab_skill_nonce [encoding convertfrom utf-8 [binary decode base64 "{nonce}"]]
-
-# The hook is shared by all Capture launches. Only the exact Start-Process
-# child carrying this short-lived Session ID / Nonce may load the Bridge.
-if {{![info exists ::env(AB_CAPTURE_SKILL_SESSION_ID)]}} {{ return }}
-if {{![info exists ::env(AB_CAPTURE_SKILL_STARTUP_NONCE)]}} {{ return }}
-if {{$::env(AB_CAPTURE_SKILL_SESSION_ID) ne $::ab_skill_sid}} {{ return }}
-if {{$::env(AB_CAPTURE_SKILL_STARTUP_NONCE) ne $::ab_skill_nonce}} {{ return }}
-unset ::env(AB_CAPTURE_SKILL_SESSION_ID)
-unset ::env(AB_CAPTURE_SKILL_STARTUP_NONCE)
-
 set ::ab_skill_session_dir [encoding convertfrom utf-8 [binary decode base64 "{dir}"]]
 set ::ab_skill_bridge_path [encoding convertfrom utf-8 [binary decode base64 "{bridge}"]]
 set ::ab_skill_bridge_sha256 [encoding convertfrom utf-8 [binary decode base64 "{hash}"]]
-
-if {{[catch {{source $::ab_skill_bridge_path}} ab_skill_source_error]}} {{
-    puts stderr "AirBridge Capture Skill: Bridge source failed: $ab_skill_source_error"
-    return
-}}
-if {{![llength [info commands ::AirBridgeSkill::bootstrap]]}} {{
-    puts stderr "AirBridge Capture Skill: Bridge bootstrap command is unavailable"
-    return
-}}
-if {{[catch {{
-    ::AirBridgeSkill::bootstrap \
-        $::ab_skill_sid \
-        $::ab_skill_nonce \
-        $::ab_skill_session_dir \
-        $::ab_skill_bridge_sha256
-}} ab_skill_bootstrap_error]}} {{
-    puts stderr "AirBridge Capture Skill: READY bootstrap failed: $ab_skill_bootstrap_error"
-    return
-}}
+::AirBridgeSkillHook::run $::ab_skill_sid $::ab_skill_nonce $::ab_skill_session_dir $::ab_skill_bridge_path $::ab_skill_bridge_sha256
 """.format(
         sid=normalized_id,
         sid_b64=encoded["session_id"],
