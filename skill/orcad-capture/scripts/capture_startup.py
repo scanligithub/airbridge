@@ -132,18 +132,29 @@ def build_startup_preflight_command(
     )
 
 
-def build_capture_start_command(capture_exe_path: str) -> str:
-    """Start only the explicitly selected capture.exe and return its identity seed."""
+def build_capture_start_command(
+    capture_exe_path: str, session_id: str, startup_nonce: str
+) -> str:
+    """Start Capture with a one-child environment ticket for the capAutoLoad Hook."""
     path = _ps_literal(capture_exe_path)
+    sid = _ps_literal(str(uuid.UUID(session_id)))
+    nonce = _ps_literal(startup_nonce)
     return (
         "$ErrorActionPreference = 'Stop'; "
         "$exePath = " + path + "; "
         "$workingDirectory = Split-Path -Parent $exePath; "
+        "$env:AB_CAPTURE_SKILL_SESSION_ID = " + sid + "; "
+        "$env:AB_CAPTURE_SKILL_STARTUP_NONCE = " + nonce + "; "
+        "try { "
         "$process = Start-Process -FilePath $exePath "
         "-WorkingDirectory $workingDirectory -PassThru -ErrorAction Stop; "
         "$started = $process.StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffffZ'); "
         "[pscustomobject]@{pid=[int]$process.Id; started_at_utc=$started; process_name='capture.exe'} "
-        "| ConvertTo-Json -Compress"
+        "| ConvertTo-Json -Compress "
+        "} finally { "
+        "Remove-Item Env:AB_CAPTURE_SKILL_SESSION_ID -ErrorAction SilentlyContinue; "
+        "Remove-Item Env:AB_CAPTURE_SKILL_STARTUP_NONCE -ErrorAction SilentlyContinue "
+        "}"
     )
 
 
@@ -192,8 +203,18 @@ def render_capture_hook(
         "bridge_sha256": _utf8_base64(bridge_sha256.lower()),
     }
     return """# AirBridge Capture Skill Hook; owned by Session {sid}
-set ::ab_skill_sid [encoding convertfrom utf-8 [binary decode base64 "{sid}"]]
+set ::ab_skill_sid [encoding convertfrom utf-8 [binary decode base64 "{sid_b64}"]]
 set ::ab_skill_nonce [encoding convertfrom utf-8 [binary decode base64 "{nonce}"]]
+
+# The hook is shared by all Capture launches. Only the exact Start-Process
+# child carrying this short-lived Session ID / Nonce may load the Bridge.
+if {{![info exists ::env(AB_CAPTURE_SKILL_SESSION_ID)]}} {{ return }}
+if {{![info exists ::env(AB_CAPTURE_SKILL_STARTUP_NONCE)]}} {{ return }}
+if {{$::env(AB_CAPTURE_SKILL_SESSION_ID) ne $::ab_skill_sid}} {{ return }}
+if {{$::env(AB_CAPTURE_SKILL_STARTUP_NONCE) ne $::ab_skill_nonce}} {{ return }}
+unset ::env(AB_CAPTURE_SKILL_SESSION_ID)
+unset ::env(AB_CAPTURE_SKILL_STARTUP_NONCE)
+
 set ::ab_skill_session_dir [encoding convertfrom utf-8 [binary decode base64 "{dir}"]]
 set ::ab_skill_bridge_path [encoding convertfrom utf-8 [binary decode base64 "{bridge}"]]
 set ::ab_skill_bridge_sha256 [encoding convertfrom utf-8 [binary decode base64 "{hash}"]]
@@ -218,6 +239,7 @@ if {{[catch {{
 }}
 """.format(
         sid=normalized_id,
+        sid_b64=encoded["session_id"],
         nonce=encoded["startup_nonce"],
         dir=encoded["session_dir"],
         bridge=encoded["bridge_path"],
@@ -437,7 +459,11 @@ class CaptureStartupCoordinator:
         self._save_manifest(session, manifest_path)
         try:
             start_receipt = self._run_shell_json(
-                build_capture_start_command(self.config.capture_exe_path),
+                build_capture_start_command(
+                    self.config.capture_exe_path,
+                    session.manifest.session_id,
+                    session.manifest.startup_nonce,
+                ),
                 request_id=startup_request_id,
                 label="Capture process launch",
             )
