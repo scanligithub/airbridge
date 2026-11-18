@@ -191,7 +191,7 @@ class AirBridgeClientTests(TestCase):
         with self.assertRaises(AirBridgeConfigurationError):
             AirBridgeClient(
                 base_url=self.base_url,
-                token="invalid\\tcontrol",
+                token="invalid" + chr(9) + "control",
             )
 
     def test_endpoint_validation_prevents_external_urls_and_path_escape(self):
