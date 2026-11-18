@@ -124,7 +124,7 @@ $rows = @(
             }
             try {
                 if ($_.CreationDate) {
-                    $startedUtc = ([datetime]$_.CreationDate).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ')
+                    $startedUtc = ([datetime]$_.CreationDate).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffffZ')
                 }
             } catch {
                 $startedUtc = $null
