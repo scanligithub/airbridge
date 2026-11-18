@@ -15,6 +15,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Any, Callable, Mapping, Optional
 
 
@@ -43,6 +44,10 @@ class AirBridgeTransportError(AirBridgeClientError):
     """
 
     outcome_unknown = True
+
+    def __init__(self, message: str, request_id: Optional[str] = None):
+        self.request_id = request_id
+        super().__init__(message)
 
 
 class AirBridgeProtocolError(AirBridgeClientError):
@@ -230,7 +235,8 @@ class AirBridgeClient:
             # Do not retry a POST: the remote side may have accepted it.
             raise AirBridgeTransportError(
                 "AirBridge transport failed; remote outcome may be unknown. "
-                "Inspect the same request/session identity before retrying."
+                "Inspect the same request/session identity before retrying.",
+                request_id=request_id,
             ) from exc
 
         return _decode_json_object(raw, status_code)
@@ -258,6 +264,7 @@ class AirBridgeClient:
         task_timeout_seconds: int = 60,
         async_mode: bool = False,
         http_timeout_seconds: Optional[float] = None,
+        request_id: Optional[str] = None,
     ) -> dict[str, Any]:
         command_text = str(command or "")
         if not command_text.strip():
@@ -277,6 +284,11 @@ class AirBridgeClient:
             "timeout": task_timeout_seconds,
             "async": bool(async_mode),
         }
+        if request_id is not None:
+            try:
+                body["request_id"] = str(uuid.UUID(str(request_id)))
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise ValueError("request_id must be a UUID") from exc
         if cwd:
             body["cwd"] = str(cwd)
 
