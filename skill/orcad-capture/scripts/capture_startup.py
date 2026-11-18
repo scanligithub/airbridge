@@ -67,6 +67,7 @@ class CaptureStartupResult:
     bridge_sha256: str
     hook_sha256: str
     startup_request_id: str
+    hook_cleanup_completed: bool
 
 
 def _ps_literal(value: str) -> str:
@@ -131,6 +132,28 @@ def build_startup_preflight_command(
         "hook_exists = [bool](Test-Path -LiteralPath $hookFile)"
         "}; "
         "$report | ConvertTo-Json -Compress -Depth 3"
+    )
+
+
+def build_remove_owned_hook_command(hook_path: str, expected_sha256: str) -> str:
+    """Delete only the exact Hook whose bytes match this Session Manifest."""
+    if not re.fullmatch(r"[0-9a-f]{64}", str(expected_sha256 or "").lower()):
+        raise CaptureStartupError("invalid expected Hook SHA-256")
+    path_b64 = _utf8_base64(hook_path)
+    expected = str(expected_sha256).lower()
+    return (
+        "$ErrorActionPreference = 'Stop'; "
+        "$path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("
+        + _ps_literal(path_b64) + ")); "
+        "$expected = " + _ps_literal(expected) + "; "
+        "if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { "
+        "[pscustomobject]@{removed=$true; already_absent=$true; sha256=$expected} "
+        "| ConvertTo-Json -Compress; return }; "
+        "$actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant(); "
+        "if ($actual -ne $expected) { throw 'Hook hash mismatch; refusing to delete a non-owned file' }; "
+        "Remove-Item -LiteralPath $path -ErrorAction Stop; "
+        "[pscustomobject]@{removed=$true; already_absent=$false; sha256=$actual} "
+        "| ConvertTo-Json -Compress"
     )
 
 
@@ -581,6 +604,9 @@ class CaptureStartupCoordinator:
                 "Capture Bridge READY failed identity verification: {}".format(exc)
             ) from exc
 
+        hook_cleanup_completed = self._cleanup_owned_hook(
+            session, manifest_path, hook_remote_path, hook_sha256
+        )
         self._save_manifest(session, manifest_path)
         return CaptureStartupResult(
             session_id=session.manifest.session_id,
@@ -593,7 +619,40 @@ class CaptureStartupCoordinator:
             bridge_sha256=bridge_sha256,
             hook_sha256=hook_sha256,
             startup_request_id=startup_request_id,
+            hook_cleanup_completed=hook_cleanup_completed,
         )
+
+    def _cleanup_owned_hook(
+        self,
+        session: CaptureSession,
+        manifest_path: str | Path,
+        hook_path: str,
+        hook_sha256: str,
+    ) -> bool:
+        request_id = str(uuid.uuid4())
+        session.manifest.hook_cleanup_request_id = request_id
+        self._save_manifest(session, manifest_path)
+        try:
+            receipt = self._run_shell_json(
+                build_remove_owned_hook_command(hook_path, hook_sha256),
+                request_id=request_id,
+                label="Capture Hook cleanup",
+            )
+        except (CaptureStartupOutcomeUnknown, CaptureStartupError):
+            # READY remains valid. The unique Hook is still gated by its
+            # one-child launch ticket; do not retry an ambiguous delete.
+            self._save_manifest(session, manifest_path)
+            return False
+        if (
+            receipt.get("removed") is True
+            and str(receipt.get("sha256") or "").lower() == hook_sha256
+        ):
+            session.manifest.hook_cleanup_completed = True
+            session.manifest.hook_removed_at_utc = self._utc_now()
+            self._save_manifest(session, manifest_path)
+            return True
+        self._save_manifest(session, manifest_path)
+        return False
 
     def _get_remote_local_app_data(self) -> str:
         response = self._run_shell(
