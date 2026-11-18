@@ -472,9 +472,12 @@ class CaptureStartupCoordinator:
                 session,
                 "HOOK_INSTALL_RECEIPT_MISMATCH",
                 "Hook file may have been created but the returned identity/hash did not match",
+                request_id=hook_install_request_id,
             )
+            self._save_manifest(session, manifest_path)
             raise CaptureStartupOutcomeUnknown(
-                "Capture Hook installation receipt did not match the intended file"
+                "Capture Hook installation receipt did not match the intended file",
+                request_id=hook_install_request_id,
             )
 
         session.begin_start()
@@ -945,8 +948,6 @@ class CaptureStartupCoordinator:
         message: str,
         request_id: Optional[str] = None,
     ) -> None:
-        if request_id:
-            session.manifest.startup_request_id = request_id
         if session.state not in (SessionState.UNKNOWN, SessionState.CLOSED):
             session.mark_unknown(code, message)
 
