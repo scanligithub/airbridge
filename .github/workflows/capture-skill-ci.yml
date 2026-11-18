@@ -1,0 +1,52 @@
+name: Capture Skill Core CI
+
+on:
+  push:
+    branches:
+      - feature/m3-2-1-capture-skill-core
+    paths:
+      - "skill/orcad-capture/**"
+      - "test/test_orcad_capture_skill.py"
+      - ".github/workflows/capture-skill-ci.yml"
+  pull_request:
+    branches:
+      - docs/m3-skill-owned-lifecycle
+    paths:
+      - "skill/orcad-capture/**"
+      - "test/test_orcad_capture_skill.py"
+      - ".github/workflows/capture-skill-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture-skill-unit:
+    name: Capture Skill foundation (Python ${{ matrix.python-version }})
+    runs-on: windows-2025
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - name: Checkout tested revision
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Compile Capture Skill modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python --version
+          python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py
+
+      - name: Run Capture Skill HTTP and session-model tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m unittest discover -s test -p "test_orcad_capture_skill.py" -v
