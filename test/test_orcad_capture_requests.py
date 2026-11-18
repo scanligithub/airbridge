@@ -437,6 +437,30 @@ class CaptureTclQueueTests(TestCase):
             )
         self.assertEqual(len(self.client.shell_calls), 2)
 
+    def test_read_result_is_read_only_and_does_not_require_live_session_state(self):
+        request = self.queue.submit("read original result", user_authorized=True)
+        self.session.mark_unknown(
+            "TEST_UNKNOWN",
+            "test read-only result access while Session is UNKNOWN",
+        )
+        self.manifest.save(self.manifest_path)
+        shell_calls_before = len(self.client.shell_calls)
+        filesystem_calls_before = len(self.client.filesystem_calls)
+
+        result = self.queue.read_result(request.request_id)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.success)
+        self.assertEqual(result.request_id, request.request_id)
+        self.assertEqual(self.session.state, SessionState.UNKNOWN)
+        self.assertEqual(self.manifest.active_request_id, request.request_id)
+        self.assertEqual(len(self.client.shell_calls), shell_calls_before)
+        new_actions = [
+            action for action, _payload in self.client.filesystem_calls[filesystem_calls_before:]
+        ]
+        self.assertTrue(new_actions)
+        self.assertTrue(all(action == "read" for action in new_actions))
+
     def test_execute_uploads_verifies_publishes_and_correlates_result(self):
         result = self.queue.execute(
             "set result READY",
