@@ -24,6 +24,33 @@ on:
       - "test/test_request_broker.py"
       - "test/test_request_api_http.py"
       - ".github/workflows/runtime-session-ci.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "protocol.py"
+      - "runtime_session_protocol.py"
+      - "airbridge_app.py"
+      - "request_tracker.py"
+      - "request_broker.py"
+      - "runtime_adapter.py"
+      - "capture_tcl_bridge.py"
+      - "process_supervisor.py"
+      - "scripts/capture_session_e2e.py"
+      - "test/test_capture_session_e2e.py"
+      - "test/test_capture_tcl_bridge.py"
+      - "test/test_process_supervisor.py"
+      - "test/test_runtime_adapter.py"
+      - "test/test_runtime_session_protocol.py"
+      - "test/test_runtime_session_ab_simulation.py"
+      - "test/test_request_tracker.py"
+      - "test/test_request_broker.py"
+      - "test/test_request_api_http.py"
+      - "skill/airbridge/SKILL.md"
+      - "skill/airbridge/references/api-reference.md"
+      - "skill/airbridge/scripts/shell_exec.py"
+      - "skill/airbridge/scripts/diag_temp.py"
+      - ".github/workflows/runtime-session-ci.yml"
   workflow_dispatch:
 
 permissions:
@@ -55,7 +82,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python -m py_compile runtime_adapter.py capture_tcl_bridge.py process_supervisor.py airbridge_app.py scripts/capture_session_e2e.py
+          python -m py_compile runtime_adapter.py capture_tcl_bridge.py process_supervisor.py airbridge_app.py scripts/capture_session_e2e.py skill/airbridge/scripts/shell_exec.py skill/airbridge/scripts/diag_temp.py
 
       - name: Run Host-A Capture Session E2E harness tests
         shell: pwsh
