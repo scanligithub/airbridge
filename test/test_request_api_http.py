@@ -22,6 +22,7 @@ class FakeWorker:
         self.auto_complete = True
         self.raise_on_send = False
         self.frames = []
+        self.shell_task_finished = True
 
     def is_serial_connected(self):
         return self.connected
@@ -65,6 +66,25 @@ class FakeWorker:
                 response_state = "accepted"
             self.request_tracker.complete(
                 request_id, result, state=response_state
+            )
+        elif frame_type == FrameType.SHELL_TASK_GET:
+            finished = self.shell_task_finished
+            result = {
+                "request_id": request_id,
+                "success": True,
+                "task_id": data["task_id"],
+                "finished": finished,
+                "killed": False,
+                "exit_code": 0 if finished else None,
+                "stdout": "complete async shell output" if finished else "partial output",
+                "stderr": "",
+                "command": "Write-Output hello",
+                "cwd": r"E:\\_airbridge_temp",
+            }
+            self.request_tracker.complete(
+                request_id,
+                result,
+                state="completed" if finished else "accepted",
             )
 
 
@@ -262,6 +282,113 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(poll_status, 202, polled)
         self.assertEqual(polled["state"], "accepted")
         self.assertEqual(polled["result"]["status"], "running")
+
+    def test_async_shell_task_result_can_be_queried_by_original_request_id(self):
+        submit_status, accepted = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "command": "Write-Output hello",
+                "timeout": 30,
+                "async": True,
+            },
+        )
+        self.assertEqual(submit_status, 202, accepted)
+        self.assertEqual(accepted["state"], "accepted")
+        original_request_id = accepted["request_id"]
+
+        query_status, task = self._request_json(
+            "GET",
+            f"/api/v1/shell/tasks/by-request/{original_request_id}",
+        )
+        self.assertEqual(query_status, 200, task)
+        self.assertEqual(task["request_id"], original_request_id)
+        self.assertEqual(task["state"], "completed")
+        self.assertEqual(task["result"]["task_id"], "shell-http-test")
+        self.assertEqual(task["result"]["stdout"], "complete async shell output")
+
+        sent_type, sent_payload = self.worker.frames[-1]
+        self.assertEqual(sent_type, FrameType.SHELL_TASK_GET)
+        query = json.loads(sent_payload.decode("utf-8"))
+        self.assertEqual(query["task_id"], "shell-http-test")
+        self.assertEqual(query["request_id"], task["query_request_id"])
+
+        query_poll_status, query_poll = self._request_json(
+            "GET", f"/api/v1/requests/{task['query_request_id']}"
+        )
+        self.assertEqual(query_poll_status, 200, query_poll)
+        self.assertEqual(query_poll["kind"], "shell.task.get")
+        self.assertTrue(query_poll["result"]["finished"])
+
+    def test_async_shell_task_query_reports_running_state(self):
+        self.worker.shell_task_finished = False
+        submit_status, accepted = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "command": "Start-LongRunningTask",
+                "timeout": 120,
+                "async": True,
+            },
+        )
+        self.assertEqual(submit_status, 202, accepted)
+
+        query_status, task = self._request_json(
+            "GET",
+            f"/api/v1/shell/tasks/by-request/{accepted['request_id']}",
+        )
+        self.assertEqual(query_status, 202, task)
+        self.assertEqual(task["state"], "accepted")
+        self.assertFalse(task["result"]["finished"])
+
+    def test_async_shell_task_query_is_restricted_to_request_owner(self):
+        submit_status, accepted = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "command": "Write-Output private",
+                "timeout": 30,
+                "async": True,
+            },
+        )
+        self.assertEqual(submit_status, 202, accepted)
+        other = self.security.issue_token(
+            "other-agent",
+            ["shell.read", "request.read"],
+        )
+
+        query_status, result = self._request_json(
+            "GET",
+            f"/api/v1/shell/tasks/by-request/{accepted['request_id']}",
+            token=other["token"],
+        )
+        self.assertEqual(query_status, 404, result)
+        self.assertEqual(result["state"], "not_found")
+        self.assertEqual(self.worker.frames[-1][0], FrameType.SHELL_EXEC)
+
+    def test_async_shell_task_query_requires_peer_capability(self):
+        submit_status, accepted = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "command": "Write-Output hello",
+                "timeout": 30,
+                "async": True,
+            },
+        )
+        self.assertEqual(submit_status, 202, accepted)
+        self.worker.get_session_peer_status = lambda: {
+            "state": "negotiated",
+            "features": ["handshake", "request.correlation", "request.deduplication"],
+        }
+
+        query_status, result = self._request_json(
+            "GET",
+            f"/api/v1/shell/tasks/by-request/{accepted['request_id']}",
+        )
+        self.assertEqual(query_status, 503, result)
+        self.assertEqual(result["state"], "unsupported")
+        self.assertEqual(self.worker.frames[-1][0], FrameType.SHELL_EXEC)
 
     def test_caller_supplied_request_id_is_honored_and_not_submitted_twice(self):
         request_id = str(uuid.uuid4())
