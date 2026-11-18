@@ -30,7 +30,7 @@ from capture_process import (  # noqa: E402
 
 
 CAPTURE_EXE = r"D:\Cadence\SPB_17.2\tools\bin\capture.exe"
-STARTED_AT = "2026-11-18T10:00:00.0000000Z"
+STARTED_AT = "2026-11-18T10:00:00.000000Z"
 EXPECTED_VERSION = "17.2-2016"
 
 
@@ -149,7 +149,7 @@ class CaptureProcessAssessmentTests(TestCase):
     def test_path_start_time_or_version_mismatch_is_not_owned(self):
         candidates = [
             make_candidate(path=r"D:\OtherCadence\capture.exe"),
-            make_candidate(started_at="2026-11-18T10:00:01.0000000Z"),
+            make_candidate(started_at="2026-11-18T10:00:01.000000Z"),
             make_candidate(version="17.4"),
             make_candidate(path=None),
         ]
