@@ -34,7 +34,7 @@ Expect `success: true` and a `versions` map (e.g. SPB 17.2). If this fails, stop
 
 - Base URL: `http://127.0.0.1:8888`
 - JSON body, UTF-8
-- Shell and some EDA paths return **submitted** immediately; full results appear in AirBridge console logs via serial frames (`SHELL_RESULT`, `SHELL_OUTPUT`, EDA log stream). Tell the user to watch the AirBridge console when results are not in the HTTP body.
+- Synchronous Shell requests return a correlated structured result in the HTTP response. Asynchronous Shell requests first return an acceptance receipt; query the final task state through `GET /api/v1/shell/tasks/by-request/{request_id}`. Legacy EDA requests may use older acknowledgement / log behavior.
 
 Detailed request/response shapes: see `references/api-reference.md`.
 
@@ -58,15 +58,18 @@ Examples:
 ```bash
 # Drives
 curl -s -X POST http://127.0.0.1:8888/api/v1/fs/drives \
+  -H "Authorization: Bearer $AIRBRIDGE_AGENT_TOKEN" \
   -H "Content-Type: application/json" -d '{"timeout":10}'
 
 # List
 curl -s -X POST http://127.0.0.1:8888/api/v1/fs/ls \
+  -H "Authorization: Bearer $AIRBRIDGE_AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"path":"E:\\\\_airbridge_temp","timeout":10}'
 
 # Read preview (max ~64KB by default)
 curl -s -X POST http://127.0.0.1:8888/api/v1/fs/read \
+  -H "Authorization: Bearer $AIRBRIDGE_AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"path":"E:\\\\_airbridge_temp\\\\_cadence_stdout.log","max_preview_bytes":10000}'
 ```
@@ -79,6 +82,7 @@ Default shell is **PowerShell**. Dangerous commands are blocked on B (format, sh
 
 ```bash
 curl -s -X POST http://127.0.0.1:8888/api/v1/shell/exec \
+  -H "Authorization: Bearer $AIRBRIDGE_AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "command": "Get-Date; hostname",
@@ -111,42 +115,18 @@ Other endpoints:
 - Prefer working under `E:\_airbridge_temp` unless the user specifies another path
 - Prefer short, non-interactive commands; avoid prompts
 
-## 3. EDA automation (OrCAD Tcl / Allegro SKILL)
+## 3. Legacy EDA compatibility API
 
-### Detect versions
+The following EDA-specific endpoints are retained only for older clients:
 
-```bash
-curl -s http://127.0.0.1:8888/api/v1/eda/versions
-```
+- `GET /api/v1/eda/versions`
+- `POST /api/v1/eda/execute`
 
-### Submit script
+They retain historical Cadence discovery, script-type guessing, `target_file`, `keep_open`, and AirBridge-managed process lifecycle behavior. EDA execution is disabled by default unless the server administrator explicitly enables it. The API requires the `eda.versions.read` or `eda.execute` scope and a valid Bearer Token.
 
-```bash
-curl -s -X POST http://127.0.0.1:8888/api/v1/eda/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "script": "puts \"hello from OrCAD\"",
-    "hint": "agent_auto.tcl",
-    "version": "auto",
-    "target_file": "",
-    "timeout": 60,
-    "keep_open": false
-  }'
-```
+**New Capture / Allegro Skills must not use these endpoints to manage professional application lifecycle.** They should use generic Shell, RFS, and file-transfer APIs to perform their own software discovery, startup, Bridge deployment, design opening, professional operations, save policy, and graceful exit. AirBridge must not make those decisions on a Skill's behalf.
 
-- `hint` ending in `.tcl` → OrCAD Capture Tcl path
-- Skill-style content / `.il` style → Allegro SKILL path
-- `version`: `"auto"` or a known SPB version string such as `"17.2"`
-
-Logs stream back to the AirBridge console.
-
-For OrCAD Capture startup, pass the host-B .dsn path as target_file so Capture opens the design natively before Tcl runs. keep_open=false uses AirBridge's automatic graceful close after the Tcl task; use keep_open=true only when the caller explicitly needs the GUI left open. status: submitted is not task success; use streamed logs or an RFS result marker.
- Bootstrap and stdout on B often live under:
-
-- `E:\_airbridge_temp\_bootstrap.tcl`
-- `E:\_airbridge_temp\_cadence_stdout.log`
-
-Read them via RFS when diagnosing failures.
+Existing legacy workspace logs may still be inspected through RFS when diagnosing an old EDA request, but they are not a new Skill integration contract.
 
 ## 4. Recommended workflows
 
@@ -156,13 +136,13 @@ Read them via RFS when diagnosing failures.
 2. `shell/exec` with a clear command and `cwd`
 3. Ask user for AirBridge console `SHELL_RESULT` if stdout is required
 
-### B. Cadence batch on B
+### B. Professional software workflow
 
-1. Detect versions
-2. Optionally upload scripts/data via RFS write or file send UI
-3. `eda/execute` with script + version
-4. Poll/read `E:\_airbridge_temp\_cadence_stdout.log` via RFS
-5. Pull result files back if needed
+1. Let the relevant professional Skill determine software version and lifecycle policy
+2. Use generic Shell to inspect / start the requested application on B
+3. Use RFS or file transfer to deploy that Skill's own Bridge and helper scripts
+4. Let the Skill submit professional commands and verify their results
+5. Let the Skill decide whether to save and when to request normal application exit
 
 ### C. Diagnose failed OrCAD run
 
@@ -176,7 +156,7 @@ Helper script for diagnosis (run on host A): `scripts/diag_temp.py`.
 
 - Always state that actions target **host B through AirBridge**, not the local sandbox
 - If API connection fails, do not invent success; report link/serial/AirBridge process issues
-- When HTTP only returns `submitted`, explicitly say results are in the AirBridge console
+- For asynchronous Shell, treat `accepted` as task-start acknowledgement and query `/api/v1/shell/tasks/by-request/{request_id}` for its final state
 - Prefer RFS for file inspection; prefer Shell for general Windows tasks; prefer EDA API for Cadence
 - Keep commands minimal and reversible when possible
 
