@@ -12,7 +12,6 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import TestCase, main
-from unittest.mock import Mock
 
 SCRIPTS_DIR = (
     Path(__file__).resolve().parents[1]
@@ -33,6 +32,7 @@ from capture_session import (  # noqa: E402
     BridgeReadyEvidence,
     CaptureAuthorizationError,
     CaptureConfig,
+    CaptureConfigurationError,
     CaptureIdentityError,
     CaptureSession,
     CaptureSessionError,
@@ -364,6 +364,14 @@ class CaptureSessionModelTests(TestCase):
         with self.assertRaises(CaptureStateTransitionError):
             self.session.begin_start()
 
+    def test_public_transition_api_cannot_bypass_close_authorization(self):
+        self.make_ready()
+        with self.assertRaises(CaptureStateTransitionError):
+            self.session.transition(SessionState.CLOSING)
+        with self.assertRaises(CaptureStateTransitionError):
+            self.session.transition(SessionState.CLOSED)
+        self.assertEqual(self.session.state, SessionState.READY)
+
     def test_close_requires_explicit_authorization_and_exit_confirmation(self):
         self.make_ready()
         with self.assertRaises(CaptureAuthorizationError):
@@ -409,7 +417,7 @@ class CaptureSessionModelTests(TestCase):
     def test_invalid_manifest_and_invalid_config_fail_closed(self):
         with self.assertRaises(CaptureSessionError):
             SessionManifest.from_dict({"schema_version": 1, "extra": "field"})
-        with self.assertRaises(Exception):
+        with self.assertRaises(CaptureConfigurationError):
             CaptureConfig(capture_exe_path="capture.exe")
         with self.assertRaises(CaptureConfigurationError):
             CaptureConfig(api_base_url="https://example.com")
