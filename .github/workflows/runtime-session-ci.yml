@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/runtime-session-p1-2
+      - feature/m3-1-shell-task-result-query
     paths:
       - "protocol.py"
       - "runtime_session_protocol.py"
