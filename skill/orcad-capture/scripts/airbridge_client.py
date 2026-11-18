@@ -192,6 +192,11 @@ class AirBridgeClient:
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout_seconds must be a finite positive number")
 
+        operation_request_id = (
+            payload.get("request_id")
+            if isinstance(payload, Mapping)
+            else None
+        )
         body = None
         headers = {
             "Accept": "application/json",
@@ -236,7 +241,7 @@ class AirBridgeClient:
             raise AirBridgeTransportError(
                 "AirBridge transport failed; remote outcome may be unknown. "
                 "Inspect the same request/session identity before retrying.",
-                request_id=request_id,
+                request_id=operation_request_id,
             ) from exc
 
         return _decode_json_object(raw, status_code)
