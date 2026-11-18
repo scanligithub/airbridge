@@ -27,6 +27,17 @@ class FakeWorker:
     def is_serial_connected(self):
         return self.connected
 
+    def send_fs_request_sync(self, req_dict, timeout=15.0):
+        return {
+            "req_id": req_dict.get("req_id", 1),
+            "action": req_dict.get("action", ""),
+            "success": True,
+            "exists": True,
+            "is_dir": False,
+            "size": 5,
+            "content": "hello",
+        }
+
     def get_session_peer_status(self):
         return {
             "state": "negotiated",
@@ -150,6 +161,63 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             self.last_headers = dict(exc.headers.items())
             return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def test_rfs_read_and_write_actions_require_separate_scopes(self):
+        read_token = self.security.issue_token(
+            "rfs-reader",
+            ["filesystem.read"],
+        )
+        write_token = self.security.issue_token(
+            "rfs-writer",
+            ["filesystem.write"],
+        )
+
+        read_status, read_result = self._request_json(
+            "POST",
+            "/api/v1/fs/read",
+            {"path": r"E:\\_airbridge_temp\\probe.txt"},
+            token=read_token["token"],
+        )
+        self.assertEqual(read_status, 200, read_result)
+        self.assertTrue(read_result["success"])
+
+        read_denied_status, read_denied = self._request_json(
+            "POST",
+            "/api/v1/fs/write",
+            {
+                "path": r"E:\\_airbridge_temp\\probe.txt",
+                "content": "should not write",
+            },
+            token=read_token["token"],
+        )
+        self.assertEqual(read_denied_status, 403, read_denied)
+        self.assertEqual(
+            read_denied["error"]["required_scope"],
+            "filesystem.write",
+        )
+
+        write_denied_status, write_denied = self._request_json(
+            "POST",
+            "/api/v1/fs/read",
+            {"path": r"E:\\_airbridge_temp\\probe.txt"},
+            token=write_token["token"],
+        )
+        self.assertEqual(write_denied_status, 403, write_denied)
+        self.assertEqual(
+            write_denied["error"]["required_scope"],
+            "filesystem.read",
+        )
+
+        write_status, write_result = self._request_json(
+            "POST",
+            "/api/v1/fs/write",
+            {
+                "path": r"E:\\_airbridge_temp\\probe.txt",
+                "content": "write allowed",
+            },
+            token=write_token["token"],
+        )
+        self.assertEqual(write_status, 200, write_result)
 
     def test_eda_post_returns_correlated_structured_result(self):
         status, body = self._request_json(
