@@ -77,6 +77,7 @@ def main():
                 f"Shell request is still pending. Query /api/v1/requests/{result.get('request_id')} before retrying.",
                 file=sys.stderr,
             )
+            raise RuntimeError("Remote Shell request is pending; poll the same request ID before treating it as complete.")
         elif state in ("failed", "unknown"):
             raise RuntimeError(f"Remote Shell request ended in state={state}: {result}")
         return
@@ -101,7 +102,7 @@ def main():
             )
         if task_result.get("killed") or task_result.get("exit_code") != 0:
             raise RuntimeError(
-                    f"Remote command failed with exit_code={task_result.get('exit_code')}"
+                f"Remote command failed with exit_code={task_result.get('exit_code')}"
             )
         return
 
