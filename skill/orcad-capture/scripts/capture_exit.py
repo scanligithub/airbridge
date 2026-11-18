@@ -275,7 +275,7 @@ class CaptureExitCoordinator:
                 "another Capture Exit workflow is active or was interrupted; refusing another Exit"
             ) from exc
         try:
-            payload = "pid={}\\ncreated_at_utc={}\\n".format(os.getpid(), _utc_now())
+            payload = "pid={}\ncreated_at_utc={}\n".format(os.getpid(), _utc_now())
             os.write(descriptor, payload.encode("ascii"))
             os.fsync(descriptor)
             yield
@@ -319,9 +319,23 @@ class CaptureExitCoordinator:
         context = self._load_context()
         manifest = self.session.manifest
         self._assert_context_identity(context)
-        self._assert_owned_process()
         if context.get("state") != "prepared":
-            raise CaptureExitError("Exit context is not in prepared state; Exit will not be retried")
+            # A durable non-prepared intent means an earlier Exit may already
+            # have been published.  Recover a stale READY Manifest to UNKNOWN
+            # without querying Tcl or sending another Exit.
+            if context.get("state") in ("exit_scheduling", "exit_scheduled", "unknown"):
+                self._mark_unknown(
+                    "CAPTURE_EXIT_RECOVERY_REQUIRED",
+                    "a prior Exit intent is unresolved; only read-only reconciliation is allowed",
+                )
+                raise CaptureExitOutcomeUnknown(
+                    "a prior Exit may already have been scheduled; do not retry Exit",
+                    context.get("schedule_request_id"),
+                )
+            raise CaptureExitError(
+                "Exit context is not in prepared state; Exit will not be retried"
+            )
+        self._assert_owned_process()
         schedule_script = build_exit_schedule_script(
             manifest.session_id, int(manifest.pid),
             str(manifest.tcl_version), delay_ms,
