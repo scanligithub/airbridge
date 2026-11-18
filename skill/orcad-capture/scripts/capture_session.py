@@ -277,8 +277,13 @@ class SessionManifest:
             self.session_id = str(uuid.UUID(self.session_id))
         except (ValueError, TypeError, AttributeError) as exc:
             raise CaptureSessionError("session_id must be a UUID") from exc
-        if not isinstance(self.startup_nonce, str) or len(self.startup_nonce) < 32:
-            raise CaptureSessionError("startup_nonce must contain at least 32 characters")
+        if (
+            not isinstance(self.startup_nonce, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", self.startup_nonce)
+        ):
+            raise CaptureSessionError(
+                "startup_nonce must be a 32-128 character base64url token"
+            )
         if (
             isinstance(self.schema_version, bool)
             or self.schema_version != 1
@@ -528,16 +533,21 @@ class CaptureSession:
             )
         actual_version = str(identity.file_version or "").strip() or None
         expected_version = self.manifest.expected_capture_version
-        if expected_version and actual_version != expected_version:
+        if not expected_version:
             raise CaptureIdentityError(
-                "Capture file version does not match the configured version"
+                "an explicit Capture file version must be selected before start"
             )
+        if not actual_version or actual_version != expected_version:
+            raise CaptureIdentityError(
+                "Capture file version is missing or does not match the configured version"
+            )
+        process_started_at = _validate_timestamp(
+            identity.started_at_utc, "process started_at_utc"
+        )
         self.manifest.pid = identity.pid
         self.manifest.capture_exe_path = actual_path
         self.manifest.capture_version = actual_version
-        self.manifest.process_started_at_utc = _validate_timestamp(
-            identity.started_at_utc, "process started_at_utc"
-        )
+        self.manifest.process_started_at_utc = process_started_at
         self.manifest.updated_at_utc = _utc_now()
 
     def mark_bridge_pending(
