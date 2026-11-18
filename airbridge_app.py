@@ -2110,6 +2110,7 @@ class AntigravityIPCServer:
           try:
             worker_ref.request_tracker.register(request_id, "eda.execute")
           except Exception as exc:
+            security_ref.release_request_owner(request_id, self._principal.agent_id)
             security_ref.end_execution(self._principal.agent_id, request_id)
             self._reply_json(503, {
                 "request_id": request_id,
@@ -2295,6 +2296,16 @@ class AntigravityIPCServer:
           }
           try:
             worker_ref.request_tracker.register(request_id, "shell.exec")
+          except Exception as exc:
+            security_ref.release_request_owner(request_id, self._principal.agent_id)
+            self._reply_json(503, {
+                "request_id": request_id,
+                "state": "not_submitted",
+                "error": str(exc),
+            })
+            return
+
+          try:
             worker_ref.send_frame(
                 FrameType.SHELL_EXEC,
                 json.dumps(remote_task, ensure_ascii=False).encode("utf-8"),

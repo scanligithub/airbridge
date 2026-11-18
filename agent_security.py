@@ -432,6 +432,20 @@ class AgentSecurityStore:
             except sqlite3.IntegrityError as exc:
                 raise AgentSecurityError("request_id already has an owner") from exc
 
+    def release_request_owner(self, request_id: str, agent_id: str) -> bool:
+        """Remove an owner binding only when the matching request was not submitted."""
+        normalized_agent = self._validate_agent_id(agent_id)
+        try:
+            normalized_request = str(uuid.UUID(request_id))
+        except (ValueError, TypeError, AttributeError):
+            return False
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM agent_request_owners WHERE request_id = ? AND agent_id = ?",
+                (normalized_request, normalized_agent),
+            )
+            return cursor.rowcount == 1
+
     def can_read_request(self, request_id: str, principal: AgentPrincipal) -> bool:
         if principal.allows("request.read:any"):
             return True

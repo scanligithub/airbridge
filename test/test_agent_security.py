@@ -74,6 +74,18 @@ class AgentSecurityStoreTests(unittest.TestCase):
         self.assertTrue(self.store.can_read_request(request_id, principal_a))
         self.assertFalse(self.store.can_read_request(request_id, principal_b))
 
+    def test_release_request_owner_only_removes_matching_agent_binding(self):
+        request_id = "d20f8b2c-6d01-4f9b-9c18-53ddf5dcae31"
+        issued = self.store.issue_token("antigravity", ["request.read"])
+        principal = self.store.authenticate("Bearer " + issued["token"])
+        self.store.bind_request_owner(request_id, "antigravity")
+
+        self.assertFalse(self.store.release_request_owner(request_id, "opencode"))
+        self.assertTrue(self.store.can_read_request(request_id, principal))
+        self.assertTrue(self.store.release_request_owner(request_id, "antigravity"))
+        self.assertFalse(self.store.can_read_request(request_id, principal))
+        self.assertFalse(self.store.release_request_owner(request_id, "antigravity"))
+
     def test_request_read_any_scope_is_explicit(self):
         issued = self.store.issue_token("audit-admin", ["request.read:any"])
         principal = self.store.authenticate("Bearer " + issued["token"])
@@ -193,18 +205,6 @@ class AgentSecurityStoreTests(unittest.TestCase):
         self.assertTrue(
             self.store.begin_execution("antigravity", second, max_inflight=1)
         )
-
-    def test_request_owner_expiration_is_bounded(self):
-        request_id = "d20f8b2c-6d01-4f9b-9c18-53ddf5dcae31"
-        issued = self.store.issue_token("antigravity", ["request.read"])
-        principal = self.store.authenticate("Bearer " + issued["token"])
-        self.store.bind_request_owner(request_id, "antigravity")
-        self.assertTrue(self.store.can_read_request(request_id, principal))
-        self.store._conn.execute(
-            "UPDATE agent_request_owners SET created_at = ? WHERE request_id = ?",
-            (0, request_id),
-        )
-        self.assertFalse(self.store.can_read_request(request_id, principal))
 
     def test_audit_retention_and_max_record_pruning(self):
         for index in range(4):

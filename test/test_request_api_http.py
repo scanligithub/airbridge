@@ -575,5 +575,83 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         )
         self.assertEqual(len(self.worker.frames), 1)
 
+    def test_eda_tracker_registration_failure_releases_owner_and_execution_slot(self):
+        original_register = self.worker.request_tracker.register
+
+        def fail_register(_request_id, _kind):
+            raise RuntimeError("simulated tracker registration failure")
+
+        self.worker.request_tracker.register = fail_register
+        status, body = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"script": "puts must_not_run"},
+        )
+
+        self.assertEqual(status, 503, body)
+        self.assertEqual(body["state"], "not_submitted")
+        self.assertEqual(len(self.worker.frames), 0)
+        self.assertEqual(len(self.worker.request_tracker._records), 0)
+        self.assertEqual(self.security.active_execution_count("test-agent"), 0)
+        request_id = body["request_id"]
+        principal = self.security.authenticate("Bearer " + self.token)
+        self.assertFalse(self.security.can_read_request(request_id, principal))
+
+        self.worker.request_tracker.register = original_register
+        retry_status, retry = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"request_id": request_id, "script": "puts retry"},
+        )
+        self.assertEqual(retry_status, 200, retry)
+        self.assertEqual(retry["request_id"], request_id)
+        self.assertEqual(retry["state"], "completed")
+        self.assertEqual(len(self.worker.frames), 1)
+        self.assertTrue(self.security.can_read_request(request_id, principal))
+
+    def test_shell_tracker_registration_failure_releases_owner_without_unknown_state(self):
+        original_register = self.worker.request_tracker.register
+
+        def fail_register(_request_id, _kind):
+            raise RuntimeError("simulated tracker registration failure")
+
+        self.worker.request_tracker.register = fail_register
+        status, body = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {"command": "Write-Output must_not_run", "timeout": 5},
+        )
+
+        self.assertEqual(status, 503, body)
+        self.assertEqual(body["state"], "not_submitted")
+        self.assertEqual(len(self.worker.frames), 0)
+        self.assertEqual(len(self.worker.request_tracker._records), 0)
+        request_id = body["request_id"]
+        principal = self.security.authenticate("Bearer " + self.token)
+        self.assertFalse(self.security.can_read_request(request_id, principal))
+        self.assertFalse(
+            any(
+                record["path"] == "/api/v1/shell/exec"
+                and record["reason_code"] == "SHELL_FRAME_SUBMISSION_UNCONFIRMED"
+                for record in self.security.list_audit(limit=20)
+            )
+        )
+
+        self.worker.request_tracker.register = original_register
+        retry_status, retry = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "request_id": request_id,
+                "command": "Write-Output retry",
+                "timeout": 5,
+            },
+        )
+        self.assertEqual(retry_status, 200, retry)
+        self.assertEqual(retry["request_id"], request_id)
+        self.assertEqual(retry["state"], "completed")
+        self.assertEqual(len(self.worker.frames), 1)
+        self.assertTrue(self.security.can_read_request(request_id, principal))
+
 if __name__ == "__main__":
     unittest.main()
