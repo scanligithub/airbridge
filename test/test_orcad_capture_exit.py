@@ -168,6 +168,20 @@ class CaptureExitTests(TestCase):
             )
         self.assertEqual(len(self.queue.calls), 1)
 
+    def test_invalid_exit_delay_is_rejected_before_schedule_or_unknown_state(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        with self.assertRaises(ValueError):
+            self.coordinator.request_exit(
+                user_authorized=True,
+                design_saved_or_no_changes_confirmed=True,
+                delay_ms=0,
+            )
+        self.assertEqual(self.session.state, SessionState.READY)
+        self.assertEqual(len(self.queue.calls), 1)
+        context = self.coordinator._load_context()
+        self.assertEqual(context["state"], "prepared")
+        self.assertNotIn("schedule_request_id", context)
+
     def test_exit_schedules_after_result_then_confirms_original_pid_absent(self):
         self.coordinator.prepare_exit(user_authorized=True)
         evidence = self.coordinator.request_exit(

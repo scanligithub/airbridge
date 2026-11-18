@@ -283,14 +283,17 @@ class CaptureExitCoordinator:
         self._assert_owned_process()
         if context.get("state") != "prepared":
             raise CaptureExitError("Exit context is not in prepared state; Exit will not be retried")
+        schedule_script = build_exit_schedule_script(
+            manifest.session_id, int(manifest.pid),
+            str(manifest.tcl_version), delay_ms,
+        )
         context["state"] = "exit_scheduling"
         context["schedule_request_id"] = str(uuid.uuid4())
         context["updated_at_utc"] = _utc_now()
         _atomic_json(self.context_path, context)
         try:
             result = self.queue.execute(
-                build_exit_schedule_script(manifest.session_id, int(manifest.pid),
-                                           str(manifest.tcl_version), delay_ms),
+                schedule_script,
                 user_authorized=True, request_id=context["schedule_request_id"],
             )
         except Exception as exc:
