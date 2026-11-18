@@ -255,6 +255,10 @@ class CaptureExitCoordinator:
             raise CaptureAuthorizationError(
                 "user must explicitly confirm the design is saved or has no unsaved changes"
             )
+        if self.session.state is SessionState.UNKNOWN:
+            raise CaptureExitOutcomeUnknown(
+                "Capture Exit Session is UNKNOWN; only read-only reconciliation is allowed"
+            )
         if self.session.state is not SessionState.READY:
             raise CaptureStateTransitionError("Capture Exit requires a READY Session")
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or not 1 <= timeout_seconds <= 600:
