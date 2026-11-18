@@ -54,6 +54,7 @@ The client rejects non-loopback API origins so that the Bearer token cannot be s
 - `scripts/airbridge_client.py` — standard-library HTTP client. It sends Bearer-authenticated JSON requests to the loopback API, validates JSON objects, preserves HTTP 202 acceptance responses, refuses redirects, and never automatically retries. A transport error after submission is an **unknown outcome**; reconcile using the original identity before deciding what to do next.
 - `scripts/capture_session.py` — non-secret configuration, Session Manifest persistence, process / READY evidence structures and the allowed state transitions. Capture-specific process and application decisions remain in this Skill.
 - `../../test/test_orcad_capture_skill.py` — local mock-HTTP and state-model tests.
+- `../../test/test_orcad_capture_process.py` — read-only process inventory, response parsing, multiple-instance and ownership-matching tests.
 
 ## Session and safety rules
 
@@ -65,7 +66,7 @@ Failures and indeterminate results are explicit `failed` or `unknown` states. `u
 
 Before a future implementation may mark a session READY, it must match the Session ID, high-entropy Startup Nonce, verified Capture PID, expected Tcl version and SHA-256 of the deployed Bridge. PID alone is not a process identity: compare the executable image path and process start time as well.
 
-An unrecognized or manually launched Capture process is not owned by this Skill. Never inject a Hook into it, close it, or start a second instance merely because the existing process cannot be identified.
+An unrecognized or manually launched Capture process is not owned by this Skill. The inventory classifies unmatched processes as unowned, multiple processes as ambiguous, and a reused or mismatched PID as an identity mismatch. Never inject a Hook into any of these processes, close them, or start a second instance merely because the existing process cannot be identified. An owned instance requires an exact PID, normalized executable path, process start timestamp and file-version match.
 
 Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. This foundation only allows a state transition into `closing` when the caller explicitly supplies authorization; it does not itself send an Exit command.
 
@@ -93,7 +94,8 @@ Run from the repository root:
 
 ```powershell
 python -m unittest discover -s test -p "test_orcad_capture_skill.py" -v
-python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py
+python -m unittest discover -s test -p "test_orcad_capture_process.py" -v
+python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py
 ```
 
 These tests validate the Skill foundation only. They do not emulate Capture, Tcl, Dbo APIs, capAutoLoad, the physical serial link or the two-host deployment.
