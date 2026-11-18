@@ -208,8 +208,8 @@ class CaptureConfig:
             api_base_url=source.get("AIRBRIDGE_API_BASE_URL", DEFAULT_API_BASE_URL),
             capture_exe_path=optional("AIRBRIDGE_CAPTURE_EXE"),
             expected_capture_version=optional("AIRBRIDGE_CAPTURE_VERSION"),
-            expected_tcl_version=source.get(
-                "AIRBRIDGE_CAPTURE_TCL_VERSION", "8.6.0"
+            expected_tcl_version=str(
+                source.get("AIRBRIDGE_CAPTURE_TCL_VERSION", "8.6.0") or ""
             ).strip() or None,
             remote_session_root=source.get(
                 "AIRBRIDGE_CAPTURE_SESSION_ROOT", DEFAULT_REMOTE_SESSION_ROOT
@@ -236,12 +236,14 @@ class SessionManifest:
     expected_capture_version: Optional[str] = None
     expected_tcl_version: Optional[str] = None
     capture_version: Optional[str] = None
+    tcl_version: Optional[str] = None
     pid: Optional[int] = None
     process_started_at_utc: Optional[str] = None
     remote_session_dir: Optional[str] = None
     hook_path: Optional[str] = None
     bridge_sha256: Optional[str] = None
     active_request_id: Optional[str] = None
+    reconciliation_required: bool = False
     last_error_code: Optional[str] = None
     last_error_message: Optional[str] = None
 
@@ -268,6 +270,10 @@ class SessionManifest:
         self.updated_at_utc = _validate_timestamp(
             self.updated_at_utc, "updated_at_utc"
         )
+        if self.capture_exe_path and not PureWindowsPath(self.capture_exe_path).is_absolute():
+            raise CaptureSessionError("capture_exe_path must be an absolute Windows path")
+        if not isinstance(self.reconciliation_required, bool):
+            raise CaptureSessionError("reconciliation_required must be a boolean")
         if self.pid is not None and (
             isinstance(self.pid, bool) or not isinstance(self.pid, int) or self.pid <= 0
         ):
@@ -312,12 +318,14 @@ class SessionManifest:
             "expected_capture_version": self.expected_capture_version,
             "expected_tcl_version": self.expected_tcl_version,
             "capture_version": self.capture_version,
+            "tcl_version": self.tcl_version,
             "pid": self.pid,
             "process_started_at_utc": self.process_started_at_utc,
             "remote_session_dir": self.remote_session_dir,
             "hook_path": self.hook_path,
             "bridge_sha256": self.bridge_sha256,
             "active_request_id": self.active_request_id,
+            "reconciliation_required": self.reconciliation_required,
             "last_error_code": self.last_error_code,
             "last_error_message": self.last_error_message,
         }
@@ -330,8 +338,9 @@ class SessionManifest:
             "schema_version", "session_id", "startup_nonce", "state",
             "created_at_utc", "updated_at_utc", "capture_exe_path",
             "expected_capture_version", "expected_tcl_version", "capture_version",
-            "pid", "process_started_at_utc", "remote_session_dir", "hook_path",
-            "bridge_sha256", "active_request_id", "last_error_code",
+            "tcl_version", "pid", "process_started_at_utc", "remote_session_dir",
+            "hook_path", "bridge_sha256", "active_request_id",
+            "reconciliation_required", "last_error_code",
             "last_error_message",
         }
         unexpected = set(value) - allowed
@@ -430,6 +439,14 @@ class CaptureSession:
     def transition(self, target: SessionState | str) -> None:
         next_state = SessionState(target)
         current = self.state
+        if (
+            next_state is SessionState.STARTING
+            and self.manifest.reconciliation_required
+        ):
+            raise CaptureStateTransitionError(
+                "this session has an unresolved outcome; create a new Session ID "
+                "after read-only reconciliation instead of restarting it"
+            )
         if next_state not in _ALLOWED_TRANSITIONS[current]:
             raise CaptureStateTransitionError(
                 "invalid Capture session transition: {} -> {}".format(
@@ -520,7 +537,12 @@ class CaptureSession:
             str(evidence.startup_nonce), self.manifest.startup_nonce
         ):
             raise CaptureIdentityError("READY Startup Nonce does not match this session")
-        if self.manifest.pid is None or evidence.runtime_pid != self.manifest.pid:
+        if (
+            isinstance(evidence.runtime_pid, bool)
+            or not isinstance(evidence.runtime_pid, int)
+            or self.manifest.pid is None
+            or evidence.runtime_pid != self.manifest.pid
+        ):
             raise CaptureIdentityError("READY PID does not match the verified Capture PID")
         actual_tcl = str(evidence.tcl_version or "").strip()
         expected_tcl = self.manifest.expected_tcl_version
@@ -532,6 +554,7 @@ class CaptureSession:
         expected_digest = self.manifest.bridge_sha256
         if expected_digest and not hmac.compare_digest(digest, expected_digest):
             raise CaptureIdentityError("READY Bridge hash does not match the deployed file")
+        self.manifest.tcl_version = actual_tcl
         self.transition(SessionState.READY)
 
     def begin_operation(self, request_id: str) -> None:
@@ -564,6 +587,7 @@ class CaptureSession:
                 "an absent or closed session cannot become unknown"
             )
         self.transition(SessionState.UNKNOWN)
+        self.manifest.reconciliation_required = True
         self.manifest.last_error_code = str(code or "OUTCOME_UNKNOWN")[:128]
         self.manifest.last_error_message = str(message or "Remote outcome is unknown")[:512]
         # Keep active_request_id intact so a later read-only reconciliation can
