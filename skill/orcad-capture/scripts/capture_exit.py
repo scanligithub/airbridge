@@ -318,10 +318,10 @@ class CaptureExitCoordinator:
             _atomic_json(self.context_path, context)
             raise CaptureExitOutcomeUnknown("Exit schedule receipt is not trustworthy; do not retry",
                                             context["schedule_request_id"])
-        context["state"] = "exit_scheduled"
-        context["updated_at_utc"] = _utc_now()
-        _atomic_json(self.context_path, context)
         try:
+            # Persist CLOSING before the sidecar's receipt-state update.  Once
+            # the remote receipt is verified, no later local write failure may
+            # leave the durable Session READY for unrelated Tcl operations.
             self.session.begin_close(user_authorized=True)
             self.session.manifest.active_request_id = None
             self.session.manifest.save(self.manifest_path)
@@ -329,6 +329,17 @@ class CaptureExitCoordinator:
             self._mark_unknown("CAPTURE_EXIT_LOCAL_COMMIT_UNKNOWN", str(exc))
             raise CaptureExitOutcomeUnknown("Exit was scheduled but local close state could not be committed",
                                             context["schedule_request_id"]) from exc
+
+        context["state"] = "exit_scheduled"
+        context["updated_at_utc"] = _utc_now()
+        try:
+            _atomic_json(self.context_path, context)
+        except Exception as exc:
+            self._mark_unknown("CAPTURE_EXIT_SCHEDULED_CONTEXT_COMMIT_UNKNOWN", str(exc))
+            raise CaptureExitOutcomeUnknown(
+                "Exit was scheduled but its local context could not be committed; do not retry",
+                context["schedule_request_id"],
+            ) from exc
         return self._wait_for_original_process_exit(timeout_seconds)
 
     def _wait_for_original_process_exit(self, timeout_seconds: float) -> ProcessExitEvidence:
@@ -349,14 +360,26 @@ class CaptureExitCoordinator:
                 try:
                     self.session.mark_closed(evidence)
                     self.session.manifest.save(self.manifest_path)
+                except Exception as exc:
+                    self._mark_unknown("CAPTURE_EXIT_CLOSE_COMMIT_UNKNOWN", str(exc))
+                    raise CaptureExitOutcomeUnknown(
+                        "PID absence was observed but CLOSED Session state could not be persisted"
+                    ) from exc
+
+                # The persisted CLOSED manifest is authoritative.  A failure
+                # to finalize the auxiliary sidecar must not relabel a
+                # confirmed process exit as UNKNOWN or rewrite the sidecar to
+                # an UNKNOWN state.
+                try:
                     context = self._load_context()
                     context["state"] = "closed"
                     context["process_exit_confirmed_at_utc"] = evidence.checked_at_utc
                     context["updated_at_utc"] = _utc_now()
                     _atomic_json(self.context_path, context)
                 except Exception as exc:
-                    self._mark_unknown("CAPTURE_EXIT_CLOSE_COMMIT_UNKNOWN", str(exc))
-                    raise CaptureExitOutcomeUnknown("PID absence observed but CLOSED state could not be persisted") from exc
+                    raise CaptureExitError(
+                        "Capture is confirmed CLOSED, but the local Exit sidecar could not be finalized; do not retry Exit"
+                    ) from exc
                 return evidence
             assessment = assess_capture_processes(candidates, manifest)
             if assessment.disposition is not CaptureProcessDisposition.OWNED_INSTANCE:
