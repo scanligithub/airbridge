@@ -353,13 +353,18 @@ class CaptureStartupCoordinator:
         self._save_manifest(session, manifest_path)
 
         # Create only this UUID-named session tree. No existing remote path is reused.
-        self._rfs_checked("mkdir", {"path": remote_session_dir})
+        self._mutate_remote(session, manifest_path, "mkdir", {"path": remote_session_dir})
         for child in ("requests", "running", "results", "logs"):
-            self._rfs_checked(
-                "mkdir", {"path": ntpath.join(remote_session_dir, child)}
+            self._mutate_remote(
+                session,
+                manifest_path,
+                "mkdir",
+                {"path": ntpath.join(remote_session_dir, child)},
             )
 
-        self._rfs_checked(
+        self._mutate_remote(
+            session,
+            manifest_path,
             "write",
             {
                 "path": bridge_remote_path,
@@ -368,7 +373,12 @@ class CaptureStartupCoordinator:
                 "mode": "w",
             },
         )
-        self._verify_remote_text_file(bridge_remote_path, bridge_text)
+        try:
+            self._verify_remote_text_file(bridge_remote_path, bridge_text)
+        except CaptureStartupOutcomeUnknown as exc:
+            self._mark_unknown(session, "BRIDGE_UPLOAD_VERIFY_UNKNOWN", str(exc))
+            self._save_manifest(session, manifest_path)
+            raise
 
         # Hook creation uses .NET CreateNew to close the check/write race and
         # guarantee an existing Cadence/user file is never overwritten.
@@ -391,9 +401,17 @@ class CaptureStartupCoordinator:
             self._save_manifest(session, manifest_path)
             raise
         except CaptureStartupError as exc:
-            self._mark_failed(session, "HOOK_INSTALL_FAILED", str(exc))
+            self._mark_unknown(
+                session,
+                "HOOK_INSTALL_RESULT_UNKNOWN",
+                str(exc),
+                request_id=hook_install_request_id,
+            )
             self._save_manifest(session, manifest_path)
-            raise
+            raise CaptureStartupOutcomeUnknown(
+                "Capture Hook may have been created but its receipt is not trustworthy",
+                request_id=hook_install_request_id,
+            ) from exc
         if hook_receipt.get("created") is not True:
             self._mark_failed(session, "HOOK_INSTALL_FAILED", "remote Hook was not created")
             raise CaptureStartupError("Capture Hook installation did not return a creation receipt")
@@ -432,6 +450,20 @@ class CaptureStartupCoordinator:
             )
             self._save_manifest(session, manifest_path)
             raise
+        except CaptureStartupError as exc:
+            # Start-Process may have succeeded before a later PowerShell/output
+            # failure. Treat any untrusted post-submit result as indeterminate.
+            self._mark_unknown(
+                session,
+                "CAPTURE_START_RESULT_UNTRUSTED",
+                str(exc),
+                request_id=startup_request_id,
+            )
+            self._save_manifest(session, manifest_path)
+            raise CaptureStartupOutcomeUnknown(
+                "Capture may have started but the Shell result was not trustworthy",
+                request_id=startup_request_id,
+            ) from exc
 
         pid = start_receipt.get("pid")
         started_at = start_receipt.get("started_at_utc")
@@ -660,6 +692,26 @@ class CaptureStartupCoordinator:
             raise CaptureStartupError(
                 "{} returned a non-zero exit code".format(label)
             )
+        return result
+
+    def _mutate_remote(
+        self,
+        session: CaptureSession,
+        manifest_path: str | Path,
+        action: str,
+        payload: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        try:
+            result = self._rfs_checked(action, payload)
+        except CaptureStartupOutcomeUnknown as exc:
+            self._mark_unknown(
+                session,
+                "RFS_{}_OUTCOME_UNKNOWN".format(action.upper()),
+                str(exc),
+            )
+            self._save_manifest(session, manifest_path)
+            raise
+        self._save_manifest(session, manifest_path)
         return result
 
     def _rfs_checked(self, action: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
