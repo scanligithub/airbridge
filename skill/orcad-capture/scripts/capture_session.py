@@ -287,6 +287,8 @@ class SessionManifest:
     hook_sha256: Optional[str] = None
     bridge_sha256: Optional[str] = None
     active_request_id: Optional[str] = None
+    hook_install_request_id: Optional[str] = None
+    startup_request_id: Optional[str] = None
     reconciliation_required: bool = False
     last_error_code: Optional[str] = None
     last_error_message: Optional[str] = None
@@ -386,11 +388,19 @@ class SessionManifest:
             self.bridge_sha256 = self.bridge_sha256.lower()
             if not re.fullmatch(r"[0-9a-f]{64}", self.bridge_sha256):
                 raise CaptureSessionError("bridge_sha256 must be a SHA-256 hex digest")
-        if self.active_request_id:
-            try:
-                self.active_request_id = str(uuid.UUID(self.active_request_id))
-            except (ValueError, TypeError, AttributeError) as exc:
-                raise CaptureSessionError("active_request_id must be a UUID") from exc
+        for request_field in (
+            "active_request_id",
+            "hook_install_request_id",
+            "startup_request_id",
+        ):
+            request_value = getattr(self, request_field)
+            if request_value:
+                try:
+                    setattr(self, request_field, str(uuid.UUID(request_value)))
+                except (ValueError, TypeError, AttributeError) as exc:
+                    raise CaptureSessionError(
+                        "{} must be a UUID".format(request_field)
+                    ) from exc
         for name in ("last_error_code", "last_error_message"):
             value = getattr(self, name)
             if value is not None:
@@ -429,6 +439,8 @@ class SessionManifest:
             "hook_sha256": self.hook_sha256,
             "bridge_sha256": self.bridge_sha256,
             "active_request_id": self.active_request_id,
+            "hook_install_request_id": self.hook_install_request_id,
+            "startup_request_id": self.startup_request_id,
             "reconciliation_required": self.reconciliation_required,
             "last_error_code": self.last_error_code,
             "last_error_message": self.last_error_message,
@@ -444,6 +456,7 @@ class SessionManifest:
             "cap_autoload_dir", "expected_capture_version", "expected_tcl_version", "capture_version",
             "tcl_version", "pid", "process_started_at_utc",
             "process_exit_confirmed_at_utc", "remote_session_dir", "hook_path", "hook_sha256", "bridge_sha256", "active_request_id",
+            "hook_install_request_id", "startup_request_id",
             "reconciliation_required", "last_error_code",
             "last_error_message",
         }
