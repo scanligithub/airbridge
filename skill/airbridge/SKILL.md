@@ -132,9 +132,9 @@ Existing legacy workspace logs may still be inspected through RFS when diagnosin
 
 ### A. One-shot remote command
 
-1. Health check (`/api/v1/eda/versions` or a trivial `shell/exec`)
+1. Health check and capability check using authenticated read-only APIs
 2. `shell/exec` with a clear command and `cwd`
-3. Ask user for AirBridge console `SHELL_RESULT` if stdout is required
+3. Check `result.exit_code`; use the asynchronous task-result query when the command was launched with `async:true`
 
 ### B. Professional software workflow
 
@@ -157,7 +157,7 @@ Helper script for diagnosis (run on host A): `scripts/diag_temp.py`.
 - Always state that actions target **host B through AirBridge**, not the local sandbox
 - If API connection fails, do not invent success; report link/serial/AirBridge process issues
 - For asynchronous Shell, treat `accepted` as task-start acknowledgement and query `/api/v1/shell/tasks/by-request/{request_id}` for its final state
-- Prefer RFS for file inspection; prefer Shell for general Windows tasks; prefer EDA API for Cadence
+- Prefer RFS for remote file inspection and Shell for general Windows tasks; use EDA-specific API routes only for explicitly supported legacy clients
 - Keep commands minimal and reversible when possible
 
 ## 6. Known limits
