@@ -72,6 +72,7 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def _validate_local_base_url(value: str) -> str:
     raw = str(value or "").strip()
+    parsed = None
     try:
         parsed = urllib.parse.urlsplit(raw)
         parsed.port  # Force invalid-port validation.
@@ -81,7 +82,8 @@ def _validate_local_base_url(value: str) -> str:
         is_loopback = False
 
     if (
-        parsed.scheme not in ("http", "https")
+        parsed is None
+        or parsed.scheme not in ("http", "https")
         or not is_loopback
         or parsed.username is not None
         or parsed.password is not None
