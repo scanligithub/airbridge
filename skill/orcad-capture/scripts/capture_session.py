@@ -288,6 +288,9 @@ class SessionManifest:
     bridge_sha256: Optional[str] = None
     active_request_id: Optional[str] = None
     hook_install_request_id: Optional[str] = None
+    hook_cleanup_request_id: Optional[str] = None
+    hook_cleanup_completed: bool = False
+    hook_removed_at_utc: Optional[str] = None
     startup_request_id: Optional[str] = None
     reconciliation_required: bool = False
     last_error_code: Optional[str] = None
@@ -340,6 +343,16 @@ class SessionManifest:
             )
         if not isinstance(self.reconciliation_required, bool):
             raise CaptureSessionError("reconciliation_required must be a boolean")
+        if not isinstance(self.hook_cleanup_completed, bool):
+            raise CaptureSessionError("hook_cleanup_completed must be a boolean")
+        if self.hook_removed_at_utc:
+            self.hook_removed_at_utc = _validate_timestamp(
+                self.hook_removed_at_utc, "hook_removed_at_utc"
+            )
+            if not self.hook_cleanup_completed:
+                raise CaptureSessionError(
+                    "hook_removed_at_utc requires confirmed Hook cleanup"
+                )
         if self.state == SessionState.UNKNOWN.value and not self.reconciliation_required:
             raise CaptureSessionError(
                 "UNKNOWN sessions must require explicit reconciliation"
@@ -391,6 +404,7 @@ class SessionManifest:
         for request_field in (
             "active_request_id",
             "hook_install_request_id",
+            "hook_cleanup_request_id",
             "startup_request_id",
         ):
             request_value = getattr(self, request_field)
@@ -440,6 +454,9 @@ class SessionManifest:
             "bridge_sha256": self.bridge_sha256,
             "active_request_id": self.active_request_id,
             "hook_install_request_id": self.hook_install_request_id,
+            "hook_cleanup_request_id": self.hook_cleanup_request_id,
+            "hook_cleanup_completed": self.hook_cleanup_completed,
+            "hook_removed_at_utc": self.hook_removed_at_utc,
             "startup_request_id": self.startup_request_id,
             "reconciliation_required": self.reconciliation_required,
             "last_error_code": self.last_error_code,
@@ -456,7 +473,8 @@ class SessionManifest:
             "cap_autoload_dir", "expected_capture_version", "expected_tcl_version", "capture_version",
             "tcl_version", "pid", "process_started_at_utc",
             "process_exit_confirmed_at_utc", "remote_session_dir", "hook_path", "hook_sha256", "bridge_sha256", "active_request_id",
-            "hook_install_request_id", "startup_request_id",
+            "hook_install_request_id", "hook_cleanup_request_id",
+            "hook_cleanup_completed", "hook_removed_at_utc", "startup_request_id",
             "reconciliation_required", "last_error_code",
             "last_error_message",
         }
