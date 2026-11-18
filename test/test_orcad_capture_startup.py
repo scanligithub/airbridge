@@ -207,27 +207,32 @@ class FakeAirBridgeClient:
         if action == "write":
             if self.fail_rfs_write:
                 raise AirBridgeTransportError("simulated RFS write response loss")
-            self.remote_files[request["path"]] = request["content"]
+            if request.get("is_base64") is True:
+                raw = base64.b64decode(request["content"].encode("ascii"))
+            else:
+                raw = request["content"].encode("utf-8")
+            self.remote_files[request["path"]] = raw
             return {
                 "success": True,
                 "path": request["path"],
-                "size": len(request["content"].encode("utf-8")),
+                "size": len(raw),
             }
 
         if action == "read":
             path = request.get("path", "")
             if path.endswith("capture_bridge.tcl"):
-                content = self.remote_files[path]
+                raw = self.remote_files[path]
             elif path.endswith("bridge.ready"):
-                content = json.dumps(self.ready_payload, separators=(",", ":"))
+                raw = json.dumps(
+                    self.ready_payload, separators=(",", ":")
+                ).encode("utf-8")
             else:
                 raise AssertionError("unexpected RFS read path: {}".format(path))
-            raw = content.encode("utf-8")
             if request.get("as_base64"):
                 returned_content = base64.b64encode(raw).decode("ascii")
                 encoding = "base64"
             else:
-                returned_content = content
+                returned_content = raw.decode("utf-8")
                 encoding = "text"
             return {
                 "success": True,
@@ -429,7 +434,7 @@ class CaptureStartupCoordinatorTests(TestCase):
 
         self.assertEqual(
             self.client.remote_files[result.bridge_path],
-            self.bridge_text,
+            self.bridge_text.encode("utf-8"),
         )
         self.assertEqual(len(self.client.shell_calls), 5)
         commands = [item[0] for item in self.client.shell_calls]
