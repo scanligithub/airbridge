@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import time
 import uuid
@@ -56,13 +57,19 @@ def _utc_now() -> str:
 def _tcl_quote(value: str) -> str:
     """Return a Tcl-safe braced literal, rejecting brace forms we cannot quote."""
     raw = str(value)
-    if "\x00" in raw or "}" in raw or "{" in raw:
-        raise CaptureExitError("Session identity contains unsupported Tcl characters")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,2}", raw):
+        raise CaptureExitError("Tcl version must be a numeric version literal")
     return "{" + raw + "}"
 
 
 def build_exit_prepare_script(session_id: str, pid: int, tcl_version: str) -> str:
     """Read-only Tcl probe using the verified Capture DboSession wrapper."""
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", str(session_id)):
+        raise CaptureExitError("Session ID must be a UUID")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        raise CaptureExitError("Capture PID must be positive")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,2}", str(tcl_version)):
+        raise CaptureExitError("Tcl version must be a numeric version literal")
     return r"""
 set __ab_lines [list "%s"]
 lappend __ab_lines "session_id=%s"
@@ -158,6 +165,10 @@ def build_exit_schedule_script(session_id: str, pid: int, tcl_version: str,
     """Schedule Exit for a later Tcl event-loop turn, after this request is published."""
     if isinstance(delay_ms, bool) or not isinstance(delay_ms, int) or not 250 <= delay_ms <= 10000:
         raise ValueError("delay_ms must be between 250 and 10000")
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", str(session_id)):
+        raise CaptureExitError("Session ID must be a UUID")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        raise CaptureExitError("Capture PID must be positive")
     return r"""
 if {[pid] != %s} { error "Capture PID mismatch" }
 if {[info patchlevel] ne %s} { error "Tcl version mismatch" }
