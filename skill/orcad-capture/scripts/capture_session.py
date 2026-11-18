@@ -673,6 +673,7 @@ class CaptureSession:
         bridge_sha256: str,
         remote_session_dir: Optional[str] = None,
         hook_path: Optional[str] = None,
+        hook_sha256: Optional[str] = None,
     ) -> None:
         if self.manifest.pid is None or not self.manifest.process_started_at_utc:
             raise CaptureIdentityError(
@@ -686,6 +687,15 @@ class CaptureSession:
             self.manifest.remote_session_dir = str(remote_session_dir)
         if hook_path:
             self.manifest.hook_path = str(hook_path)
+        if hook_sha256:
+            hook_digest = str(hook_sha256).lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", hook_digest):
+                raise CaptureIdentityError("Hook SHA-256 must be a 64-character hex digest")
+            self.manifest.hook_sha256 = hook_digest
+        if self.manifest.hook_path and not self.manifest.hook_sha256:
+            raise CaptureIdentityError(
+                "a deployed capAutoLoad Hook requires its verified SHA-256"
+            )
         self._move_to(SessionState.BRIDGE_PENDING)
 
     def mark_ready(self, evidence: BridgeReadyEvidence) -> None:
