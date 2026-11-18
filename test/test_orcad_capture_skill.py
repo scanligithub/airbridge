@@ -215,6 +215,7 @@ class CaptureSessionModelTests(TestCase):
     def setUp(self):
         self.config = CaptureConfig(
             capture_exe_path=self.CAPTURE_EXE,
+            cap_autoload_dir=r"D:\\Cadence\\SPB_17.2\\tools\\capture\\tclscripts\\capAutoLoad",
             expected_capture_version="17.2-2016",
             expected_tcl_version="8.6.0",
         )
@@ -304,7 +305,11 @@ class CaptureSessionModelTests(TestCase):
         self.assertIsNone(self.manifest.pid)
 
     def test_start_requires_an_explicit_capture_executable_path(self):
-        config = CaptureConfig(expected_capture_version="17.2-2016")
+        config = CaptureConfig(
+            expected_capture_version="17.2-2016",
+            capture_exe_path=self.CAPTURE_EXE,
+            cap_autoload_dir=r"D:\\Cadence\\SPB_17.2\\tools\\capture\\tclscripts\\capAutoLoad",
+        )
         manifest = SessionManifest.create(config)
         session = CaptureSession(manifest, config)
         session.begin_inspection()
@@ -322,7 +327,10 @@ class CaptureSessionModelTests(TestCase):
         self.assertIsNone(manifest.pid)
 
     def test_start_requires_capture_version_selection_and_verified_file_version(self):
-        config = CaptureConfig(capture_exe_path=self.CAPTURE_EXE)
+        config = CaptureConfig(
+            capture_exe_path=self.CAPTURE_EXE,
+            cap_autoload_dir=r"D:\\Cadence\\SPB_17.2\\tools\\capture\\tclscripts\\capAutoLoad",
+        )
         manifest = SessionManifest.create(config)
         session = CaptureSession(manifest, config)
         session.begin_inspection()
@@ -556,10 +564,12 @@ class CaptureSessionModelTests(TestCase):
         config = CaptureConfig.from_env({
             "AIRBRIDGE_API_BASE_URL": "http://127.0.0.1:8888",
             "AIRBRIDGE_CAPTURE_EXE": self.CAPTURE_EXE,
+            "AIRBRIDGE_CAPTURE_AUTOLOAD_DIR": r"D:\\Cadence\\SPB_17.2\\tools\\capture\\tclscripts\\capAutoLoad",
             "AIRBRIDGE_CAPTURE_VERSION": "17.2-2016",
             "AIRBRIDGE_AGENT_TOKEN": "do-not-copy-into-config",
         })
         self.assertEqual(config.capture_exe_path, self.CAPTURE_EXE)
+        self.assertTrue(config.cap_autoload_dir.endswith("capAutoLoad"))
         self.assertFalse(hasattr(config, "token"))
         self.assertNotIn("do-not-copy-into-config", repr(config))
 
