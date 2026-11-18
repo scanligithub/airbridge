@@ -264,6 +264,7 @@ class SessionManifest:
     tcl_version: Optional[str] = None
     pid: Optional[int] = None
     process_started_at_utc: Optional[str] = None
+    process_exit_confirmed_at_utc: Optional[str] = None
     remote_session_dir: Optional[str] = None
     hook_path: Optional[str] = None
     bridge_sha256: Optional[str] = None
@@ -319,6 +320,15 @@ class SessionManifest:
             self.process_started_at_utc = _validate_timestamp(
                 self.process_started_at_utc, "process_started_at_utc"
             )
+        if self.process_exit_confirmed_at_utc:
+            self.process_exit_confirmed_at_utc = _validate_timestamp(
+                self.process_exit_confirmed_at_utc,
+                "process_exit_confirmed_at_utc",
+            )
+        if self.process_exit_confirmed_at_utc and not self.process_started_at_utc:
+            raise CaptureSessionError(
+                "process exit confirmation requires an original process start time"
+            )
         if self.bridge_sha256:
             self.bridge_sha256 = self.bridge_sha256.lower()
             if not re.fullmatch(r"[0-9a-f]{64}", self.bridge_sha256):
@@ -358,6 +368,7 @@ class SessionManifest:
             "tcl_version": self.tcl_version,
             "pid": self.pid,
             "process_started_at_utc": self.process_started_at_utc,
+            "process_exit_confirmed_at_utc": self.process_exit_confirmed_at_utc,
             "remote_session_dir": self.remote_session_dir,
             "hook_path": self.hook_path,
             "bridge_sha256": self.bridge_sha256,
@@ -375,8 +386,8 @@ class SessionManifest:
             "schema_version", "session_id", "startup_nonce", "state",
             "created_at_utc", "updated_at_utc", "capture_exe_path",
             "expected_capture_version", "expected_tcl_version", "capture_version",
-            "tcl_version", "pid", "process_started_at_utc", "remote_session_dir",
-            "hook_path", "bridge_sha256", "active_request_id",
+            "tcl_version", "pid", "process_started_at_utc",
+            "process_exit_confirmed_at_utc", "remote_session_dir", "hook_path", "bridge_sha256", "active_request_id",
             "reconciliation_required", "last_error_code",
             "last_error_message",
         }
@@ -458,6 +469,16 @@ class BridgeReadyEvidence:
     tcl_version: str
     bridge_sha256: str
     schema_version: int = 1
+
+
+@dataclass(frozen=True)
+class ProcessExitEvidence:
+    """Proof that the exact process recorded by this Session is no longer running."""
+
+    pid: int
+    started_at_utc: str
+    process_absent: bool
+    checked_at_utc: str
 
 
 class CaptureSession:
@@ -548,6 +569,7 @@ class CaptureSession:
         self.manifest.capture_exe_path = actual_path
         self.manifest.capture_version = actual_version
         self.manifest.process_started_at_utc = process_started_at
+        self.manifest.process_exit_confirmed_at_utc = None
         self.manifest.updated_at_utc = _utc_now()
 
     def mark_bridge_pending(
@@ -676,11 +698,37 @@ class CaptureSession:
             )
         self._move_to(SessionState.CLOSING)
 
-    def mark_closed(self, *, process_confirmed_exited: bool) -> None:
+    def mark_closed(self, evidence: ProcessExitEvidence) -> None:
         if self.state is not SessionState.CLOSING:
             raise CaptureStateTransitionError("session is not closing")
-        if process_confirmed_exited is not True:
+        if not isinstance(evidence, ProcessExitEvidence):
+            raise CaptureIdentityError("structured Capture process-exit evidence is required")
+        if (
+            isinstance(evidence.pid, bool)
+            or not isinstance(evidence.pid, int)
+            or self.manifest.pid is None
+            or evidence.pid != self.manifest.pid
+        ):
+            raise CaptureIdentityError("exit evidence PID does not match the original Capture PID")
+        if evidence.started_at_utc != self.manifest.process_started_at_utc:
             raise CaptureIdentityError(
-                "Capture cannot be marked closed until its original PID is confirmed exited"
+                "exit evidence process start time does not match the original Capture instance"
             )
+        _validate_timestamp(evidence.started_at_utc, "exit evidence started_at_utc")
+        checked_at = _validate_timestamp(
+            evidence.checked_at_utc, "exit evidence checked_at_utc"
+        )
+        if evidence.process_absent is not True:
+            raise CaptureIdentityError(
+                "the original Capture PID is still running; session cannot be closed"
+            )
+        started = datetime.fromisoformat(
+            evidence.started_at_utc.replace("Z", "+00:00")
+        )
+        checked = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+        if checked < started:
+            raise CaptureIdentityError(
+                "process exit check time cannot precede the original process start time"
+            )
+        self.manifest.process_exit_confirmed_at_utc = checked_at
         self._move_to(SessionState.CLOSED)
