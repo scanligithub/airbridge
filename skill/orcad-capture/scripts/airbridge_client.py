@@ -7,6 +7,7 @@ or imports AirBridge Core implementation modules.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import os
@@ -73,13 +74,15 @@ def _validate_local_base_url(value: str) -> str:
     raw = str(value or "").strip()
     try:
         parsed = urllib.parse.urlsplit(raw)
-        port = parsed.port  # Force invalid-port validation.
-    except ValueError as exc:
-        raise AirBridgeConfigurationError("invalid AirBridge API base URL") from exc
+        parsed.port  # Force invalid-port validation.
+        host_ip = ipaddress.ip_address(parsed.hostname or "")
+        is_loopback = host_ip.is_loopback
+    except ValueError:
+        is_loopback = False
 
     if (
         parsed.scheme not in ("http", "https")
-        or parsed.hostname not in ("127.0.0.1", "localhost", "::1")
+        or not is_loopback
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
@@ -88,7 +91,7 @@ def _validate_local_base_url(value: str) -> str:
         or not parsed.netloc
     ):
         raise AirBridgeConfigurationError(
-            "AirBridge API URL must be a loopback HTTP(S) origin; "
+            "AirBridge API URL must use a loopback IP literal over HTTP(S); "
             "the Agent token must not be sent to another host"
         )
     return raw.rstrip("/")
