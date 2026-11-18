@@ -1,9 +1,11 @@
 # AirBridge 文档索引
 
-本文档目录存放 AirBridge Core 架构、通用协议、Runtime Adapter 接入和软件生命周期设计。专业 API / 对象模型属于相应 Skill；职责边界以《AirBridge 职责边界与 Skill 集成规范 v1.0》为准。
+本文档目录存放 AirBridge Core 架构、通用协议、Skill 集成和迁移设计。专业 API / 对象模型及专业软件生命周期属于对应 Agent Skill；未来职责边界以 [ADR-006](ADR-006_Skill自主掌握专业软件生命周期.md) 为准，旧规范作为历史基线保留。
 
 ## 当前设计基线
 
+| [ADR-006：专业软件生命周期由 Agent Skill 自主掌握](ADR-006_Skill自主掌握专业软件生命周期.md) | 修订旧 Runtime Adapter / EDA Engine 的专业软件生命周期所有权；明确双端同一 AirBridge.exe、Skill 使用通用 Shell / RFS / 文件传输 | 2026-11-18 已采纳；M3 迁移按阶段实施 |
+| [M3.2：Capture Skill 自主生命周期实施设计 v1.0](M3.2_Capture_Skill_自主生命周期实施设计_v1.0.md) | Capture Skill 的目录结构、Session 状态机、Tcl Bridge、进程发现 / 启动、打开 / 保存 / 退出、安全边界和 M3.2 验收 | 设计完成；尚未开始运行代码迁移 |
 | 文档 | 内容 | 状态 |
 |---|---|---|
 | [AirBridge 代码边界审计与渐进迁移计划 v1.0](AirBridge_代码边界审计与渐进迁移计划_v1.0.md) | 基于当前代码审计 Core / Adapter / Skill 混合点，提出 Capture Session 生命周期抽取、Polyfill 解耦、显式 Profile 路由与 Session 协议实施顺序 | 2026-11-13 静态审计完成；M1 已合并并实机验收；后续职责迁移渐进推进 |
@@ -17,7 +19,7 @@
 | [Capture Tcl Bridge 实测基线](Capture_Tcl_Bridge_实测基线_v1.0.md) | Capture 17.2 Runtime Adapter / Bridge 接入实测、capAutoLoad / Session、多请求和进程生命周期；附带历史 Dbo 命令枚举证据 | 2026-11-13 M1 真实 A/B 完整回归 PASS；当前新 Session PID 3156，Session ID 52f1184b-a3cf-413e-b6a0-6f02dafa9399；Dbo 命令清单不是 Adapter API 契约 |
 | [AirBridge MCP Gateway：M2.1 / M2.2 实施设计](AirBridge_MCP_Gateway_M2_实施设计_v1.0.md) | 主机 A 独立 MCP stdio Gateway、四个通用 Tools、HTTP 转发、安全默认值和验收边界 | 2026-11-13：11 项单测、Python 3.11/3.12 CI、Antigravity / OpenCode 双 Host 只读和执行关闭验收 PASS；真实 EDA 脚本执行未开放 |
 | [AirBridge MCP Gateway：M2.1 / M2.2 双 Host 验收记录 v1.0](AirBridge_MCP_Gateway_M2.1_M2.2_双Host验收记录_v1.0.md) | 11 项单测、CI 双 Python 版本、Host A HTTP API、Antigravity / OpenCode 四工具发现与只读调用、执行关闭保护 | 2026-11-13 双 Host PASS；未执行 Tcl / SKILL |
-| [AirBridge M2.3：Agent 身份认证、权限控制与审计设计 v1.0](AirBridge_MCP_Gateway_M2.3_Agent_Identity_Authorization_Design_v1.0.md) | 每 Agent 独立 Bearer Token、服务端 scopes、请求所有权、审计、配额和明确的非目标 | M2.3.1 / 2.3.2 代码 PASS；Agent Security Windows CI（Python 3.10–3.12）及 Gateway CI（Python 3.11–3.12）PASS；2026-11-17 Host-A 双 Agent 只读实机验收 PASS；PR #5 待审查合并 |
+| [AirBridge M2.3：Agent 身份认证、权限控制与审计设计 v1.0](AirBridge_MCP_Gateway_M2.3_Agent_Identity_Authorization_Design_v1.0.md) | 每 Agent 独立 Bearer Token、服务端 scopes、请求所有权、审计、配额和明确的非目标 | M2.3.1 / 2.3.2 代码 PASS；Agent Security Windows CI（Python 3.10–3.12）及 Gateway CI（Python 3.11–3.12）PASS；2026-11-17 Host-A 双 Agent 只读实机验收 PASS；PR #5 已于 2026-11-18 合并到 main |
 | [AirBridge M2.3 Host-A 双 Agent 只读验收记录 2026-11-17](AirBridge_M2.3_HostA_Acceptance_Record_20261117.md) | M2.3 EXE 构建、Antigravity / OpenCode 独立 Token、401/200/404、MCP 连接、撤销与审计、CI 证据和未覆盖边界 | 2026-11-17 Host-A 只读验收 PASS；未执行 EDA / Shell |
 | [AirBridge M2.3 Host A 只读安全验收操作手册 v1.0](AirBridge_M2.3_HostA_ReadOnly_Acceptance_Runbook_v1.0.md) | Host A 分别签发 Antigravity / OpenCode 只读 Token，检查 401、capabilities、request.read、撤销和审计；不发送 EDA / Shell 请求 | 操作手册；对应实机验收已 PASS，详见验收记录 |
 | [GitHub Actions Runtime Session CI 验收配置](GitHub_Actions_Runtime_Session_AB验收配置.md) | GitHub 托管 Windows Runner、协议单测、生产 SerialWorker 双端模拟和验收边界 | 云端 CI 配置；物理串口实测不在该 CI 范围 |
