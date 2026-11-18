@@ -131,8 +131,8 @@ class AirBridgeClient:
                     TOKEN_ENV
                 )
             )
-        if any(char in selected_token for char in "\r\n"):
-            raise AirBridgeConfigurationError("Agent token contains invalid characters")
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in selected_token):
+            raise AirBridgeConfigurationError("Agent token contains invalid control characters")
         try:
             timeout = float(timeout_seconds)
         except (TypeError, ValueError) as exc:
