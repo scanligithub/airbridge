@@ -64,17 +64,17 @@ def main():
             command_result = result.get("result") or {}
             if command_result.get("exit_code") != 0:
                 raise RuntimeError(
-                    f"Remote command failed with exit_code={command_result.get(\"exit_code\")}"
+                    f"Remote command failed with exit_code={command_result.get('exit_code')}"
                 )
         elif state == "accepted":
             print(
-                f"Task accepted. Query /api/v1/shell/tasks/by-request/{result.get(\"request_id\")} "
+                f"Task accepted. Query /api/v1/shell/tasks/by-request/{result.get('request_id')} "
                 "for its final result.",
                 file=sys.stderr,
             )
         elif state == "pending":
             print(
-                f"Shell request is still pending. Query /api/v1/requests/{result.get(\"request_id\")} before retrying.",
+                f"Shell request is still pending. Query /api/v1/requests/{result.get('request_id')} before retrying."
                 file=sys.stderr,
             )
         elif state in ("failed", "unknown"):
@@ -101,7 +101,7 @@ def main():
             )
         if task_result.get("killed") or task_result.get("exit_code") != 0:
             raise RuntimeError(
-                f"Remote command failed with exit_code={task_result.get('exit_code')}"
+                    f"Remote command failed with exit_code={command_result.get('exit_code')}"
             )
         return
 
