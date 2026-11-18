@@ -5,6 +5,7 @@ on:
     branches:
       - feature/m3-2-2-capture-process-inventory
       - feature/m3-2-3-capture-controlled-startup
+      - feature/m3-2-4-capture-tcl-request-queue
     paths:
       - "skill/orcad-capture/**"
       - "test/test_orcad_capture_*.py"
@@ -13,6 +14,8 @@ on:
   pull_request:
     branches:
       - feature/m3-2-2-capture-process-inventory
+      - feature/m3-2-3-capture-controlled-startup
+      - feature/m3-2-4-capture-tcl-request-queue
     paths:
       - "skill/orcad-capture/**"
       - "test/test_orcad_capture_*.py"
@@ -46,7 +49,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python --version
-          python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py
+          python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py skill/orcad-capture/scripts/capture_requests.py
 
       - name: Run Capture Skill and process inventory unit tests
         shell: pwsh

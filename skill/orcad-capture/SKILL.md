@@ -7,14 +7,14 @@ description: Own OrCAD Capture version policy, process identity, Tcl Bridge sess
 
 ## Implementation status
 
-This package currently contains the **M3.2.1 / M3.2.2 foundations and the M3.2.3 controlled-startup implementation**: configuration validation, Session Manifest, read-only process inventory, fail-closed HTTP client, guarded lifecycle state model, authorized Capture launch, unique capAutoLoad Hook deployment and Tcl READY handshake. The startup path is covered by Mock/Hosted CI only; it has not been executed on Host B or against a live Capture 17.2 installation. Opening a design, running Dbo workflows, saving and graceful exit remain unimplemented.
+This package currently contains the **M3.2.1–M3.2.4 foundations**: Session Manifest, fail-closed HTTP client, read-only process inventory, authorized Capture startup, unique capAutoLoad Hook, Tcl READY handshake and the Tcl request/result queue. The new queue is covered by Mock/Hosted CI only; it has not been executed on Host B or against a live Capture 17.2 installation. Opening a design, Dbo workflows, saving and graceful exit remain unimplemented.
 
 ## Ownership boundary
 
 This Skill owns Capture-specific decisions and workflow:
 
 - Capture version selection and process identity verification;
-- the per-session Tcl Bridge, capAutoLoad Hook, READY handshake and request/result queue;
+- the per-session Tcl Bridge, capAutoLoad Hook, READY handshake and request/result queue; the queue uses generic RFS upload/read-back plus generic Shell SHA-256 verification and atomic publication;
 - Capture Tcl and Dbo helpers;
 - opening and verifying a DSN/OPJ, save policy and graceful Tcl `Exit`;
 - checking the original Capture PID has exited before a session is marked closed.
@@ -55,7 +55,9 @@ The client rejects non-loopback API origins so that the Bearer token cannot be s
 - `scripts/capture_session.py` — non-secret configuration, Session Manifest persistence, process / READY evidence structures and the allowed state transitions. Capture-specific process and application decisions remain in this Skill.
 - `../../test/test_orcad_capture_skill.py` — local mock-HTTP and state-model tests.
 - `../../test/test_orcad_capture_process.py` — read-only process inventory, response parsing, multiple-instance and ownership-matching tests.
-- `../../test/test_orcad_capture_startup.py` — Mock end-to-end startup, authorization gate, per-child environment ticket, no-overwrite Hook creation, READY verification and UNKNOWN/no-retry tests.
+- `scripts/capture_requests.py` — authorized Tcl request submission, staging-file read-back, Host-B SHA-256 verification, atomic publication, result validation and read-only UNKNOWN reconciliation.
+- `../../test/test_orcad_capture_startup.py` — Mock startup, authorization gate, per-child environment ticket, no-overwrite Hook creation, READY verification and UNKNOWN/no-retry tests.
+- `../../test/test_orcad_capture_requests.py` — Mock queue protocol, exact identity/hash/CRC validation, authorization, no-overwrite publication, result polling, and UNKNOWN reconciliation tests.
 
 ## Session and safety rules
 
@@ -63,13 +65,17 @@ The state vocabulary is:
 
 `absent → inspecting → starting → bridge_pending → ready ↔ busy → closing → closed`
 
-Failures and indeterminate results are explicit `failed` or `unknown` states. `unknown` may return only to read-only inspection; it is not permission to submit a duplicate operation or start another Capture process.
+Failures and indeterminate results are explicit `failed` or `unknown` states. `unknown` permits only read-only reconciliation by the original Request ID. A session may return to READY only after the matching result envelope and exact original Capture process identity are positively verified; it is never permission to resubmit.
 
 Before a future implementation may mark a session READY, it must match the Session ID, high-entropy Startup Nonce, verified Capture PID, expected Tcl version and SHA-256 of the deployed Bridge. PID alone is not a process identity: compare the executable image path and process start time as well.
 
 An unrecognized or manually launched Capture process is not owned by this Skill. The inventory classifies unmatched processes as unowned, multiple processes as ambiguous, and a reused or mismatched PID as an identity mismatch. Never inject a Hook into any of these processes, close them, or start a second instance merely because the existing process cannot be identified. An owned instance requires an exact PID, normalized executable path, process start timestamp and file-version match.
 
 The capAutoLoad Hook lives in a shared installation directory, so it additionally requires the unique Session ID and Startup Nonce environment ticket inherited by the exact `Start-Process` child. A manually launched Capture that encounters the Hook without this ticket returns immediately before sourcing the Bridge. The Hook clears both ticket variables from its own process environment before Bridge startup.
+
+The M3.2.4 queue accepts only explicitly authorized scripts. Host A writes a UUID-named `.tmp` request through RFS, reads it back byte-for-byte, then asks generic Shell to verify its SHA-256 and atomically rename it to `.req` without overwrite. Tcl 8.6 polls the session queue, claims one request by rename to `.running`, validates Session ID / Nonce / Request ID / payload length / CRC-32, evaluates the Tcl script once, and atomically writes `.result`. The fixed envelope is ASCII with Base64 payloads; it requires no Tcl JSON or SHA package. The script SHA is bound by Host-A read-back and Host-B pre-publication hashing. Scripts are limited to 256 KiB; each result text field is limited to 512 KiB.
+
+If upload, publication, execution or result retrieval becomes indeterminate, the Skill persists the original Request ID and marks the Session UNKNOWN. It does not retry the upload, publish, or Tcl script. Reconciliation reads only the original result file and verifies the original Capture PID/path/start-time/version using the read-only process inventory before clearing UNKNOWN.
 
 Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. This foundation only allows a state transition into `closing` when the caller explicitly supplies authorization; it does not itself send an Exit command.
 
@@ -100,7 +106,8 @@ Run from the repository root:
 python -m unittest discover -s test -p "test_orcad_capture_skill.py" -v
 python -m unittest discover -s test -p "test_orcad_capture_process.py" -v
 python -m unittest discover -s test -p "test_orcad_capture_startup.py" -v
-python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py
+python -m unittest discover -s test -p "test_orcad_capture_requests.py" -v
+python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py skill/orcad-capture/scripts/capture_requests.py
 ```
 
 These tests validate the Skill foundation only. They do not emulate Capture, Tcl, Dbo APIs, capAutoLoad, the physical serial link or the two-host deployment.
