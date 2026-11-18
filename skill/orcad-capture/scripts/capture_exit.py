@@ -207,10 +207,11 @@ class CaptureExitCoordinator:
                  sleep_fn=time.sleep, monotonic_fn=time.monotonic):
         if queue is None or not callable(getattr(queue, "execute", None)):
             raise TypeError("queue must provide execute()")
-        if not isinstance(inspector, CaptureProcessInspector):
-            # Test doubles may implement the same narrow inspect() protocol.
-            if not callable(getattr(inspector, "inspect", None)):
-                raise TypeError("inspector must provide inspect()")
+        if (
+            not callable(getattr(inspector, "inspect", None))
+            or not callable(getattr(inspector, "inspect_session", None))
+        ):
+            raise TypeError("inspector must provide inspect() and inspect_session()")
         if not isinstance(session, CaptureSession):
             raise TypeError("session must be a CaptureSession")
         self.queue = queue
@@ -226,6 +227,8 @@ class CaptureExitCoordinator:
             raise CaptureAuthorizationError("Capture Exit preparation requires explicit authorization")
         if self.session.state is not SessionState.READY:
             raise CaptureStateTransitionError("Exit preparation requires a READY Session")
+        if self.context_path.exists():
+            raise CaptureExitError("An Exit context already exists; refusing a second Exit workflow")
         self._assert_owned_process()
         manifest = self.session.manifest
         request_id = str(uuid.uuid4())
