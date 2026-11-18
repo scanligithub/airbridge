@@ -345,14 +345,22 @@ class SessionManifest:
             raise CaptureSessionError("reconciliation_required must be a boolean")
         if not isinstance(self.hook_cleanup_completed, bool):
             raise CaptureSessionError("hook_cleanup_completed must be a boolean")
+        if bool(self.hook_path) != bool(self.hook_sha256):
+            raise CaptureSessionError(
+                "hook_path and hook_sha256 must be present together"
+            )
         if self.hook_removed_at_utc:
             self.hook_removed_at_utc = _validate_timestamp(
                 self.hook_removed_at_utc, "hook_removed_at_utc"
             )
-            if not self.hook_cleanup_completed:
-                raise CaptureSessionError(
-                    "hook_removed_at_utc requires confirmed Hook cleanup"
-                )
+        if self.hook_cleanup_completed and not self.hook_removed_at_utc:
+            raise CaptureSessionError(
+                "confirmed Hook cleanup requires hook_removed_at_utc"
+            )
+        if self.hook_removed_at_utc and not self.hook_cleanup_completed:
+            raise CaptureSessionError(
+                "hook_removed_at_utc requires confirmed Hook cleanup"
+            )
         if self.state == SessionState.UNKNOWN.value and not self.reconciliation_required:
             raise CaptureSessionError(
                 "UNKNOWN sessions must require explicit reconciliation"
