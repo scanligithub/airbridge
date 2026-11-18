@@ -69,7 +69,6 @@ lappend __ab_lines "session_id=%s"
 lappend __ab_lines "expected_pid=%s"
 lappend __ab_lines "tcl_pid=[pid]"
 lappend __ab_lines "tcl_version=[info patchlevel]"
-lappend __ab_lines "expected_tcl_version=%s"
 set __ab_session ""
 set __ab_session_rc [catch {set __ab_session $::DboSession_s_pDboSession}]
 lappend __ab_lines "dbo_session_rc=$__ab_session_rc"
@@ -96,7 +95,6 @@ join $__ab_lines "\n"
         PREPARE_MAGIC,
         session_id,
         pid,
-        _tcl_quote(tcl_version),
     )
 
 
@@ -115,7 +113,7 @@ def parse_exit_prepare_report(value: str, *, session_id: str, pid: int,
         fields[key] = item
     required = {
         "session_id", "expected_pid", "tcl_pid", "tcl_version",
-        "expected_tcl_version", "dbo_session_rc", "dbo_session_present",
+        "dbo_session_rc", "dbo_session_present",
         "active_design_rc", "active_design_present", "active_design_name_rc",
         "active_design_name_b64",
     }
@@ -126,7 +124,6 @@ def parse_exit_prepare_report(value: str, *, session_id: str, pid: int,
         or fields["expected_pid"] != str(pid)
         or fields["tcl_pid"] != str(pid)
         or fields["tcl_version"] != tcl_version
-        or fields["expected_tcl_version"] != tcl_version
         or fields["dbo_session_rc"] != "0"
         or fields["dbo_session_present"] != "1"
         or fields["active_design_rc"] != "0"
