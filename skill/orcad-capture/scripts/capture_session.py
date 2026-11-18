@@ -150,6 +150,7 @@ class CaptureConfig:
 
     api_base_url: str = DEFAULT_API_BASE_URL
     capture_exe_path: Optional[str] = None
+    cap_autoload_dir: Optional[str] = None
     expected_capture_version: Optional[str] = None
     expected_tcl_version: Optional[str] = "8.6.0"
     remote_session_root: str = DEFAULT_REMOTE_SESSION_ROOT
@@ -172,10 +173,20 @@ class CaptureConfig:
             ) from exc
         if self.capture_exe_path:
             win_path = PureWindowsPath(self.capture_exe_path)
-            if not win_path.is_absolute():
+            if not win_path.is_absolute() or not win_path.name.casefold() == "capture.exe":
                 raise CaptureConfigurationError(
-                    "capture_exe_path must be an absolute Windows path"
+                    "capture_exe_path must be an absolute path to capture.exe"
                 )
+        if self.cap_autoload_dir:
+            autoload_path = PureWindowsPath(self.cap_autoload_dir)
+            if not autoload_path.is_absolute():
+                raise CaptureConfigurationError(
+                    "cap_autoload_dir must be an absolute Windows path"
+                )
+        if bool(self.capture_exe_path) != bool(self.cap_autoload_dir):
+            raise CaptureConfigurationError(
+                "capture_exe_path and cap_autoload_dir must be configured together"
+            )
         if not str(self.remote_session_root or "").strip():
             raise CaptureConfigurationError("remote_session_root must not be empty")
         if (
@@ -236,6 +247,7 @@ class CaptureConfig:
         return cls(
             api_base_url=source.get("AIRBRIDGE_API_BASE_URL", DEFAULT_API_BASE_URL),
             capture_exe_path=optional("AIRBRIDGE_CAPTURE_EXE"),
+            cap_autoload_dir=optional("AIRBRIDGE_CAPTURE_AUTOLOAD_DIR"),
             expected_capture_version=optional("AIRBRIDGE_CAPTURE_VERSION"),
             expected_tcl_version=str(
                 source.get("AIRBRIDGE_CAPTURE_TCL_VERSION", "8.6.0") or ""
@@ -262,6 +274,7 @@ class SessionManifest:
     created_at_utc: str = ""
     updated_at_utc: str = ""
     capture_exe_path: Optional[str] = None
+    cap_autoload_dir: Optional[str] = None
     expected_capture_version: Optional[str] = None
     expected_tcl_version: Optional[str] = None
     capture_version: Optional[str] = None
@@ -309,8 +322,19 @@ class SessionManifest:
         self.updated_at_utc = _validate_timestamp(
             self.updated_at_utc, "updated_at_utc"
         )
-        if self.capture_exe_path and not PureWindowsPath(self.capture_exe_path).is_absolute():
-            raise CaptureSessionError("capture_exe_path must be an absolute Windows path")
+        if self.capture_exe_path and (
+            not PureWindowsPath(self.capture_exe_path).is_absolute()
+            or PureWindowsPath(self.capture_exe_path).name.casefold() != "capture.exe"
+        ):
+            raise CaptureSessionError(
+                "capture_exe_path must be an absolute path to capture.exe"
+            )
+        if self.cap_autoload_dir and not PureWindowsPath(self.cap_autoload_dir).is_absolute():
+            raise CaptureSessionError("cap_autoload_dir must be an absolute Windows path")
+        if bool(self.capture_exe_path) != bool(self.cap_autoload_dir):
+            raise CaptureSessionError(
+                "capture_exe_path and cap_autoload_dir must be configured together"
+            )
         if not isinstance(self.reconciliation_required, bool):
             raise CaptureSessionError("reconciliation_required must be a boolean")
         if self.state == SessionState.UNKNOWN.value and not self.reconciliation_required:
@@ -373,6 +397,7 @@ class SessionManifest:
             session_id=str(uuid.uuid4()),
             startup_nonce=secrets.token_urlsafe(32),
             capture_exe_path=config.capture_exe_path,
+            cap_autoload_dir=config.cap_autoload_dir,
             expected_capture_version=config.expected_capture_version,
             expected_tcl_version=config.expected_tcl_version,
         )
@@ -386,6 +411,7 @@ class SessionManifest:
             "created_at_utc": self.created_at_utc,
             "updated_at_utc": self.updated_at_utc,
             "capture_exe_path": self.capture_exe_path,
+            "cap_autoload_dir": self.cap_autoload_dir,
             "expected_capture_version": self.expected_capture_version,
             "expected_tcl_version": self.expected_tcl_version,
             "capture_version": self.capture_version,
@@ -409,7 +435,7 @@ class SessionManifest:
         allowed = {
             "schema_version", "session_id", "startup_nonce", "state",
             "created_at_utc", "updated_at_utc", "capture_exe_path",
-            "expected_capture_version", "expected_tcl_version", "capture_version",
+            "cap_autoload_dir", "expected_capture_version", "expected_tcl_version", "capture_version",
             "tcl_version", "pid", "process_started_at_utc",
             "process_exit_confirmed_at_utc", "remote_session_dir", "hook_path", "bridge_sha256", "active_request_id",
             "reconciliation_required", "last_error_code",
