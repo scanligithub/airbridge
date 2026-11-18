@@ -7,6 +7,7 @@ on:
     paths:
       - "skill/orcad-capture/**"
       - "test/test_orcad_capture_*.py"
+      - "doc/README.md"
       - ".github/workflows/capture-process-ci.yml"
   workflow_dispatch:
 
