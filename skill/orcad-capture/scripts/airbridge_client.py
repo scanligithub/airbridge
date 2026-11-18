@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -89,7 +90,7 @@ def _validate_local_base_url(value: str) -> str:
             "AirBridge API URL must be a loopback HTTP(S) origin; "
             "the Agent token must not be sent to another host"
         )
-    return "{}://{}{}".format(parsed.scheme, parsed.netloc, "" if port is None else "")
+    return raw.rstrip("/")
 
 
 def _decode_json_object(raw: bytes, status_code: int) -> dict[str, Any]:
@@ -162,11 +163,8 @@ class AirBridgeClient:
             raise ValueError("only GET and POST are supported")
         endpoint = str(path or "")
         if (
-            not endpoint.startswith("/api/v1/")
+            not re.fullmatch(r"/api/v1/[A-Za-z0-9_/-]+", endpoint)
             or endpoint.startswith("//")
-            or "://" in endpoint
-            or "?" in endpoint
-            or "#" in endpoint
         ):
             raise ValueError("path must be an AirBridge /api/v1/ endpoint")
         if payload is not None and not isinstance(payload, Mapping):
