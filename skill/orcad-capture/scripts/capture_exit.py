@@ -264,29 +264,210 @@ class CaptureExitCoordinator:
 
     @contextmanager
     def _exclusive_exit_lock(self):
-        """Serialize Exit attempts across threads and separate Host-A processes."""
+        """Serialize Exit and reconciliation; kernel locks release on process death."""
         lock_path = self.context_path.with_name(self.context_path.name + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        acquired = False
+        unlock = None
         try:
-            descriptor = os.open(
-                str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
-            )
-        except FileExistsError as exc:
-            raise CaptureExitError(
-                "another Capture Exit workflow is active or was interrupted; refusing another Exit"
-            ) from exc
-        try:
-            payload = "pid={}\ncreated_at_utc={}\n".format(os.getpid(), _utc_now())
-            os.write(descriptor, payload.encode("ascii"))
-            os.fsync(descriptor)
+            if os.fstat(descriptor).st_size == 0:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                os.write(descriptor, b"\0")
+                os.fsync(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                    unlock = lambda: msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    unlock = lambda: fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError as exc:
+                raise CaptureExitError(
+                    "another Capture Exit or reconciliation workflow holds the lock"
+                ) from exc
+            acquired = True
             yield
         finally:
             try:
-                os.close(descriptor)
+                if acquired and unlock is not None:
+                    unlock()
             finally:
+                os.close(descriptor)
+
+    def reconcile_exit(self, *, timeout_seconds: float = 30.0) -> ProcessExitEvidence:
+        """Reconcile a prior authorized Exit using read-only result and PID evidence.
+
+        This method never submits Tcl or retries Exit. A missing/invalid Schedule
+        Receipt while the original process is still running remains UNKNOWN.
+        A successful inventory proving the original PID absent is sufficient to
+        record the Session as CLOSED, even if Host A crashed before reading the
+        Schedule Receipt.
+        """
+        with self._exclusive_exit_lock():
+            if (
+                isinstance(timeout_seconds, bool)
+                or not isinstance(timeout_seconds, (int, float))
+                or not 1 <= timeout_seconds <= 600
+            ):
+                raise ValueError("timeout_seconds must be between 1 and 600")
+
+            context = self._load_context()
+            manifest = self.session.manifest
+            self._assert_context_identity(context)
+            if context.get("state") not in (
+                "exit_scheduling", "exit_scheduled", "unknown", "closed"
+            ):
+                raise CaptureExitError(
+                    "there is no unresolved authorized Exit intent to reconcile"
+                )
+            try:
+                request_id = str(uuid.UUID(str(context.get("schedule_request_id") or "")))
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise CaptureExitError(
+                    "persisted Exit intent has no valid Schedule Request ID"
+                ) from exc
+
+            if self.session.state is SessionState.CLOSED:
+                checked_at = manifest.process_exit_confirmed_at_utc
+                if not checked_at:
+                    raise CaptureIdentityError(
+                        "CLOSED Manifest is missing its process-exit confirmation"
+                    )
+                evidence = ProcessExitEvidence(
+                    pid=int(manifest.pid),
+                    started_at_utc=str(manifest.process_started_at_utc),
+                    process_absent=True,
+                    checked_at_utc=str(checked_at),
+                )
+                if context.get("state") != "closed":
+                    context["state"] = "closed"
+                    context["process_exit_confirmed_at_utc"] = checked_at
+                    context["updated_at_utc"] = _utc_now()
+                    _atomic_json(self.context_path, context)
+                return evidence
+
+            try:
+                candidates = self.inspector.inspect()
+            except Exception as exc:
+                self._mark_unknown("CAPTURE_EXIT_RECONCILE_INVENTORY_UNKNOWN", str(exc))
+                raise CaptureExitOutcomeUnknown(
+                    "read-only process inventory failed; preserve the original Exit Request ID"
+                ) from exc
+
+            original_pid_matches = [
+                item for item in candidates if item.pid == manifest.pid
+            ]
+            if not original_pid_matches:
+                evidence = ProcessExitEvidence(
+                    pid=int(manifest.pid),
+                    started_at_utc=str(manifest.process_started_at_utc),
+                    process_absent=True,
+                    checked_at_utc=_utc_now(),
+                )
                 try:
-                    lock_path.unlink()
-                except FileNotFoundError:
-                    pass
+                    self.session.begin_close_from_reconciled_exit(request_id)
+                    self.session.mark_closed(evidence)
+                    self.session.manifest.save(self.manifest_path)
+                except Exception as exc:
+                    self._mark_unknown(
+                        "CAPTURE_EXIT_RECONCILE_CLOSE_COMMIT_UNKNOWN", str(exc)
+                    )
+                    raise CaptureExitOutcomeUnknown(
+                        "the original PID is absent but CLOSED state could not be persisted"
+                    ) from exc
+                try:
+                    context["state"] = "closed"
+                    context["process_exit_confirmed_at_utc"] = evidence.checked_at_utc
+                    context["updated_at_utc"] = _utc_now()
+                    _atomic_json(self.context_path, context)
+                except Exception as exc:
+                    raise CaptureExitError(
+                        "Capture is confirmed CLOSED, but its Exit sidecar could not be finalized"
+                    ) from exc
+                return evidence
+
+            assessment = assess_capture_processes(candidates, manifest)
+            if assessment.disposition is not CaptureProcessDisposition.OWNED_INSTANCE:
+                self._mark_unknown(
+                    "CAPTURE_EXIT_RECONCILE_IDENTITY_MISMATCH",
+                    "the original PID remains but exact Capture process identity is not confirmed",
+                )
+                raise CaptureExitOutcomeUnknown(
+                    "original Capture process identity is ambiguous; no Exit will be resent",
+                    request_id,
+                )
+
+            read_result = getattr(self.queue, "read_result", None)
+            if not callable(read_result):
+                self._mark_unknown(
+                    "CAPTURE_EXIT_RECONCILE_RESULT_UNAVAILABLE",
+                    "the Tcl queue does not expose read-only original-result retrieval",
+                )
+                raise CaptureExitOutcomeUnknown(
+                    "original Schedule Receipt cannot be read without resubmitting Tcl",
+                    request_id,
+                )
+            try:
+                result = read_result(request_id)
+            except Exception as exc:
+                self._mark_unknown("CAPTURE_EXIT_RECONCILE_RESULT_UNKNOWN", str(exc))
+                raise CaptureExitOutcomeUnknown(
+                    "original Schedule Receipt could not be read; do not retry Exit",
+                    request_id,
+                ) from exc
+
+            expected_receipt = "\n".join([
+                SCHEDULE_MAGIC,
+                "session_id=" + manifest.session_id,
+                "pid=" + str(manifest.pid),
+                "tcl_version=" + str(manifest.tcl_version),
+                "exit_scheduled=1",
+            ])
+            if (
+                result is None
+                or result.success is not True
+                or result.request_id != request_id
+                or str(result.value or "").strip() != expected_receipt
+            ):
+                self._mark_unknown(
+                    "CAPTURE_EXIT_RECONCILE_RECEIPT_UNVERIFIED",
+                    "the original Schedule Receipt is missing or does not match",
+                )
+                raise CaptureExitOutcomeUnknown(
+                    "the original Schedule Receipt is not proven; do not resend Exit",
+                    request_id,
+                )
+
+            try:
+                self.session.begin_close_from_reconciled_exit(request_id)
+                self.session.manifest.save(self.manifest_path)
+            except Exception as exc:
+                self._mark_unknown(
+                    "CAPTURE_EXIT_RECONCILE_CLOSING_COMMIT_UNKNOWN", str(exc)
+                )
+                raise CaptureExitOutcomeUnknown(
+                    "verified Schedule Receipt could not be committed to CLOSING",
+                    request_id,
+                ) from exc
+
+            try:
+                context["state"] = "exit_scheduled"
+                context["updated_at_utc"] = _utc_now()
+                _atomic_json(self.context_path, context)
+            except Exception as exc:
+                self._mark_unknown(
+                    "CAPTURE_EXIT_RECONCILE_CONTEXT_COMMIT_UNKNOWN", str(exc)
+                )
+                raise CaptureExitOutcomeUnknown(
+                    "verified Exit Receipt is retained but local sidecar commit failed",
+                    request_id,
+                ) from exc
+
+            return self._wait_for_original_process_exit(timeout_seconds)
 
     def request_exit(self, *, user_authorized: bool = False,
                      design_saved_or_no_changes_confirmed: bool = False,
