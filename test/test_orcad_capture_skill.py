@@ -183,6 +183,16 @@ class AirBridgeClientTests(TestCase):
                 base_url="https://example.com",
                 token="must-not-leave-host-a",
             )
+        with self.assertRaises(AirBridgeConfigurationError):
+            AirBridgeClient(
+                base_url="http://localhost:8888",
+                token="loopback-name-must-not-be-resolved",
+            )
+        with self.assertRaises(AirBridgeConfigurationError):
+            AirBridgeClient(
+                base_url=self.base_url,
+                token="invalid\\tcontrol",
+            )
 
     def test_endpoint_validation_prevents_external_urls_and_path_escape(self):
         for path in (
@@ -484,6 +494,8 @@ class CaptureSessionModelTests(TestCase):
             CaptureConfig(capture_exe_path="capture.exe")
         with self.assertRaises(CaptureConfigurationError):
             CaptureConfig(api_base_url="https://example.com")
+        with self.assertRaises(CaptureConfigurationError):
+            CaptureConfig(api_base_url="http://[malformed")
 
 
 if __name__ == "__main__":
