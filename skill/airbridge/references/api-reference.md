@@ -167,6 +167,8 @@ Example completed response:
 
 The caller must still inspect `result.exit_code` and `result.killed`. A completed Shell task is not necessarily a successful professional workflow.
 
+If this endpoint returns `202` with a `query_request_id`, the caller may poll `GET /api/v1/requests/{query_request_id}` to inspect that same query request without sending another ABFP frame. Calling the original Shell task endpoint again is also safe because it is read-only, but it issues a new status query to host B.
+
 ### GET `/api/v1/requests/{request_id}`
 
 Reads the correlated request receipt. For an asynchronous Shell request, this remains the initial `accepted` acknowledgement; use `/api/v1/shell/tasks/by-request/{request_id}` for the task's current / final state.
