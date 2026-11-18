@@ -365,6 +365,9 @@ class CaptureExitTests(TestCase):
         context = self.coordinator._load_context()
         context["state"] = "exit_scheduling"
         context["schedule_request_id"] = request_id
+        context["schedule_script_sha256"] = hashlib.sha256(
+            build_exit_schedule_script(SESSION_ID, PID, TCL).encode("utf-8")
+        ).hexdigest()
         capture_exit._atomic_json(self.coordinator.context_path, context)
 
         self.manifest.save(self.manifest_path)
@@ -405,6 +408,9 @@ class CaptureExitTests(TestCase):
         context = self.coordinator._load_context()
         context["state"] = "exit_scheduling"
         context["schedule_request_id"] = request_id
+        context["schedule_script_sha256"] = hashlib.sha256(
+            build_exit_schedule_script(SESSION_ID, PID, TCL).encode("utf-8")
+        ).hexdigest()
         capture_exit._atomic_json(self.coordinator.context_path, context)
 
         self.manifest.state = SessionState.BUSY.value
@@ -415,6 +421,9 @@ class CaptureExitTests(TestCase):
         )
         self.queue.read_result_value = SimpleNamespace(
             request_id=request_id,
+            script_sha256=hashlib.sha256(
+                build_exit_schedule_script(SESSION_ID, PID, TCL).encode("utf-8")
+            ).hexdigest(),
             success=True,
             value="\n".join([
                 SCHEDULE_MAGIC,
@@ -448,6 +457,9 @@ class CaptureExitTests(TestCase):
         context = self.coordinator._load_context()
         context["state"] = "exit_scheduling"
         context["schedule_request_id"] = request_id
+        context["schedule_script_sha256"] = hashlib.sha256(
+            build_exit_schedule_script(SESSION_ID, PID, TCL).encode("utf-8")
+        ).hexdigest()
         capture_exit._atomic_json(self.coordinator.context_path, context)
 
         self.manifest.state = SessionState.BUSY.value
