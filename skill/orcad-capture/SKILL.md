@@ -57,6 +57,7 @@ The client rejects non-loopback API origins so that the Bearer token cannot be s
 - `scripts/capture_requests.py` — authorized Tcl request submission, staging-file read-back, Host-B SHA-256 verification, atomic publication, result validation and read-only UNKNOWN reconciliation.
 - `../../test/test_orcad_capture_startup.py` — Mock startup, authorization gate, per-child environment ticket, no-overwrite Hook creation, READY verification and UNKNOWN/no-retry tests.
 - `../../test/test_orcad_capture_requests.py` — Mock queue protocol, exact identity/hash/CRC validation, authorization, no-overwrite publication, result polling, and UNKNOWN reconciliation tests.
+- `../../test/test_orcad_capture_bridge_queue.py` — executes the actual Tcl 8.6 Bridge with Python's Tcl interpreter to verify READY creation, Unicode request/result round-trip, Tcl errors, serial processing and duplicate suppression.
 
 ## Session and safety rules
 
@@ -106,6 +107,7 @@ python -m unittest discover -s test -p "test_orcad_capture_skill.py" -v
 python -m unittest discover -s test -p "test_orcad_capture_process.py" -v
 python -m unittest discover -s test -p "test_orcad_capture_startup.py" -v
 python -m unittest discover -s test -p "test_orcad_capture_requests.py" -v
+python -m unittest discover -s test -p "test_orcad_capture_bridge_queue.py" -v
 python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py skill/orcad-capture/scripts/capture_requests.py
 ```
 
