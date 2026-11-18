@@ -25,8 +25,8 @@ Default temp dir on B: `E:\_airbridge_temp`.
 Before remote work, verify the generic RFS path (this does not require Cadence to be installed):
 
 ```bash
-curl -s -X POST http://127.0.0.1:8888/api/v1/fs/drives \\
-  -H "Authorization: Bearer $AIRBRIDGE_AGENT_TOKEN" \\
+curl -s -X POST http://127.0.0.1:8888/api/v1/fs/drives \
+  -H "Authorization: Bearer $AIRBRIDGE_AGENT_TOKEN" \
   -H "Content-Type: application/json" -d '{"timeout":10}'
 ```
 
