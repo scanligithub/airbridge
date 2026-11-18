@@ -321,6 +321,35 @@ class CaptureExitTests(TestCase):
         self.assertEqual(self.coordinator._load_context()["state"], "exit_scheduled")
         self.assertEqual(len(self.queue.calls), 2)
 
+    def test_stale_scheduling_intent_recovers_ready_manifest_to_unknown_without_retry(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        context = self.coordinator._load_context()
+        schedule_request_id = str(uuid.uuid4())
+        context["state"] = "exit_scheduling"
+        context["schedule_request_id"] = schedule_request_id
+        original_atomic_json = capture_exit._atomic_json
+        original_atomic_json(self.coordinator.context_path, context)
+
+        with self.assertRaises(CaptureExitOutcomeUnknown) as raised:
+            self.coordinator.request_exit(
+                user_authorized=True,
+                design_saved_or_no_changes_confirmed=True,
+            )
+
+        self.assertEqual(raised.exception.request_id, schedule_request_id)
+        self.assertEqual(self.session.state, SessionState.UNKNOWN)
+        persisted = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["state"], SessionState.UNKNOWN.value)
+        self.assertEqual(self.coordinator._load_context()["state"], "unknown")
+        self.assertEqual(len(self.queue.calls), 1)
+
+        with self.assertRaises(CaptureExitOutcomeUnknown):
+            self.coordinator.request_exit(
+                user_authorized=True,
+                design_saved_or_no_changes_confirmed=True,
+            )
+        self.assertEqual(len(self.queue.calls), 1)
+
     def test_reentrant_exit_request_cannot_schedule_a_second_exit(self):
         self.coordinator.prepare_exit(user_authorized=True)
 
