@@ -451,6 +451,57 @@ class CaptureExitTests(TestCase):
         self.assertEqual(restarted_session.state, SessionState.CLOSED)
         self.assertEqual(len(self.queue.calls), execute_calls_before)
 
+    def test_reconcile_exit_rejects_matching_receipt_text_with_wrong_script_hash(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        request_id = str(uuid.uuid4())
+        context = self.coordinator._load_context()
+        context["state"] = "exit_scheduling"
+        context["schedule_request_id"] = request_id
+        expected_script_sha256 = hashlib.sha256(
+            build_exit_schedule_script(SESSION_ID, PID, TCL).encode("utf-8")
+        ).hexdigest()
+        context["schedule_script_sha256"] = expected_script_sha256
+        capture_exit._atomic_json(self.coordinator.context_path, context)
+
+        self.manifest.state = SessionState.BUSY.value
+        self.manifest.active_request_id = request_id
+        self.manifest.save(self.manifest_path)
+        restarted_session = CaptureSession(
+            SessionManifest.from_dict(self.manifest.to_dict())
+        )
+        self.queue.read_result_value = SimpleNamespace(
+            request_id=request_id,
+            script_sha256="0" * 64,
+            success=True,
+            value="\n".join([
+                SCHEDULE_MAGIC,
+                "session_id=" + SESSION_ID,
+                "pid=" + str(PID),
+                "tcl_version=" + TCL,
+                "exit_scheduled=1",
+            ]),
+        )
+        self.inspector.exit_after = 2
+        restarted = CaptureExitCoordinator(
+            self.queue,
+            self.inspector,
+            restarted_session,
+            self.manifest_path,
+        )
+        execute_calls_before = len(self.queue.calls)
+
+        with self.assertRaises(CaptureExitOutcomeUnknown):
+            restarted.reconcile_exit(timeout_seconds=5)
+
+        self.assertEqual(restarted_session.state, SessionState.UNKNOWN)
+        persisted = SessionManifest.from_dict(
+            json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        )
+        self.assertEqual(persisted.state, SessionState.UNKNOWN.value)
+        self.assertEqual(persisted.active_request_id, request_id)
+        self.assertEqual(self.queue.read_result_calls, [request_id])
+        self.assertEqual(len(self.queue.calls), execute_calls_before)
+
     def test_reconcile_exit_keeps_unknown_when_receipt_is_missing_and_pid_is_live(self):
         self.coordinator.prepare_exit(user_authorized=True)
         request_id = str(uuid.uuid4())
