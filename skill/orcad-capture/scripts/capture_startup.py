@@ -554,6 +554,7 @@ class CaptureStartupCoordinator:
             session.mark_bridge_pending(
                 remote_session_dir=remote_session_dir,
                 hook_path=hook_remote_path,
+                hook_sha256=hook_sha256,
                 bridge_sha256=bridge_sha256,
             )
         except CaptureStartupOutcomeUnknown as exc:
