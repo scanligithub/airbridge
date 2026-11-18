@@ -175,7 +175,7 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         read_status, read_result = self._request_json(
             "POST",
             "/api/v1/fs/read",
-            {"path": r"E:\\_airbridge_temp\\probe.txt"},
+            {"path": r"E:\_airbridge_temp\probe.txt"},
             token=read_token["token"],
         )
         self.assertEqual(read_status, 200, read_result)
@@ -185,7 +185,7 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             "POST",
             "/api/v1/fs/write",
             {
-                "path": r"E:\\_airbridge_temp\\probe.txt",
+                "path": r"E:\_airbridge_temp\probe.txt",
                 "content": "should not write",
             },
             token=read_token["token"],
@@ -199,7 +199,7 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         write_denied_status, write_denied = self._request_json(
             "POST",
             "/api/v1/fs/read",
-            {"path": r"E:\\_airbridge_temp\\probe.txt"},
+            {"path": r"E:\_airbridge_temp\probe.txt"},
             token=write_token["token"],
         )
         self.assertEqual(write_denied_status, 403, write_denied)
@@ -212,7 +212,7 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             "POST",
             "/api/v1/fs/write",
             {
-                "path": r"E:\\_airbridge_temp\\probe.txt",
+                "path": r"E:\_airbridge_temp\probe.txt",
                 "content": "write allowed",
             },
             token=write_token["token"],
