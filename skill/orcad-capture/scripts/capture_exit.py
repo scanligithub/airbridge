@@ -6,6 +6,7 @@ only the existing generic Tcl request queue and read-only Shell inventory.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -452,11 +453,16 @@ class CaptureExitCoordinator:
                 "tcl_version=" + str(manifest.tcl_version),
                 "exit_scheduled=1",
             ])
+            expected_script_sha256 = str(
+                context.get("schedule_script_sha256") or ""
+            ).lower()
             if (
-                result is None
-                or result.success is not True
-                or result.request_id != request_id
-                or str(result.value or "").strip() != expected_receipt
+                not re.fullmatch(r"[0-9a-f]{64}", expected_script_sha256)
+                or result is None
+                or getattr(result, "success", None) is not True
+                or getattr(result, "request_id", None) != request_id
+                or getattr(result, "script_sha256", None) != expected_script_sha256
+                or str(getattr(result, "value", "") or "").strip() != expected_receipt
             ):
                 self._mark_unknown(
                     "CAPTURE_EXIT_RECONCILE_RECEIPT_UNVERIFIED",
@@ -548,6 +554,9 @@ class CaptureExitCoordinator:
         )
         context["state"] = "exit_scheduling"
         context["schedule_request_id"] = str(uuid.uuid4())
+        context["schedule_script_sha256"] = hashlib.sha256(
+            schedule_script.encode("utf-8")
+        ).hexdigest()
         context["updated_at_utc"] = _utc_now()
         _atomic_json(self.context_path, context)
         try:
