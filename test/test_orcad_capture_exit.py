@@ -568,11 +568,7 @@ time.sleep(60)
         )
         try:
             line = process.stdout.readline()
-            self.assertEqual(
-                line.strip(),
-                "LOCKED",
-                msg=process.stderr.read(),
-            )
+            self.assertEqual(line.strip(), "LOCKED")
             process.terminate()
             process.wait(timeout=10)
 
