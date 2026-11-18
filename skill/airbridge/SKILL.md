@@ -22,13 +22,15 @@ Default temp dir on B: `E:\_airbridge_temp`.
 
 ## Quick health check
 
-Before real work, verify the link:
+Before remote work, verify the generic RFS path (this does not require Cadence to be installed):
 
 ```bash
-curl -s -H "Authorization: Bearer $AIRBRIDGE_AGENT_TOKEN" http://127.0.0.1:8888/api/v1/eda/versions
+curl -s -X POST http://127.0.0.1:8888/api/v1/fs/drives \\
+  -H "Authorization: Bearer $AIRBRIDGE_AGENT_TOKEN" \\
+  -H "Content-Type: application/json" -d '{"timeout":10}'
 ```
 
-Expect `success: true` and a `versions` map (e.g. SPB 17.2). If this fails, stop and tell the user to check serial connection and that AirBridge is running on both sides.
+Expect `success: true` and a remote drive listing. If this fails, stop and report the AirBridge / serial link issue rather than falling back to the local sandbox.
 
 ## API base
 
