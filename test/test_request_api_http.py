@@ -23,6 +23,7 @@ class FakeWorker:
         self.raise_on_send = False
         self.frames = []
         self.shell_task_finished = True
+        self.shell_task_missing = False
 
     def is_serial_connected(self):
         return self.connected
@@ -79,6 +80,18 @@ class FakeWorker:
                 request_id, result, state=response_state
             )
         elif frame_type == FrameType.SHELL_TASK_GET:
+            if self.shell_task_missing:
+                self.request_tracker.complete(
+                    request_id,
+                    {
+                        "request_id": request_id,
+                        "success": False,
+                        "error": "任务不存在",
+                        "request_state": "unknown",
+                    },
+                    state="unknown",
+                )
+                return
             finished = self.shell_task_finished
             result = {
                 "request_id": request_id,
@@ -387,6 +400,27 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(query_poll_status, 200, query_poll)
         self.assertEqual(query_poll["kind"], "shell.task.get")
         self.assertTrue(query_poll["result"]["finished"])
+
+    def test_async_shell_task_query_reports_missing_task_as_unknown(self):
+        submit_status, accepted = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "command": "Write-Output hello",
+                "timeout": 30,
+                "async": True,
+            },
+        )
+        self.assertEqual(submit_status, 202, accepted)
+        self.worker.shell_task_missing = True
+
+        query_status, task = self._request_json(
+            "GET",
+            f"/api/v1/shell/tasks/by-request/{accepted['request_id']}",
+        )
+        self.assertEqual(query_status, 503, task)
+        self.assertEqual(task["state"], "unknown")
+        self.assertEqual(task["result"]["request_state"], "unknown")
 
     def test_async_shell_task_query_reports_running_state(self):
         self.worker.shell_task_finished = False
