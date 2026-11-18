@@ -192,7 +192,16 @@ def parse_capture_inventory_json(stdout: str) -> tuple[CaptureProcessCandidate, 
             )
         seen_pids.add(pid)
 
-        process_name = str(item.get("process_name") or "capture.exe")
+        process_name = item.get("process_name")
+        if (
+            not isinstance(process_name, str)
+            or process_name.casefold() != "capture.exe"
+        ):
+            raise CaptureProcessInventoryError(
+                "Capture process candidate {} has no verified capture.exe name".format(
+                    index
+                )
+            )
         executable_path = item.get("executable_path")
         started_at_utc = item.get("started_at_utc")
         file_version = item.get("file_version")
