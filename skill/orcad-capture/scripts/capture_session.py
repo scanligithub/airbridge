@@ -131,12 +131,12 @@ def _sanitize_error_message(value: Any) -> str:
     """Avoid persisting common Bearer/token forms in a Session Manifest."""
     message = str(value or "")[:1024]
     message = re.sub(
-        r"(?i)Bearer\\s+[^\\s,;]+",
+        r"(?i)Bearer\s+[^\s,;]+",
         "Bearer [REDACTED]",
         message,
     )
     message = re.sub(
-        r"(?i)abg1\\.[0-9a-f]{32}\\.[A-Za-z0-9_-]+",
+        r"(?i)abg1\.[0-9a-f]{32}\.[A-Za-z0-9_-]+",
         "[REDACTED_AGENT_TOKEN]",
         message,
     )
