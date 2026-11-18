@@ -7,7 +7,7 @@ description: Own OrCAD Capture version policy, process identity, Tcl Bridge sess
 
 ## Implementation status
 
-This package currently contains the **M3.2.1–M3.2.5 foundations**: Session Manifest, fail-closed HTTP client, read-only process inventory, authorized Capture startup, unique capAutoLoad Hook, Tcl READY handshake, the frame-safe Tcl request/result queue, controlled OPJ opening and Dbo read-only inspection. The M3.2.5 workflows are covered by Mock tests and Python-hosted Tcl 8.6 tests with mocked Dbo commands; they have not been executed inside live Capture 17.2 on Host B. Saving, design mutation, graceful Exit and process-close confirmation remain unimplemented.
+This package currently contains the **M3.2.1–M3.2.6 foundations**: Session Manifest, fail-closed HTTP client, read-only process inventory, authorized Capture startup, unique capAutoLoad Hook, Tcl READY handshake, the frame-safe Tcl request/result queue, controlled OPJ opening, Dbo read-only inspection, and an explicitly authorized two-phase Exit coordinator. M3.2.5 Dbo probes use mocked Dbo commands; M3.2.6 tests include the actual Tcl Bridge under a Python-hosted Tcl 8.6 interpreter to verify that the Schedule Receipt is published before the delayed Exit callback. Neither phase has been executed inside live Capture 17.2 on Host B. Save/discard policy and save-dialog handling remain deliberately unimplemented.
 
 ## Ownership boundary
 
@@ -16,7 +16,7 @@ This Skill owns Capture-specific decisions and workflow:
 - Capture version selection and process identity verification;
 - the per-session Tcl Bridge, capAutoLoad Hook, READY handshake and request/result queue; each generic RFS operation is bounded to 16 KiB so its request and response fit within a single ABFP frame;
 - Capture Tcl and Dbo helpers;
-- opening and verifying one explicitly selected OPJ per Capture Session, plus read-only Dbo Session / active Design inventory; save policy and graceful Tcl `Exit` remain future work;
+- opening and verifying one explicitly selected OPJ per Capture Session, plus read-only Dbo Session / active Design inventory;\n- two-phase explicitly authorized Exit scheduling, persistent exit intent, and read-only confirmation that the exact original PID has disappeared; no save/discard automation or force termination;
 - checking the original Capture PID has exited before a session is marked closed.
 
 AirBridge remains the generic communication channel. This Skill must not import AirBridge Core Python modules, open a serial port, implement ABFP, manage Agent tokens, or rely on AirBridge-managed EDA lifecycle behavior.
