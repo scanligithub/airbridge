@@ -321,6 +321,45 @@ class CaptureExitTests(TestCase):
         self.assertEqual(self.coordinator._load_context()["state"], "exit_scheduled")
         self.assertEqual(len(self.queue.calls), 2)
 
+    def test_reentrant_exit_request_cannot_schedule_a_second_exit(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+
+        class ReentrantQueue(FakeQueue):
+            def __init__(self):
+                super().__init__()
+                self.coordinator = None
+                self.reentrant_error = None
+                self.triggered = False
+
+            def execute(self, script, **kwargs):
+                if SCHEDULE_MAGIC in script and not self.triggered:
+                    self.triggered = True
+                    try:
+                        self.coordinator.request_exit(
+                            user_authorized=True,
+                            design_saved_or_no_changes_confirmed=True,
+                            timeout_seconds=5,
+                        )
+                    except Exception as exc:
+                        self.reentrant_error = exc
+                return super().execute(script, **kwargs)
+
+        reentrant_queue = ReentrantQueue()
+        reentrant_queue.coordinator = self.coordinator
+        self.coordinator.queue = reentrant_queue
+
+        evidence = self.coordinator.request_exit(
+            user_authorized=True,
+            design_saved_or_no_changes_confirmed=True,
+            timeout_seconds=5,
+        )
+
+        self.assertTrue(evidence.process_absent)
+        self.assertIsInstance(reentrant_queue.reentrant_error, CaptureExitError)
+        self.assertEqual(len(reentrant_queue.calls), 1)
+        self.assertEqual(len(self.queue.calls), 1)
+        self.assertEqual(self.session.state, SessionState.CLOSED)
+
     def test_exit_script_has_no_save_discard_or_force_kill_commands(self):
         script = build_exit_schedule_script(SESSION_ID, PID, TCL)
         for forbidden in ("SaveDesign", "SaveAs", "Discard", "taskkill", "Stop-Process"):
