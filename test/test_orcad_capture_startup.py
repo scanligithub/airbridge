@@ -2,6 +2,7 @@
 """M3.2.3 authorized Capture startup tests; all remote operations are mocked."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import ntpath
@@ -221,12 +222,20 @@ class FakeAirBridgeClient:
                 content = json.dumps(self.ready_payload, separators=(",", ":"))
             else:
                 raise AssertionError("unexpected RFS read path: {}".format(path))
+            raw = content.encode("utf-8")
+            if request.get("as_base64"):
+                returned_content = base64.b64encode(raw).decode("ascii")
+                encoding = "base64"
+            else:
+                returned_content = content
+                encoding = "text"
             return {
                 "success": True,
                 "path": path,
-                "size": len(content.encode("utf-8")),
+                "size": len(raw),
                 "is_truncated": False,
-                "content": content,
+                "encoding": encoding,
+                "content": returned_content,
             }
 
         raise AssertionError("unexpected filesystem action: {}".format(action))
