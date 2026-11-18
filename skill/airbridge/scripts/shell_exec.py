@@ -21,7 +21,7 @@ def main():
     p = argparse.ArgumentParser(description="AirBridge remote Shell")
     p.add_argument("command", help="PowerShell or cmd command string")
     p.add_argument("--shell", default="powershell", choices=["powershell", "cmd"])
-    p.add_argument("--cwd", default=r"E:\\_airbridge_temp")
+    p.add_argument("--cwd", default=r"E:\_airbridge_temp")
     p.add_argument("--timeout", type=int, default=60)
     p.add_argument("--async", dest="async_mode", action="store_true",
                    help="Return after the remote Shell task is accepted.")
