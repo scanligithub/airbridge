@@ -1852,7 +1852,11 @@ class AntigravityIPCServer:
           if path == "/api/v1/message":
             return "runtime.message"
           if path.startswith("/api/v1/fs/"):
-            return "filesystem.write"
+            fs_action = path.rsplit("/", 1)[-1]
+            if fs_action in ("drives", "ls", "read", "stat", "pull"):
+              return "filesystem.read"
+            if fs_action in ("write", "mkdir", "rm", "mv", "exec"):
+              return "filesystem.write"
         # Fail closed for new or unclassified /api routes. An explicit
         # administrator scope is required until the route is classified.
         return "api.admin"
