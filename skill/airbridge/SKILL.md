@@ -7,9 +7,9 @@ description: Control an air-gapped host B from host A via AirBridge HTTP API at 
 
 Operate the isolated machine (host B) from the control machine (host A) through AirBridge.
 
-**Prerequisite:** AirBridge is running on both hosts, serial link is up, and host A exposes `http://127.0.0.1:8888`.
+**Prerequisite:** The same AirBridge.exe is running on host A and host B, the serial link is up, host A exposes `http://127.0.0.1:8888`, and the calling Agent has a valid AirBridge Bearer Token with the required scopes.
 
-All agent calls go to **host A localhost only**. Never assume the sandbox can reach the user's 127.0.0.1.
+All agent calls go to **host A localhost only**. Never assume the sandbox can reach the user's 127.0.0.1. Every `/api/` request must include `Authorization: Bearer <AGENT_TOKEN>`. Use the Agent's configured token; never ask the user to paste a secret into a prompt or write the token into logs or task files.
 
 ## Architecture (do not confuse roles)
 
@@ -25,7 +25,7 @@ Default temp dir on B: `E:\_airbridge_temp`.
 Before real work, verify the link:
 
 ```bash
-curl -s http://127.0.0.1:8888/api/v1/eda/versions
+curl -s -H "Authorization: Bearer $AIRBRIDGE_AGENT_TOKEN" http://127.0.0.1:8888/api/v1/eda/versions
 ```
 
 Expect `success: true` and a `versions` map (e.g. SPB 17.2). If this fails, stop and tell the user to check serial connection and that AirBridge is running on both sides.
@@ -89,18 +89,21 @@ curl -s -X POST http://127.0.0.1:8888/api/v1/shell/exec \
   }'
 ```
 
-HTTP response is typically:
+With `async:false` (the default), the HTTP request waits for the correlated remote Shell result and returns a RequestTracker response. The result is under `result`; inspect both `result.success` and the remote command's `result.exit_code`, then read `result.stdout` / `result.stderr`.
 
-```json
-{"status":"submitted","async":false,"hint":"..."}
+With `async:true`, the initial response is normally HTTP `202` with `state: "accepted"` and a `result.task_id`. This is only task-start acknowledgement. Query the final task snapshot using the original Shell request ID:
+
+```http
+GET /api/v1/shell/tasks/by-request/{request_id}
 ```
 
-Actual `exit_code` / `stdout` / `stderr` arrive as `SHELL_RESULT` in the AirBridge UI log. Ask the user to paste console lines when you need the real output.
+The result includes `finished`, `killed`, `exit_code`, `stdout`, and `stderr`. HTTP `202` means the task is still running; retry the same query. A missing/expired remote task is reported as `unknown`, not as successful completion. The query requires `shell.read` and is restricted to the Agent that submitted the original Shell request.
 
 Other endpoints:
 
 - `POST /api/v1/shell/kill` — body `{"task_id":"shell-..."}` or `{"pid":1234}`
-- `POST /api/v1/shell/tasks` — request task list (result via serial log)
+- `POST /api/v1/shell/tasks` — request task list (legacy response is displayed in the AirBridge console)
+- `GET /api/v1/shell/tasks/by-request/{request_id}` — query the asynchronous task started by a specific Shell request
 
 **Safety rules for the agent:**
 
@@ -179,7 +182,7 @@ Helper script for diagnosis (run on host A): `scripts/diag_temp.py`.
 
 ## 6. Known limits
 
-- Shell HTTP API does not yet return full stdout in the HTTP body (serial log is authoritative)
+- Asynchronous Shell execution returns an acceptance receipt first; use `GET /api/v1/shell/tasks/by-request/{request_id}` to retrieve its current or final task result
 - Large file transfer may need the GUI or pull API; confirm with user for multi-hundred-MB files
 - Encoding: Chinese Windows on B may show mojibake in logs; content on disk is usually fine when read via RFS with auto decode
 - Interactive PowerShell sessions are not supported; one-shot or async tasks only
