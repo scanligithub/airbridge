@@ -417,13 +417,13 @@ class CaptureStartupCoordinator:
             "write",
             {
                 "path": bridge_remote_path,
-                "content": bridge_text,
-                "is_base64": False,
+                "content": _utf8_base64(bridge_text),
+                "is_base64": True,
                 "mode": "w",
             },
         )
         try:
-            self._verify_remote_text_file(bridge_remote_path, bridge_text)
+            self._verify_remote_text_file(bridge_remote_path, bridge_bytes)
         except CaptureStartupOutcomeUnknown as exc:
             self._mark_unknown(session, "BRIDGE_UPLOAD_VERIFY_UNKNOWN", str(exc))
             self._save_manifest(session, manifest_path)
@@ -821,11 +821,12 @@ class CaptureStartupCoordinator:
             )
         return response
 
-    def _verify_remote_text_file(self, remote_path: str, expected: str) -> None:
+    def _verify_remote_text_file(self, remote_path: str, expected: bytes) -> None:
+        expected_base64 = base64.b64encode(expected).decode("ascii")
         try:
             response = self.client.filesystem(
                 "read",
-                {"path": remote_path, "as_base64": False, "max_preview_bytes": 65536},
+                {"path": remote_path, "as_base64": True, "max_preview_bytes": 65536},
                 timeout_seconds=self.config.shell_timeout_seconds + 10,
             )
         except (AirBridgeTransportError, AirBridgeHTTPError) as exc:
@@ -836,7 +837,8 @@ class CaptureStartupCoordinator:
             not isinstance(response, Mapping)
             or response.get("success") is not True
             or response.get("is_truncated") is True
-            or response.get("content") != expected
+            or response.get("encoding") != "base64"
+            or response.get("content") != expected_base64
         ):
             raise CaptureStartupOutcomeUnknown(
                 "RFS read-back did not exactly match the intended file {}".format(
