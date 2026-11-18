@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import ntpath
 import os
 import re
@@ -196,9 +197,12 @@ class CaptureConfig:
         if (
             isinstance(self.poll_interval_seconds, bool)
             or not isinstance(self.poll_interval_seconds, (int, float))
+            or not math.isfinite(float(self.poll_interval_seconds))
             or self.poll_interval_seconds <= 0
         ):
-            raise CaptureConfigurationError("poll_interval_seconds must be positive")
+            raise CaptureConfigurationError(
+                "poll_interval_seconds must be a finite positive number"
+            )
 
     @classmethod
     def from_env(
@@ -287,6 +291,7 @@ class SessionManifest:
             )
         if (
             isinstance(self.schema_version, bool)
+            or not isinstance(self.schema_version, int)
             or self.schema_version != 1
         ):
             raise CaptureSessionError("unsupported Session Manifest schema version")
@@ -328,6 +333,25 @@ class SessionManifest:
         if self.process_exit_confirmed_at_utc and not self.process_started_at_utc:
             raise CaptureSessionError(
                 "process exit confirmation requires an original process start time"
+            )
+        if self.state == SessionState.CLOSED.value and not self.process_exit_confirmed_at_utc:
+            raise CaptureSessionError(
+                "CLOSED sessions require confirmed process-exit evidence"
+            )
+        if (
+            self.process_exit_confirmed_at_utc
+            and self.state != SessionState.CLOSED.value
+        ):
+            raise CaptureSessionError(
+                "process-exit evidence is only valid for a CLOSED session"
+            )
+        if self.reconciliation_required and self.state not in {
+            SessionState.UNKNOWN.value,
+            SessionState.INSPECTING.value,
+            SessionState.FAILED.value,
+        }:
+            raise CaptureSessionError(
+                "unresolved sessions cannot advance beyond read-only inspection"
             )
         if self.bridge_sha256:
             self.bridge_sha256 = self.bridge_sha256.lower()
