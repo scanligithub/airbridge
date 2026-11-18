@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import sys
+import subprocess
 import tempfile
 import uuid
 import tkinter
@@ -541,6 +542,52 @@ class CaptureExitTests(TestCase):
         self.assertEqual(persisted.active_request_id, request_id)
         self.assertEqual(restarted._load_context()["state"], "unknown")
         self.assertEqual(len(self.queue.calls), execute_calls_before)
+
+    def test_exit_kernel_lock_is_released_after_holder_process_exits(self):
+        lock_context_path = Path(self.temp.name) / "restart-lock.exit.json"
+        holder = r'''
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from capture_exit import CaptureExitCoordinator
+
+coordinator = object.__new__(CaptureExitCoordinator)
+coordinator.context_path = Path(sys.argv[2])
+lock = coordinator._exclusive_exit_lock()
+lock.__enter__()
+print("LOCKED", flush=True)
+time.sleep(60)
+'''
+        process = subprocess.Popen(
+            [sys.executable, "-c", holder, str(SCRIPTS_DIR), str(lock_context_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            line = process.stdout.readline()
+            self.assertEqual(
+                line.strip(),
+                "LOCKED",
+                msg=process.stderr.read(),
+            )
+            process.terminate()
+            process.wait(timeout=10)
+
+            coordinator = object.__new__(CaptureExitCoordinator)
+            coordinator.context_path = lock_context_path
+            with coordinator._exclusive_exit_lock():
+                pass
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
 
     def test_reentrant_exit_request_cannot_schedule_a_second_exit(self):
         self.coordinator.prepare_exit(user_authorized=True)
