@@ -236,6 +236,7 @@ class CaptureSessionModelTests(TestCase):
         self.session.mark_bridge_pending(
             remote_session_dir=r"C:\Users\Agent\AppData\Local\AirBridgeSkills\Capture\sessions\test",
             hook_path=r"D:\Cadence\SPB_17.2\tools\capture\tclscripts\capAutoLoad\ab_skill_test.tcl",
+            hook_sha256=hashlib.sha256(b"capture-skill-hook").hexdigest(),
             bridge_sha256=self.BRIDGE_HASH,
         )
         self.session.mark_ready(
@@ -305,11 +306,7 @@ class CaptureSessionModelTests(TestCase):
         self.assertIsNone(self.manifest.pid)
 
     def test_start_requires_an_explicit_capture_executable_path(self):
-        config = CaptureConfig(
-            expected_capture_version="17.2-2016",
-            capture_exe_path=self.CAPTURE_EXE,
-            cap_autoload_dir=r"D:\\Cadence\\SPB_17.2\\tools\\capture\\tclscripts\\capAutoLoad",
-        )
+        config = CaptureConfig(expected_capture_version="17.2-2016")
         manifest = SessionManifest.create(config)
         session = CaptureSession(manifest, config)
         session.begin_inspection()
