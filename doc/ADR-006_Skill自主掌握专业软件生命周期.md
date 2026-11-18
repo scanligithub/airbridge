@@ -235,6 +235,9 @@ AirBridge 不得因为收到普通请求就自动关闭已存在的 Capture / Al
 
 ### M3.2：Capture Skill 获得完整生命周期控制
 
+详细实施边界、建议目录、Session 状态机、Bridge 文件协议、进程安全策略和分阶段验收见 [M3.2：Capture Skill 自主生命周期实施设计 v1.0](M3.2_Capture_Skill_自主生命周期实施设计_v1.0.md)。该文档属于实施设计，不代表 Capture Skill 代码或 Host B 实机验收已完成。
+
+
 - 把 Capture 安装发现、版本选择和运行环境处理迁入 Capture Skill；
 - 把 Tcl Bridge、capAutoLoad Hook、Session / Request / Result 文件协议作为 Capture Skill 自有资产；
 - 通过 AirBridge Shell / RFS 部署、启动、查询和回收；
