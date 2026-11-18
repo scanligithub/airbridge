@@ -135,6 +135,19 @@ class CaptureBridgeTclRuntimeTests(TestCase):
         self.assertFalse((self.running_dir / (rid + ".running")).exists())
         self.assertFalse((self.request_dir / (rid + ".req")).exists())
 
+    def test_real_tcl_bridge_marks_large_result_and_error_truncation(self):
+        rid, digest = self._publish_test_request(
+            'error [string repeat "x" 100001]'
+        )
+        self._poll_once()
+
+        result = self._read_result(rid, digest)
+        self.assertFalse(result.success)
+        self.assertTrue(result.result_truncated)
+        self.assertTrue(result.error_info_truncated)
+        self.assertEqual(len(result.value), 100000)
+        self.assertEqual(len(result.error_info), 100000)
+
     def test_real_tcl_bridge_reports_script_errors_with_request_identity(self):
         rid, digest = self._publish_test_request('error "intentional Tcl failure"')
         self._poll_once()

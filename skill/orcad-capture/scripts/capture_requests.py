@@ -11,6 +11,7 @@ import base64
 import hashlib
 import hmac
 import json
+import ntpath
 import os
 import re
 import tempfile
@@ -259,7 +260,6 @@ class CaptureTclQueue:
         if len(envelope) > 400000:
             raise CaptureTclQueueError("request envelope exceeds the Tcl Bridge limit")
 
-        import ntpath
         queue_dir = ntpath.join(manifest.remote_session_dir, "requests")
         staging_path = ntpath.join(queue_dir, rid + ".tmp")
         request_path = ntpath.join(queue_dir, rid + ".req")
@@ -509,6 +509,12 @@ class CaptureTclQueue:
             raise CaptureTclQueueError("RFS read did not succeed")
         if response.get("is_truncated") is True:
             raise CaptureTclQueueError("RFS queue file was truncated")
+        returned_path = response.get("path")
+        if not isinstance(returned_path, str) or (
+            ntpath.normcase(ntpath.normpath(returned_path))
+            != ntpath.normcase(ntpath.normpath(remote_path))
+        ):
+            raise CaptureTclQueueError("RFS returned a different queue file path")
         content = response.get("content")
         if not isinstance(content, str) or response.get("encoding") != "base64":
             raise CaptureTclQueueError("RFS did not return Base64 queue bytes")
@@ -516,8 +522,14 @@ class CaptureTclQueue:
             raw = base64.b64decode(content.encode("ascii"), validate=True)
         except (ValueError, UnicodeEncodeError) as exc:
             raise CaptureTclQueueError("RFS returned invalid Base64 queue bytes") from exc
+        if len(raw) > MAX_RESULT_ENVELOPE_BYTES:
+            raise CaptureTclQueueError("RFS queue file exceeded the transport size limit")
         declared_size = response.get("size")
-        if declared_size is not None and int(declared_size) != len(raw):
+        if declared_size is not None and (
+            isinstance(declared_size, bool)
+            or not isinstance(declared_size, int)
+            or declared_size != len(raw)
+        ):
             raise CaptureTclQueueError("RFS queue file size did not match its content")
         return raw
 

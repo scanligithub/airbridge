@@ -366,6 +366,36 @@ class CaptureTclQueueTests(TestCase):
         self.assertEqual(self.session.state, SessionState.UNKNOWN)
         self.assertEqual(len(self.client.shell_calls), 1)
 
+    def test_rfs_read_rejects_a_different_remote_path(self):
+        remote_path = ntpath.join(REMOTE_DIR, "results", "expected.result")
+        self.client.remote_files[remote_path] = b"test"
+        original = self.client.filesystem
+
+        def return_wrong_path(action, payload=None, **kwargs):
+            response = original(action, payload, **kwargs)
+            if action == "read" and response.get("success") is True:
+                response["path"] = ntpath.join(REMOTE_DIR, "results", "other.result")
+            return response
+
+        self.client.filesystem = return_wrong_path
+        with self.assertRaises(CaptureTclQueueError):
+            self.queue._read_remote_bytes(remote_path)
+
+    def test_rfs_read_rejects_non_integer_or_mismatched_declared_size(self):
+        remote_path = ntpath.join(REMOTE_DIR, "results", "expected.result")
+        self.client.remote_files[remote_path] = b"test"
+        original = self.client.filesystem
+
+        def return_bad_size(action, payload=None, **kwargs):
+            response = original(action, payload, **kwargs)
+            if action == "read" and response.get("success") is True:
+                response["size"] = "not-an-integer"
+            return response
+
+        self.client.filesystem = return_bad_size
+        with self.assertRaises(CaptureTclQueueError):
+            self.queue._read_remote_bytes(remote_path)
+
     def test_result_timeout_marks_unknown_and_does_not_resubmit(self):
         self.client.auto_result = False
         clock = Clock()
