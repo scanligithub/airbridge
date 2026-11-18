@@ -59,12 +59,26 @@ def main():
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
     if not args.wait:
-        if result.get("state") == "accepted":
+        state = result.get("state")
+        if state == "completed":
+            command_result = result.get("result") or {}
+            if command_result.get("exit_code") != 0:
+                raise RuntimeError(
+                    f"Remote command failed with exit_code={command_result.get(\"exit_code\")}"
+                )
+        elif state == "accepted":
             print(
-                f"Task accepted. Query /api/v1/shell/tasks/by-request/{result.get('request_id')} "
+                f"Task accepted. Query /api/v1/shell/tasks/by-request/{result.get(\"request_id\")} "
                 "for its final result.",
                 file=sys.stderr,
             )
+        elif state == "pending":
+            print(
+                f"Shell request is still pending. Query /api/v1/requests/{result.get(\"request_id\")} before retrying.",
+                file=sys.stderr,
+            )
+        elif state in ("failed", "unknown"):
+            raise RuntimeError(f"Remote Shell request ended in state={state}: {result}")
         return
 
     request_id = result.get("request_id")
