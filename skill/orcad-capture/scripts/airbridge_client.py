@@ -8,6 +8,7 @@ or imports AirBridge Core implementation modules.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import urllib.error
@@ -138,12 +139,15 @@ class AirBridgeClient:
             raise AirBridgeConfigurationError(
                 "timeout_seconds must be a positive number"
             ) from exc
-        if timeout <= 0:
-            raise AirBridgeConfigurationError("timeout_seconds must be positive")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise AirBridgeConfigurationError("timeout_seconds must be a finite positive number")
 
         self._token = selected_token
         self.timeout_seconds = timeout
-        self._opener = opener or urllib.request.build_opener(_NoRedirectHandler()).open
+        self._opener = opener or urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _NoRedirectHandler(),
+        ).open
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> "AirBridgeClient":
@@ -164,7 +168,7 @@ class AirBridgeClient:
         endpoint = str(path or "")
         if (
             not re.fullmatch(r"/api/v1/[A-Za-z0-9_/-]+", endpoint)
-            or endpoint.startswith("//")
+            or "//" in endpoint
         ):
             raise ValueError("path must be an AirBridge /api/v1/ endpoint")
         if payload is not None and not isinstance(payload, Mapping):
@@ -175,8 +179,8 @@ class AirBridgeClient:
         timeout = self.timeout_seconds if timeout_seconds is None else float(
             timeout_seconds
         )
-        if timeout <= 0:
-            raise ValueError("timeout_seconds must be positive")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout_seconds must be a finite positive number")
 
         body = None
         headers = {
