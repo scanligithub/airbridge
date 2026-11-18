@@ -33,7 +33,7 @@ from capture_session import (  # noqa: E402
 PID = 7312
 SESSION_ID = str(uuid.uuid4())
 NONCE = "N" * 48
-STARTED = "2026-11-18T10:00:00.000Z"
+STARTED = "2026-11-18T05:00:00.000Z"
 EXE = r"D:\Cadence\SPB_17.2\tools\bin\capture.exe"
 VERSION = "17.2-2016"
 TCL = "8.6.0"
