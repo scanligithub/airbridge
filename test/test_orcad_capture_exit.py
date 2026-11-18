@@ -97,6 +97,35 @@ class FakeInspector:
         return CaptureProcessAssessment(CaptureProcessDisposition.PID_REUSED_OR_IDENTITY_MISMATCH, candidates)
 
 
+class ProcessExitRaceInspector:
+    """Simulate the process exiting between two inventory snapshots."""
+
+    def __init__(self):
+        self.identity_checks = 0
+        self.inventory_reads = 0
+        self.candidate = CaptureProcessCandidate(
+            pid=PID, executable_path=EXE, started_at_utc=STARTED,
+            file_version=VERSION,
+        )
+
+    def inspect_session(self, manifest):
+        self.identity_checks += 1
+        if self.identity_checks > 2:
+            return CaptureProcessAssessment(
+                CaptureProcessDisposition.ORIGINAL_PROCESS_ABSENT, ()
+            )
+        return CaptureProcessAssessment(
+            CaptureProcessDisposition.OWNED_INSTANCE,
+            (self.candidate,), self.candidate,
+        )
+
+    def inspect(self):
+        self.inventory_reads += 1
+        if self.inventory_reads == 1:
+            return (self.candidate,)
+        return ()
+
+
 class CaptureExitTests(TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -167,6 +196,24 @@ class CaptureExitTests(TestCase):
                 user_authorized=True, design_saved_or_no_changes_confirmed=False
             )
         self.assertEqual(len(self.queue.calls), 1)
+
+    def test_process_exit_between_inventory_snapshots_does_not_become_unknown(self):
+        race_inspector = ProcessExitRaceInspector()
+        coordinator = CaptureExitCoordinator(
+            self.queue, race_inspector, self.session, self.manifest_path,
+            sleep_fn=lambda _seconds: None,
+            monotonic_fn=iter([0, 0, 0, 0, 0, 0, 0]).__next__,
+        )
+        coordinator.prepare_exit(user_authorized=True)
+        evidence = coordinator.request_exit(
+            user_authorized=True,
+            design_saved_or_no_changes_confirmed=True,
+            timeout_seconds=5,
+        )
+        self.assertTrue(evidence.process_absent)
+        self.assertEqual(self.session.state, SessionState.CLOSED)
+        self.assertEqual(race_inspector.inventory_reads, 2)
+        self.assertEqual(race_inspector.identity_checks, 2)
 
     def test_invalid_exit_delay_is_rejected_before_schedule_or_unknown_state(self):
         self.coordinator.prepare_exit(user_authorized=True)

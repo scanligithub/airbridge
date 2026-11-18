@@ -19,6 +19,7 @@ from typing import Any, Mapping, Optional
 from capture_process import (
     CaptureProcessDisposition,
     CaptureProcessInspector,
+    assess_capture_processes,
 )
 from capture_session import (
     CaptureAuthorizationError,
@@ -357,8 +358,8 @@ class CaptureExitCoordinator:
                     self._mark_unknown("CAPTURE_EXIT_CLOSE_COMMIT_UNKNOWN", str(exc))
                     raise CaptureExitOutcomeUnknown("PID absence observed but CLOSED state could not be persisted") from exc
                 return evidence
-            assessment = self.inspector.inspect_session(manifest) if callable(getattr(self.inspector, "inspect_session", None)) else None
-            if assessment is None or assessment.disposition is not CaptureProcessDisposition.OWNED_INSTANCE:
+            assessment = assess_capture_processes(candidates, manifest)
+            if assessment.disposition is not CaptureProcessDisposition.OWNED_INSTANCE:
                 self._mark_unknown("CAPTURE_EXIT_PID_REUSE_OR_IDENTITY_MISMATCH",
                                    "recorded PID remains but its original process identity cannot be verified")
                 raise CaptureExitOutcomeUnknown("Capture PID remains with mismatched identity; no further action")
