@@ -624,7 +624,7 @@ class CaptureSession:
         if self.manifest.active_request_id != normalized:
             raise CaptureIdentityError("result Request ID does not match active operation")
         self.manifest.active_request_id = None
-        self.transition(SessionState.READY)
+        self._move_to(SessionState.READY)
 
     def mark_unknown(self, code: str, message: str) -> None:
         if self.state in (SessionState.ABSENT, SessionState.CLOSED):
