@@ -37,6 +37,7 @@ from capture_session import (  # noqa: E402
     CaptureSession,
     CaptureSessionError,
     CaptureStateTransitionError,
+    ProcessExitEvidence,
     ProcessIdentity,
     SessionManifest,
     SessionState,
@@ -445,7 +446,7 @@ class CaptureSessionModelTests(TestCase):
             self.session.transition(SessionState.CLOSED)
         self.assertEqual(self.session.state, SessionState.READY)
 
-    def test_close_requires_explicit_authorization_and_exit_confirmation(self):
+    def test_close_requires_authorization_and_original_process_exit_evidence(self):
         self.make_ready()
         with self.assertRaises(CaptureAuthorizationError):
             self.session.begin_close()
@@ -453,15 +454,70 @@ class CaptureSessionModelTests(TestCase):
 
         self.session.begin_close(user_authorized=True)
         self.assertEqual(self.session.state, SessionState.CLOSING)
+
+        checked_at = "2026-11-18T10:05:00Z"
+        wrong_pid = ProcessExitEvidence(
+            pid=7413,
+            started_at_utc=self.STARTED_AT,
+            process_absent=True,
+            checked_at_utc=checked_at,
+        )
         with self.assertRaises(CaptureIdentityError):
-            self.session.mark_closed(process_confirmed_exited=False)
+            self.session.mark_closed(wrong_pid)
+
+        wrong_start = ProcessExitEvidence(
+            pid=7412,
+            started_at_utc="2026-11-18T10:00:01Z",
+            process_absent=True,
+            checked_at_utc=checked_at,
+        )
+        with self.assertRaises(CaptureIdentityError):
+            self.session.mark_closed(wrong_start)
+
+        still_running = ProcessExitEvidence(
+            pid=7412,
+            started_at_utc=self.STARTED_AT,
+            process_absent=False,
+            checked_at_utc=checked_at,
+        )
+        with self.assertRaises(CaptureIdentityError):
+            self.session.mark_closed(still_running)
         self.assertEqual(self.session.state, SessionState.CLOSING)
 
-        self.session.mark_closed(process_confirmed_exited=True)
+        valid = ProcessExitEvidence(
+            pid=7412,
+            started_at_utc=self.STARTED_AT,
+            process_absent=True,
+            checked_at_utc=checked_at,
+        )
+        self.session.mark_closed(valid)
         self.assertEqual(self.session.state, SessionState.CLOSED)
+        self.assertEqual(self.manifest.process_exit_confirmed_at_utc, checked_at)
+
+    def test_close_exit_evidence_must_not_precede_process_start(self):
+        self.make_ready()
+        self.session.begin_close(user_authorized=True)
+        too_early = ProcessExitEvidence(
+            pid=7412,
+            started_at_utc=self.STARTED_AT,
+            process_absent=True,
+            checked_at_utc="2026-11-18T09:59:59Z",
+        )
+        with self.assertRaises(CaptureIdentityError):
+            self.session.mark_closed(too_early)
 
     def test_manifest_round_trip_is_atomic_and_contains_no_bearer_token(self):
         self.make_ready()
+        self.session.begin_close(user_authorized=True)
+        checked_at = "2026-11-18T10:05:00Z"
+        self.session.mark_closed(
+            ProcessExitEvidence(
+                pid=7412,
+                started_at_utc=self.STARTED_AT,
+                process_absent=True,
+                checked_at_utc=checked_at,
+            )
+        )
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "nested" / "session.manifest.json"
             self.manifest.save(path)
@@ -472,6 +528,8 @@ class CaptureSessionModelTests(TestCase):
         self.assertEqual(loaded.pid, 7412)
         self.assertEqual(loaded.capture_version, "17.2-2016")
         self.assertEqual(loaded.tcl_version, "8.6.0")
+        self.assertEqual(loaded.process_exit_confirmed_at_utc, checked_at)
+        self.assertEqual(loaded.state, SessionState.CLOSED.value)
         serialized = json.dumps(loaded.to_dict())
         self.assertNotIn("AIRBRIDGE_AGENT_TOKEN", serialized)
         self.assertNotIn("test-agent-token", serialized)
