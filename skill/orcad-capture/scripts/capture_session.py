@@ -158,9 +158,17 @@ class CaptureConfig:
 
     def __post_init__(self) -> None:
         # Import locally to keep the state model independently usable.
-        from airbridge_client import _validate_local_base_url
+        from airbridge_client import (
+            AirBridgeConfigurationError,
+            _validate_local_base_url,
+        )
 
-        _validate_local_base_url(self.api_base_url)
+        try:
+            _validate_local_base_url(self.api_base_url)
+        except AirBridgeConfigurationError as exc:
+            raise CaptureConfigurationError(
+                "api_base_url must be a valid loopback HTTP(S) origin"
+            ) from exc
         if self.capture_exe_path:
             win_path = PureWindowsPath(self.capture_exe_path)
             if not win_path.is_absolute():
