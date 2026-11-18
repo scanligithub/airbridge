@@ -116,10 +116,12 @@ class AirBridgeClientTests(TestCase):
             "result": {"task_id": "shell-test", "async": True},
         }
 
+        request_id = str(uuid.uuid4())
         result = self.client.shell_execute(
             "Start-Process -FilePath 'D:\\Cadence\\SPB_17.2\\tools\\bin\\capture.exe'",
             async_mode=True,
             task_timeout_seconds=30,
+            request_id=request_id,
         )
 
         self.assertEqual(result["state"], "accepted")
@@ -128,6 +130,7 @@ class AirBridgeClientTests(TestCase):
         payload = json.loads(request["body"].decode("utf-8"))
         self.assertTrue(payload["async"])
         self.assertEqual(payload["timeout"], 30)
+        self.assertEqual(payload["request_id"], request_id)
 
     def test_filesystem_actions_are_allowlisted(self):
         self.client.filesystem("read", {"path": r"E:\_airbridge_temp\probe.txt"})
@@ -171,9 +174,14 @@ class AirBridgeClientTests(TestCase):
             token="test-agent-token",
             opener=failing_opener,
         )
+        request_id = str(uuid.uuid4())
         with self.assertRaises(AirBridgeTransportError) as raised:
-            client.post("/api/v1/shell/exec", {"command": "Start-Process"})
+            client.shell_execute(
+                "Start-Process -FilePath 'capture.exe'",
+                request_id=request_id,
+            )
         self.assertTrue(raised.exception.outcome_unknown)
+        self.assertEqual(raised.exception.request_id, request_id)
         self.assertEqual(len(attempted), 1)
 
     def test_token_must_exist_and_api_origin_must_be_loopback(self):
