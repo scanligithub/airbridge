@@ -43,7 +43,7 @@ def prepare_report(*, active=True):
     name = base64.b64encode("Board-A".encode()).decode() if active else ""
     return "\n".join([
         PREPARE_MAGIC, "session_id=" + SESSION_ID, "expected_pid=" + str(PID),
-        "tcl_pid=" + str(PID), "tcl_version=" + TCL, "expected_tcl_version=" + TCL,
+        "tcl_pid=" + str(PID), "tcl_version=" + TCL,
         "session_present=1", "session_wrapper_rc=0", "active_design_rc=0",
         "active_design_present=" + ("1" if active else "0"),
         "active_design_name_rc=0", "active_design_name_b64=" + name,
@@ -137,6 +137,7 @@ class CaptureExitTests(TestCase):
         if not tcl.eval("info patchlevel").startswith("8.6."):
             self.skipTest("Tcl 8.6 is required")
         runtime_pid = int(tcl.eval("pid"))
+        runtime_tcl_version = tcl.eval("info patchlevel")
         tcl.eval("""
             set ::DboSession_s_pDboSession mockSession
             proc DboSession {args} { return "" }
@@ -145,9 +146,9 @@ class CaptureExitTests(TestCase):
                 error "unexpected Dbo method"
             }
         """)
-        raw = tcl.eval(build_exit_prepare_script(SESSION_ID, runtime_pid, TCL))
+        raw = tcl.eval(build_exit_prepare_script(SESSION_ID, runtime_pid, runtime_tcl_version))
         report = parse_exit_prepare_report(
-            raw, session_id=SESSION_ID, pid=runtime_pid, tcl_version=TCL
+            raw, session_id=SESSION_ID, pid=runtime_pid, tcl_version=runtime_tcl_version
         )
         self.assertFalse(report["active_design_present"])
         self.assertEqual(report["active_design_name"], "")
@@ -229,9 +230,10 @@ class CaptureExitBridgeOrderingTests(TestCase):
                 (session_dir / name).mkdir()
             request_id = str(uuid.uuid4())
             runtime_pid = int(tcl.eval("pid"))
+            runtime_tcl_version = tcl.eval("info patchlevel")
             envelope, _digest, _crc = build_capture_request_envelope(
                 SESSION_ID, NONCE, request_id,
-                build_exit_schedule_script(SESSION_ID, runtime_pid, TCL, delay_ms=250),
+                build_exit_schedule_script(SESSION_ID, runtime_pid, runtime_tcl_version, delay_ms=250),
             )
             (session_dir / "requests" / (request_id + ".req")).write_bytes(envelope)
 
