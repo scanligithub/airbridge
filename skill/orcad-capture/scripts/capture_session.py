@@ -88,6 +88,7 @@ _ALLOWED_TRANSITIONS = {
     },
     SessionState.BUSY: {
         SessionState.READY,
+        SessionState.CLOSING,
         SessionState.FAILED,
         SessionState.UNKNOWN,
     },
@@ -98,11 +99,14 @@ _ALLOWED_TRANSITIONS = {
     },
     SessionState.CLOSED: {SessionState.INSPECTING},
     SessionState.FAILED: {SessionState.INSPECTING, SessionState.UNKNOWN},
-    # UNKNOWN may only return to read-only inspection. It cannot be restarted
-    # or resubmitted until the Skill has reconciled the original outcome.
-    # UNKNOWN may be reconciled to READY only by the dedicated method after
-    # a matching result and exact live process identity have been verified.
-    SessionState.UNKNOWN: {SessionState.INSPECTING, SessionState.READY},
+    # UNKNOWN may only return to read-only inspection or move to CLOSING through
+    # the dedicated Exit reconciliation guard. It cannot be restarted or
+    # resubmitted until the original outcome has been reconciled.
+    SessionState.UNKNOWN: {
+        SessionState.INSPECTING,
+        SessionState.READY,
+        SessionState.CLOSING,
+    },
 }
 
 
@@ -826,6 +830,54 @@ class CaptureSession:
             raise CaptureStateTransitionError(
                 "Capture can only begin graceful close from READY"
             )
+        self._move_to(SessionState.CLOSING)
+
+    def begin_close_from_reconciled_exit(self, request_id: str) -> None:
+        """Enter CLOSING only from a persisted, previously authorized Exit intent.
+
+        The caller must already have validated either the original successful
+        Exit Schedule Receipt or authoritative absence of the original process.
+        This transition never submits or repeats a Tcl operation.
+        """
+        try:
+            normalized = str(uuid.UUID(request_id))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise CaptureSessionError("Exit reconciliation Request ID must be a UUID") from exc
+
+        current = self.state
+        active_id = self.manifest.active_request_id
+        if current is SessionState.CLOSING:
+            if active_id is not None:
+                raise CaptureIdentityError(
+                    "CLOSING Session unexpectedly retains an active Request ID"
+                )
+            return
+        if current is SessionState.BUSY:
+            if active_id != normalized:
+                raise CaptureIdentityError(
+                    "active Tcl Request ID does not match the persisted Exit intent"
+                )
+        elif current is SessionState.UNKNOWN:
+            if not self.manifest.reconciliation_required:
+                raise CaptureStateTransitionError(
+                    "UNKNOWN Exit Session is missing its reconciliation guard"
+                )
+            if active_id not in (None, normalized):
+                raise CaptureIdentityError(
+                    "unresolved Request ID does not match the persisted Exit intent"
+                )
+        elif current is SessionState.READY:
+            if active_id is not None:
+                raise CaptureIdentityError(
+                    "READY Session unexpectedly retains an active Request ID"
+                )
+        else:
+            raise CaptureStateTransitionError(
+                "Exit reconciliation cannot enter CLOSING from {}".format(current.value)
+            )
+
+        self.manifest.active_request_id = None
+        self.manifest.reconciliation_required = False
         self._move_to(SessionState.CLOSING)
 
     def mark_closed(self, evidence: ProcessExitEvidence) -> None:
