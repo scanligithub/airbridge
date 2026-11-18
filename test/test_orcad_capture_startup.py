@@ -25,6 +25,7 @@ from capture_process import (  # noqa: E402
     CaptureProcessAssessment,
     CaptureProcessCandidate,
     CaptureProcessDisposition,
+    CaptureProcessInventoryError,
 )
 from capture_session import (  # noqa: E402
     CaptureAuthorizationError,
@@ -88,6 +89,20 @@ class FakeInspector:
     def inspect(self):
         self.inspect_calls += 1
         return self.candidates
+
+
+class FailingInventoryAfterLaunch(FakeInspector):
+    def inspect_session(self, manifest):
+        self.assessment_calls += 1
+        return CaptureProcessAssessment(
+            CaptureProcessDisposition.NO_PROCESS, ()
+        )
+
+    def inspect(self):
+        self.inspect_calls += 1
+        raise CaptureProcessInventoryError(
+            "simulated CIM access failure after Start-Process"
+        )
 
 
 class FakeAirBridgeClient:
@@ -264,6 +279,8 @@ class CaptureStartupBuilderTests(TestCase):
         self.assertIn("return", hook)
         self.assertIn(_utf8_base64(remote_dir), hook)
         self.assertNotIn(remote_dir, hook)
+        self.assertIn("proc ::AirBridgeSkillHook::run", hook)
+        self.assertIn("::AirBridgeSkillHook::run $::ab_skill_sid", hook)
         self.assertIn("::AirBridgeSkill::bootstrap", hook)
 
     def test_start_command_only_exports_one_child_launch_ticket(self):
@@ -471,6 +488,35 @@ class CaptureStartupCoordinatorTests(TestCase):
         self.assertFalse(
             any("Start-Process -FilePath" in command for command, _kwargs in self.client.shell_calls)
         )
+
+    def test_post_launch_inventory_failure_marks_unknown_and_never_restarts(self):
+        inspector = FailingInventoryAfterLaunch()
+        coordinator = CaptureStartupCoordinator(
+            self.client,
+            self.config,
+            inspector=inspector,
+            bridge_path=self.bridge_path,
+            sleep_fn=lambda _seconds: None,
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "session.json"
+            with self.assertRaises(CaptureStartupOutcomeUnknown):
+                coordinator.start(
+                    self.session,
+                    user_authorized=True,
+                    manifest_path=path,
+                )
+            persisted = SessionManifest.load(path)
+
+        self.assertEqual(self.session.state, SessionState.UNKNOWN)
+        self.assertTrue(persisted.startup_request_id)
+        self.assertTrue(persisted.reconciliation_required)
+        start_commands = [
+            command for command, _kwargs in self.client.shell_calls
+            if "Start-Process -FilePath" in command
+        ]
+        self.assertEqual(len(start_commands), 1)
+        self.assertEqual(inspector.inspect_calls, 1)
 
     def test_start_transport_loss_persists_same_start_request_and_never_retries(self):
         self.client.fail_start_transport = True
