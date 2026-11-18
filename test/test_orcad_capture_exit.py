@@ -44,7 +44,7 @@ def prepare_report(*, active=True):
     return "\n".join([
         PREPARE_MAGIC, "session_id=" + SESSION_ID, "expected_pid=" + str(PID),
         "tcl_pid=" + str(PID), "tcl_version=" + TCL, "expected_tcl_version=" + TCL,
-        "dbo_session_rc=0", "dbo_session_present=1", "active_design_rc=0",
+        "session_present=1", "session_wrapper_rc=0", "active_design_rc=0",
         "active_design_present=" + ("1" if active else "0"),
         "active_design_name_rc=0", "active_design_name_b64=" + name,
     ])
