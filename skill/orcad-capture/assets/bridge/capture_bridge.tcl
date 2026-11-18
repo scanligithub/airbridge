@@ -144,8 +144,16 @@ proc ::AirBridgeSkill::write_result {request_id script_sha256 status result_valu
     set error_b64 [binary encode base64 -maxlen 0 $error_bytes]
     set result_crc [format %08x [zlib crc32 $result_bytes]]
     set error_crc [format %08x [zlib crc32 $error_bytes]]
-    set result_truncated [expr {[string length $result_value] > 100000}]
-    set error_truncated [expr {[string length $error_info] > 100000}]
+    # The Python Skill parser expects literal true/false tokens, not Tcl's
+    # numeric boolean representation.
+    set result_truncated "false"
+    if {[string length $result_value] > 100000} {
+        set result_truncated "true"
+    }
+    set error_truncated "false"
+    if {[string length $error_info] > 100000} {
+        set error_truncated "true"
+    }
 
     set envelope [join [list \
         "AB_CAPTURE_RESULT_V1" \
