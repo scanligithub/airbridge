@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import sys
 import tempfile
 import uuid
@@ -11,9 +12,12 @@ import tkinter
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase
+from unittest.mock import patch
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "skill" / "orcad-capture" / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
+
+import capture_exit  # noqa: E402
 
 from capture_exit import (  # noqa: E402
     PREPARE_MAGIC, SCHEDULE_MAGIC, CaptureExitCoordinator,
@@ -260,6 +264,62 @@ class CaptureExitTests(TestCase):
         with self.assertRaises(Exception):
             self.coordinator.prepare_exit(user_authorized=True)
         self.assertEqual(self.queue.calls, [])
+
+    def test_scheduled_sidecar_commit_failure_marks_session_unknown(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        original_atomic_json = capture_exit._atomic_json
+
+        def fail_exit_scheduled_once(path, value):
+            if value.get("state") == "exit_scheduled":
+                raise OSError("simulated sidecar commit failure")
+            return original_atomic_json(path, value)
+
+        with patch("capture_exit._atomic_json", side_effect=fail_exit_scheduled_once):
+            with self.assertRaises(CaptureExitOutcomeUnknown):
+                self.coordinator.request_exit(
+                    user_authorized=True,
+                    design_saved_or_no_changes_confirmed=True,
+                    timeout_seconds=5,
+                )
+
+        self.assertEqual(self.session.state, SessionState.UNKNOWN)
+        persisted = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["state"], SessionState.UNKNOWN.value)
+        self.assertEqual(self.coordinator._load_context()["state"], "unknown")
+        self.assertEqual(len(self.queue.calls), 2)
+
+        with self.assertRaises(CaptureExitOutcomeUnknown):
+            self.coordinator.request_exit(
+                user_authorized=True,
+                design_saved_or_no_changes_confirmed=True,
+            )
+        self.assertEqual(len(self.queue.calls), 2)
+
+    def test_closed_manifest_remains_authoritative_if_sidecar_finalization_fails(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        original_atomic_json = capture_exit._atomic_json
+
+        def fail_closed_sidecar(path, value):
+            if value.get("state") == "closed":
+                raise OSError("simulated final sidecar commit failure")
+            return original_atomic_json(path, value)
+
+        with patch("capture_exit._atomic_json", side_effect=fail_closed_sidecar):
+            with self.assertRaises(CaptureExitError) as raised:
+                self.coordinator.request_exit(
+                    user_authorized=True,
+                    design_saved_or_no_changes_confirmed=True,
+                    timeout_seconds=5,
+                )
+
+        self.assertIn("confirmed CLOSED", str(raised.exception))
+        self.assertEqual(self.session.state, SessionState.CLOSED)
+        persisted = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["state"], SessionState.CLOSED.value)
+        # A stale exit_scheduled sidecar is non-retryable and does not contradict
+        # the persisted process-exit evidence in the Session Manifest.
+        self.assertEqual(self.coordinator._load_context()["state"], "exit_scheduled")
+        self.assertEqual(len(self.queue.calls), 2)
 
     def test_exit_script_has_no_save_discard_or_force_kill_commands(self):
         script = build_exit_schedule_script(SESSION_ID, PID, TCL)
