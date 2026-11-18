@@ -110,7 +110,7 @@ class CaptureExitTests(TestCase):
         )
         self.session = CaptureSession(self.manifest)
         self.queue = FakeQueue()
-        self.inspector = FakeInspector(exit_after=1)
+        self.inspector = FakeInspector(exit_after=2)
         self.coordinator = CaptureExitCoordinator(
             self.queue, self.inspector, self.session, self.manifest_path,
             sleep_fn=lambda _seconds: None,
