@@ -10,6 +10,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -36,6 +37,19 @@ from capture_requests import CaptureTclOutcomeUnknown
 
 PREPARE_MAGIC = "AB_CAPTURE_EXIT_PREPARE_V1"
 SCHEDULE_MAGIC = "AB_CAPTURE_EXIT_SCHEDULED_V1"
+
+_EXIT_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_EXIT_THREAD_LOCKS_GUARD = threading.Lock()
+
+
+def _exit_thread_lock(path: Path) -> threading.Lock:
+    key = os.path.normcase(os.path.abspath(str(path)))
+    with _EXIT_THREAD_LOCKS_GUARD:
+        lock = _EXIT_THREAD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _EXIT_THREAD_LOCKS[key] = lock
+        return lock
 
 
 class CaptureExitError(RuntimeError):
@@ -264,13 +278,20 @@ class CaptureExitCoordinator:
 
     @contextmanager
     def _exclusive_exit_lock(self):
-        """Serialize Exit and reconciliation; kernel locks release on process death."""
+        """Serialize threads/processes; the kernel releases the file lock on crash."""
         lock_path = self.context_path.with_name(self.context_path.name + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        thread_lock = _exit_thread_lock(lock_path)
+        if not thread_lock.acquire(blocking=False):
+            raise CaptureExitError(
+                "another Capture Exit or reconciliation workflow is active in this process"
+            )
+
+        descriptor = None
         acquired = False
         unlock = None
         try:
+            descriptor = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
             if os.fstat(descriptor).st_size == 0:
                 os.lseek(descriptor, 0, os.SEEK_SET)
                 os.write(descriptor, b"\0")
@@ -293,10 +314,14 @@ class CaptureExitCoordinator:
             yield
         finally:
             try:
-                if acquired and unlock is not None:
-                    unlock()
+                if descriptor is not None:
+                    try:
+                        if acquired and unlock is not None:
+                            unlock()
+                    finally:
+                        os.close(descriptor)
             finally:
-                os.close(descriptor)
+                thread_lock.release()
 
     def reconcile_exit(self, *, timeout_seconds: float = 30.0) -> ProcessExitEvidence:
         """Reconcile a prior authorized Exit using read-only result and PID evidence.
