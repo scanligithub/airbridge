@@ -203,6 +203,8 @@ class CaptureExitTests(TestCase):
         script = build_exit_schedule_script(SESSION_ID, PID, TCL)
         for forbidden in ("SaveDesign", "SaveAs", "Discard", "taskkill", "Stop-Process"):
             self.assertNotIn(forbidden, script)
+        with self.assertRaises(CaptureExitError):
+            build_exit_schedule_script(SESSION_ID, PID, "8.6.0} ; Exit ; {")
 
 
 
