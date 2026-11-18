@@ -104,7 +104,7 @@ class AirBridgeClientTests(TestCase):
         self.assertEqual(
             self.requests[0]["authorization"], "Bearer test-agent-token"
         )
-        self.assertIsNone(self.requests[0]["body"])
+        self.assertEqual(self.requests[0]["body"], b"")
 
     def test_shell_execute_preserves_202_acceptance_receipt(self):
         self.status_code = 202
