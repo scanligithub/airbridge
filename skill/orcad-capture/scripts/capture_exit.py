@@ -12,6 +12,7 @@ import re
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -261,9 +262,46 @@ class CaptureExitCoordinator:
         _atomic_json(self.context_path, context)
         return report
 
+    @contextmanager
+    def _exclusive_exit_lock(self):
+        """Serialize Exit attempts across threads and separate Host-A processes."""
+        lock_path = self.context_path.with_name(self.context_path.name + ".lock")
+        try:
+            descriptor = os.open(
+                str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+            )
+        except FileExistsError as exc:
+            raise CaptureExitError(
+                "another Capture Exit workflow is active or was interrupted; refusing another Exit"
+            ) from exc
+        try:
+            payload = "pid={}\\ncreated_at_utc={}\\n".format(os.getpid(), _utc_now())
+            os.write(descriptor, payload.encode("ascii"))
+            os.fsync(descriptor)
+            yield
+        finally:
+            try:
+                os.close(descriptor)
+            finally:
+                try:
+                    lock_path.unlink()
+                except FileNotFoundError:
+                    pass
+
     def request_exit(self, *, user_authorized: bool = False,
                      design_saved_or_no_changes_confirmed: bool = False,
                      timeout_seconds: float = 30.0, delay_ms: int = 1000) -> ProcessExitEvidence:
+        with self._exclusive_exit_lock():
+            return self._request_exit_locked(
+                user_authorized=user_authorized,
+                design_saved_or_no_changes_confirmed=design_saved_or_no_changes_confirmed,
+                timeout_seconds=timeout_seconds,
+                delay_ms=delay_ms,
+            )
+
+    def _request_exit_locked(self, *, user_authorized: bool = False,
+                             design_saved_or_no_changes_confirmed: bool = False,
+                             timeout_seconds: float = 30.0, delay_ms: int = 1000) -> ProcessExitEvidence:
         if user_authorized is not True:
             raise CaptureAuthorizationError("Capture Exit requires explicit user authorization")
         if design_saved_or_no_changes_confirmed is not True:
@@ -295,7 +333,9 @@ class CaptureExitCoordinator:
         try:
             result = self.queue.execute(
                 schedule_script,
-                user_authorized=True, request_id=context["schedule_request_id"],
+                user_authorized=True,
+                request_id=context["schedule_request_id"],
+                exit_intent_request_id=context["schedule_request_id"],
             )
         except Exception as exc:
             self._mark_unknown("CAPTURE_EXIT_SCHEDULE_UNKNOWN", str(exc))
