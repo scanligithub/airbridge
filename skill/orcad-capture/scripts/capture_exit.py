@@ -387,3 +387,11 @@ class CaptureExitCoordinator:
             self.session.manifest.save(self.manifest_path)
         except Exception:
             pass
+        try:
+            if self.context_path.exists():
+                context = self._load_context()
+                context["state"] = "unknown"
+                context["updated_at_utc"] = _utc_now()
+                _atomic_json(self.context_path, context)
+        except Exception:
+            pass
