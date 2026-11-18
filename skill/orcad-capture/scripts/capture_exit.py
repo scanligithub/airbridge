@@ -96,7 +96,7 @@ join $__ab_lines "\n"
         PREPARE_MAGIC,
         session_id,
         pid,
-        tcl_version,
+        _tcl_quote(tcl_version),
     )
 
 
