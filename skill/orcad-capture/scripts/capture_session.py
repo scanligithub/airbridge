@@ -173,7 +173,7 @@ class CaptureConfig:
             ) from exc
         if self.capture_exe_path:
             win_path = PureWindowsPath(self.capture_exe_path)
-            if not win_path.is_absolute() or not win_path.name.casefold() == "capture.exe":
+            if not win_path.is_absolute() or win_path.name.casefold() != "capture.exe":
                 raise CaptureConfigurationError(
                     "capture_exe_path must be an absolute path to capture.exe"
                 )
@@ -284,6 +284,7 @@ class SessionManifest:
     process_exit_confirmed_at_utc: Optional[str] = None
     remote_session_dir: Optional[str] = None
     hook_path: Optional[str] = None
+    hook_sha256: Optional[str] = None
     bridge_sha256: Optional[str] = None
     active_request_id: Optional[str] = None
     reconciliation_required: bool = False
@@ -377,6 +378,10 @@ class SessionManifest:
             raise CaptureSessionError(
                 "unresolved sessions cannot advance beyond read-only inspection"
             )
+        if self.hook_sha256:
+            self.hook_sha256 = self.hook_sha256.lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", self.hook_sha256):
+                raise CaptureSessionError("hook_sha256 must be a SHA-256 hex digest")
         if self.bridge_sha256:
             self.bridge_sha256 = self.bridge_sha256.lower()
             if not re.fullmatch(r"[0-9a-f]{64}", self.bridge_sha256):
@@ -421,6 +426,7 @@ class SessionManifest:
             "process_exit_confirmed_at_utc": self.process_exit_confirmed_at_utc,
             "remote_session_dir": self.remote_session_dir,
             "hook_path": self.hook_path,
+            "hook_sha256": self.hook_sha256,
             "bridge_sha256": self.bridge_sha256,
             "active_request_id": self.active_request_id,
             "reconciliation_required": self.reconciliation_required,
@@ -437,7 +443,7 @@ class SessionManifest:
             "created_at_utc", "updated_at_utc", "capture_exe_path",
             "cap_autoload_dir", "expected_capture_version", "expected_tcl_version", "capture_version",
             "tcl_version", "pid", "process_started_at_utc",
-            "process_exit_confirmed_at_utc", "remote_session_dir", "hook_path", "bridge_sha256", "active_request_id",
+            "process_exit_confirmed_at_utc", "remote_session_dir", "hook_path", "hook_sha256", "bridge_sha256", "active_request_id",
             "reconciliation_required", "last_error_code",
             "last_error_message",
         }
