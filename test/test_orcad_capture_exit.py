@@ -7,6 +7,7 @@ import hashlib
 import sys
 import tempfile
 import uuid
+import tkinter
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase
@@ -23,6 +24,7 @@ from capture_exit import (  # noqa: E402
 from capture_process import (  # noqa: E402
     CaptureProcessAssessment, CaptureProcessCandidate, CaptureProcessDisposition,
 )
+from capture_requests import build_capture_request_envelope  # noqa: E402
 from capture_session import (  # noqa: E402
     CaptureAuthorizationError, CaptureSession, SessionManifest, SessionState,
 )
@@ -181,6 +183,58 @@ class CaptureExitTests(TestCase):
         script = build_exit_schedule_script(SESSION_ID, PID, TCL)
         for forbidden in ("SaveDesign", "SaveAs", "Discard", "taskkill", "Stop-Process"):
             self.assertNotIn(forbidden, script)
+
+
+
+class CaptureExitBridgeOrderingTests(TestCase):
+    """Run the real Tcl Bridge under Tcl 8.6 and prove result publication precedes Exit."""
+
+    def test_bridge_publishes_schedule_result_before_delayed_exit_callback(self):
+        scripts = Path(__file__).resolve().parents[1] / "skill" / "orcad-capture" / "assets" / "bridge"
+        bridge_path = scripts / "capture_bridge.tcl"
+        if not bridge_path.is_file():
+            self.skipTest("Capture Tcl Bridge source is unavailable")
+        try:
+            tcl = tkinter.Tcl()
+            if not tcl.eval("info patchlevel").startswith("8.6."):
+                self.skipTest("Tcl 8.6 is required")
+        except Exception as exc:
+            self.skipTest("Tcl runtime is unavailable: {}".format(exc))
+
+        with tempfile.TemporaryDirectory() as root:
+            session_dir = Path(root)
+            for name in ("requests", "running", "results"):
+                (session_dir / name).mkdir()
+            request_id = str(uuid.uuid4())
+            envelope, _digest, _crc = build_capture_request_envelope(
+                SESSION_ID, NONCE, request_id,
+                build_exit_schedule_script(SESSION_ID, PID, TCL, delay_ms=250),
+            )
+            (session_dir / "requests" / (request_id + ".req")).write_bytes(envelope)
+
+            tcl.call("source", str(bridge_path))
+            tcl.call("set", "::test_result_dir", str(session_dir / "results"))
+            tcl.call("set", "::test_request_id", request_id)
+            tcl.eval("""
+                set ::done ""
+                set ::exit_result_present 0
+                proc Exit {} {
+                    set result_path [file join $::test_result_dir "$::test_request_id.result"]
+                    set ::exit_result_present [file exists $result_path]
+                    set ::done "exit_called"
+                }
+                after 3000 {
+                    if {$::done eq ""} { set ::done "timeout" }
+                }
+            """)
+            tcl.call(
+                "::AirBridgeSkill::bootstrap", SESSION_ID, NONCE, str(session_dir),
+                hashlib.sha256(b"bridge fixture").hexdigest(),
+            )
+            tcl.eval("vwait ::done")
+            self.assertEqual(tcl.getvar("done"), "exit_called")
+            self.assertEqual(tcl.getvar("exit_result_present"), "1")
+            self.assertTrue((session_dir / "results" / (request_id + ".result")).is_file())
 
 
 if __name__ == "__main__":
