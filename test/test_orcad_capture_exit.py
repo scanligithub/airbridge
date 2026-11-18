@@ -206,9 +206,10 @@ class CaptureExitBridgeOrderingTests(TestCase):
             for name in ("requests", "running", "results"):
                 (session_dir / name).mkdir()
             request_id = str(uuid.uuid4())
+            runtime_pid = int(tcl.eval("pid"))
             envelope, _digest, _crc = build_capture_request_envelope(
                 SESSION_ID, NONCE, request_id,
-                build_exit_schedule_script(SESSION_ID, PID, TCL, delay_ms=250),
+                build_exit_schedule_script(SESSION_ID, runtime_pid, TCL, delay_ms=250),
             )
             (session_dir / "requests" / (request_id + ".req")).write_bytes(envelope)
 
