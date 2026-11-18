@@ -268,6 +268,24 @@ class CaptureSessionModelTests(TestCase):
             )
         self.assertIsNone(self.manifest.pid)
 
+    def test_start_requires_an_explicit_capture_executable_path(self):
+        config = CaptureConfig(expected_capture_version="17.2-2016")
+        manifest = SessionManifest.create(config)
+        session = CaptureSession(manifest, config)
+        session.begin_inspection()
+        session.begin_start()
+
+        with self.assertRaises(CaptureIdentityError):
+            session.record_process_identity(
+                ProcessIdentity(
+                    pid=7412,
+                    executable_path=self.CAPTURE_EXE,
+                    started_at_utc=self.STARTED_AT,
+                    file_version="17.2-2016",
+                )
+            )
+        self.assertIsNone(manifest.pid)
+
     def test_ready_requires_matching_session_nonce_pid_tcl_and_bridge_hash(self):
         self.session.begin_inspection()
         self.session.begin_start()
@@ -363,6 +381,28 @@ class CaptureSessionModelTests(TestCase):
         self.session.begin_inspection()
         with self.assertRaises(CaptureStateTransitionError):
             self.session.begin_start()
+
+    def test_manifest_requires_explicit_utc_timestamps_and_unknown_reconciliation(self):
+        values = self.manifest.to_dict()
+        values["created_at_utc"] = "2026-11-18T10:00:00"
+        with self.assertRaises(CaptureSessionError):
+            SessionManifest.from_dict(values)
+
+        values = self.manifest.to_dict()
+        values["state"] = "unknown"
+        values["reconciliation_required"] = False
+        with self.assertRaises(CaptureSessionError):
+            SessionManifest.from_dict(values)
+
+    def test_manifest_error_messages_redact_bearer_secrets(self):
+        self.make_ready()
+        secret = "abg1." + ("a" * 32) + ".topsecretvalue"
+        self.session.mark_failed(
+            "TEST_ERROR", "request failed with Authorization: Bearer " + secret
+        )
+        serialized = json.dumps(self.manifest.to_dict())
+        self.assertNotIn(secret, serialized)
+        self.assertIn("Bearer [REDACTED]", serialized)
 
     def test_public_transition_api_cannot_bypass_close_authorization(self):
         self.make_ready()
