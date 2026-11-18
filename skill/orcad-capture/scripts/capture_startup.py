@@ -15,7 +15,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Mapping, Optional
 
@@ -372,11 +372,28 @@ class CaptureStartupCoordinator:
 
         # Hook creation uses .NET CreateNew to close the check/write race and
         # guarantee an existing Cadence/user file is never overwritten.
-        hook_receipt = self._run_shell_json(
-            build_create_new_hook_command(hook_remote_path, hook_text),
-            request_id=str(uuid.uuid4()),
-            label="Capture Hook installation",
-        )
+        hook_install_request_id = str(uuid.uuid4())
+        session.manifest.hook_install_request_id = hook_install_request_id
+        self._save_manifest(session, manifest_path)
+        try:
+            hook_receipt = self._run_shell_json(
+                build_create_new_hook_command(hook_remote_path, hook_text),
+                request_id=hook_install_request_id,
+                label="Capture Hook installation",
+            )
+        except CaptureStartupOutcomeUnknown as exc:
+            self._mark_unknown(
+                session,
+                "HOOK_INSTALL_OUTCOME_UNKNOWN",
+                str(exc),
+                request_id=hook_install_request_id,
+            )
+            self._save_manifest(session, manifest_path)
+            raise
+        except CaptureStartupError as exc:
+            self._mark_failed(session, "HOOK_INSTALL_FAILED", str(exc))
+            self._save_manifest(session, manifest_path)
+            raise
         if hook_receipt.get("created") is not True:
             self._mark_failed(session, "HOOK_INSTALL_FAILED", "remote Hook was not created")
             raise CaptureStartupError("Capture Hook installation did not return a creation receipt")
@@ -398,6 +415,8 @@ class CaptureStartupCoordinator:
         session.begin_start()
         self._save_manifest(session, manifest_path)
         startup_request_id = str(uuid.uuid4())
+        session.manifest.startup_request_id = startup_request_id
+        self._save_manifest(session, manifest_path)
         try:
             start_receipt = self._run_shell_json(
                 build_capture_start_command(self.config.capture_exe_path),
@@ -434,24 +453,55 @@ class CaptureStartupCoordinator:
                 request_id=startup_request_id,
             )
 
-        candidate = self._wait_for_started_process(pid, started_at)
-        session.record_process_identity(
-            ProcessIdentity(
-                pid=candidate.pid,
-                executable_path=str(candidate.executable_path or ""),
-                started_at_utc=str(candidate.started_at_utc or ""),
-                file_version=str(candidate.file_version or ""),
+        try:
+            candidate = self._wait_for_started_process(pid, started_at)
+            session.record_process_identity(
+                ProcessIdentity(
+                    pid=candidate.pid,
+                    executable_path=str(candidate.executable_path or ""),
+                    started_at_utc=str(candidate.started_at_utc or ""),
+                    file_version=str(candidate.file_version or ""),
+                )
             )
-        )
-        session.mark_bridge_pending(
-            remote_session_dir=remote_session_dir,
-            hook_path=hook_remote_path,
-            bridge_sha256=bridge_sha256,
-        )
+            session.mark_bridge_pending(
+                remote_session_dir=remote_session_dir,
+                hook_path=hook_remote_path,
+                bridge_sha256=bridge_sha256,
+            )
+        except CaptureStartupOutcomeUnknown as exc:
+            self._mark_unknown(
+                session,
+                "CAPTURE_PROCESS_IDENTITY_UNKNOWN",
+                str(exc),
+                request_id=startup_request_id,
+            )
+            self._save_manifest(session, manifest_path)
+            raise
+        except (CaptureIdentityError, CaptureSessionError) as exc:
+            self._mark_unknown(
+                session,
+                "CAPTURE_PROCESS_IDENTITY_MISMATCH",
+                str(exc),
+                request_id=startup_request_id,
+            )
+            self._save_manifest(session, manifest_path)
+            raise CaptureStartupOutcomeUnknown(
+                "Capture may be running but its identity could not be verified",
+                request_id=startup_request_id,
+            ) from exc
         self._save_manifest(session, manifest_path)
 
         ready_path = ntpath.join(remote_session_dir, "bridge.ready")
-        ready_payload = self._wait_for_ready(ready_path)
+        try:
+            ready_payload = self._wait_for_ready(ready_path)
+        except CaptureStartupOutcomeUnknown as exc:
+            self._mark_unknown(session, "BRIDGE_READY_UNKNOWN", str(exc))
+            self._save_manifest(session, manifest_path)
+            raise
+        except CaptureStartupError as exc:
+            self._mark_failed(session, "BRIDGE_READY_INVALID", str(exc))
+            self._save_manifest(session, manifest_path)
+            raise
         try:
             if ready_payload.get("schema_version") != 1:
                 raise CaptureIdentityError("READY schema version does not match")
@@ -764,7 +814,7 @@ class CaptureStartupCoordinator:
     @staticmethod
     def _utc_now() -> str:
         return (
-            datetime.now(datetime.now().astimezone().tzinfo)
-            .astimezone(datetime.now().astimezone().tzinfo)
+            datetime.now(timezone.utc)
             .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
         )
