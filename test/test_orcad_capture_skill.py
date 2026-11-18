@@ -247,6 +247,24 @@ class CaptureSessionModelTests(TestCase):
             )
         )
 
+    def test_manifest_rejects_non_integer_schema_version(self):
+        values = self.manifest.to_dict()
+        values["schema_version"] = 1.0
+        with self.assertRaises(CaptureSessionError):
+            SessionManifest.from_dict(values)
+
+    def test_manifest_rejects_closed_state_without_process_exit_evidence(self):
+        values = self.manifest.to_dict()
+        values["state"] = SessionState.CLOSED.value
+        with self.assertRaises(CaptureSessionError):
+            SessionManifest.from_dict(values)
+
+    def test_config_rejects_non_finite_poll_intervals(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(CaptureConfigurationError):
+                    CaptureConfig(poll_interval_seconds=value)
+
     def test_manifest_rejects_invalid_startup_nonce_encoding(self):
         values = self.manifest.to_dict()
         values["startup_nonce"] = "contains+invalid/characters"
