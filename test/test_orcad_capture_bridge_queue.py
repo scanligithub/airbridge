@@ -7,6 +7,7 @@ import json
 import sys
 import tempfile
 import uuid
+import zlib
 from pathlib import Path
 from unittest import TestCase, skipIf
 
@@ -111,8 +112,26 @@ class CaptureBridgeTclRuntimeTests(TestCase):
         self.assertTrue(result_path.exists())
         queue = CaptureTclQueue.__new__(CaptureTclQueue)
         queue.session = self.session
+        manifest_raw = result_path.read_bytes()
+        manifest_lines = manifest_raw.decode("ascii").splitlines()
+        self.assertEqual(manifest_lines[0], "AB_CAPTURE_RESULT_PARTS_V1")
+        fields = dict(line.split("=", 1) for line in manifest_lines[1:])
+        self.assertEqual(fields["session_id"], self.session_id)
+        self.assertEqual(fields["startup_nonce"], self.startup_nonce)
+        self.assertEqual(fields["request_id"], request_id)
+        self.assertEqual(int(fields["chunk_size"]), 16384)
+        part_count = int(fields["part_count"])
+        envelope = b"".join(
+            Path(str(result_path) + ".part{:04d}".format(index)).read_bytes()
+            for index in range(part_count)
+        )
+        self.assertEqual(len(envelope), int(fields["total_length"]))
+        self.assertEqual(
+            format(zlib.crc32(envelope) & 0xFFFFFFFF, "08x"),
+            fields["envelope_crc32"],
+        )
         return queue._parse_result(
-            result_path.read_bytes(),
+            envelope,
             request_id,
             {"script_sha256": script_sha256},
         )

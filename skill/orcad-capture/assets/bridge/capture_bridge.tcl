@@ -172,7 +172,33 @@ proc ::AirBridgeSkill::write_result {request_id script_sha256 status result_valu
         "error_info_b64=$error_b64" \
     ] "\n"]
     set result_path [file join $result_dir "${request_id}.result"]
-    write_ascii_atomic $result_path $envelope
+    set envelope_bytes [encoding convertto ascii $envelope]
+    set total_length [string length $envelope_bytes]
+    set chunk_size 16384
+    set part_count [expr {int(ceil(double($total_length) / $chunk_size))}]
+
+    # Result parts are published first. The small manifest is atomically
+    # published last and is the only completion marker the Host-A Skill reads.
+    for {set index 0} {$index < $part_count} {incr index} {
+        set part_start [expr {$index * $chunk_size}]
+        set part_end [expr {min($part_start + $chunk_size - 1, $total_length - 1)}]
+        set part_text [string range $envelope $part_start $part_end]
+        set part_path "${result_path}.part[format %04d $index]"
+        write_ascii_atomic $part_path $part_text
+    }
+
+    set envelope_crc [format %08x [zlib crc32 $envelope_bytes]]
+    set parts_manifest [join [list \
+        "AB_CAPTURE_RESULT_PARTS_V1" \
+        "session_id=$session_id" \
+        "startup_nonce=$startup_nonce" \
+        "request_id=$request_id" \
+        "part_count=$part_count" \
+        "total_length=$total_length" \
+        "envelope_crc32=$envelope_crc" \
+        "chunk_size=$chunk_size" \
+    ] "\n"]
+    write_ascii_atomic $result_path $parts_manifest
     return $result_path
 }
 

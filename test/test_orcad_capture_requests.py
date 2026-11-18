@@ -29,8 +29,11 @@ from capture_requests import (  # noqa: E402
     CaptureTclOutcomeUnknown,
     CaptureTclQueue,
     CaptureTclQueueError,
+    RFS_CHUNK_BYTES,
+    RESULT_PARTS_MAGIC,
     build_capture_request_envelope,
     build_capture_result_envelope,
+    build_create_request_staging_command,
     build_publish_capture_request_command,
 )
 from capture_session import (  # noqa: E402
@@ -67,6 +70,8 @@ class FakeAirBridgeClient:
         self.filesystem_calls = []
         self.shell_calls = []
         self.fail_publish_after_move = False
+        self.write_chunk_lengths = []
+        self.read_chunk_lengths = []
 
     def filesystem(self, action, payload=None, **_kwargs):
         request = dict(payload or {})
@@ -78,22 +83,32 @@ class FakeAirBridgeClient:
                 if request.get("is_base64") is True
                 else request["content"].encode("utf-8")
             )
-            if path in self.remote_files:
-                return {"success": False, "error": "destination exists"}
-            self.remote_files[path] = raw
-            return {"success": True, "path": path, "size": len(raw)}
+            mode = request.get("mode", "w")
+            if mode == "a":
+                if path not in self.remote_files:
+                    return {"success": False, "error": "append target is absent"}
+                self.remote_files[path] += raw
+            else:
+                if path in self.remote_files:
+                    return {"success": False, "error": "destination exists"}
+                self.remote_files[path] = raw
+            self.write_chunk_lengths.append(len(raw))
+            return {"success": True, "path": path, "size": len(self.remote_files[path])}
         if action == "read":
             raw = self.remote_files.get(path)
             if raw is None:
                 return {"success": False, "error": "File not found"}
+            max_preview = int(request.get("max_preview_bytes", 65536))
+            preview = raw[:max_preview]
+            self.read_chunk_lengths.append(len(preview))
             if request.get("as_base64") is True:
                 return {
                     "success": True,
                     "path": path,
                     "size": len(raw),
-                    "is_truncated": False,
+                    "is_truncated": len(raw) > max_preview,
                     "encoding": "base64",
-                    "content": base64.b64encode(raw).decode("ascii"),
+                    "content": base64.b64encode(preview).decode("ascii"),
                 }
             return {
                 "success": True,
@@ -111,13 +126,34 @@ class FakeAirBridgeClient:
         encoded_paths = re.findall(
             r"FromBase64String\('([A-Za-z0-9+/=]+)'\)", command
         )
+        if "[IO.File]::Open($path, [IO.FileMode]::CreateNew" in command:
+            if len(encoded_paths) != 1:
+                raise AssertionError("staging creation must contain one Base64 path")
+            staging = base64.b64decode(encoded_paths[0]).decode("utf-8")
+            if staging in self.remote_files:
+                raise AssertionError("CreateNew must not overwrite the staging file")
+            self.remote_files[staging] = b""
+            stdout = json.dumps({"created": True, "path": staging, "length": 0})
+            return {
+                "request_id": request_id,
+                "state": "completed",
+                "result": {
+                    "success": True,
+                    "exit_code": 0,
+                    "stdout": stdout,
+                    "stderr": "",
+                },
+            }
         self.assert_publish_command(command, encoded_paths)
         source, target = [
             base64.b64decode(item).decode("utf-8") for item in encoded_paths
         ]
         expected = re.search(r"\$expected = '([0-9a-f]{64})'", command).group(1)
+        expected_length = int(re.search(r"\$expectedLength = \[int64\](\d+)", command).group(1))
         raw = self.remote_files[source]
         actual = hashlib.sha256(raw).hexdigest()
+        if len(raw) != expected_length:
+            raise AssertionError("publish command length mismatch in test double")
         if actual != expected:
             raise AssertionError("publish command hash mismatch in test double")
         if target in self.remote_files:
@@ -133,7 +169,7 @@ class FakeAirBridgeClient:
                 "results",
                 request_id_from_file + ".result",
             )
-            self.remote_files[result_path] = build_capture_result_envelope(
+            result_envelope = build_capture_result_envelope(
                 self.manifest.session_id,
                 self.manifest.startup_nonce,
                 request_id_from_file,
@@ -141,6 +177,7 @@ class FakeAirBridgeClient:
                 success=True,
                 value="DONE",
             )
+            self.store_result_parts(result_path, result_envelope)
 
         if self.fail_publish_after_move:
             raise AirBridgeTransportError(
@@ -150,6 +187,7 @@ class FakeAirBridgeClient:
             "published": True,
             "path": target,
             "sha256": actual,
+            "length": len(raw),
         })
         return {
             "request_id": request_id,
@@ -162,12 +200,38 @@ class FakeAirBridgeClient:
             },
         }
 
+    def store_result_parts(self, result_path, envelope):
+        lines = envelope.decode("ascii").splitlines()
+        fields = dict(line.split("=", 1) for line in lines[1:])
+        chunks = [
+            envelope[offset:offset + RFS_CHUNK_BYTES]
+            for offset in range(0, len(envelope), RFS_CHUNK_BYTES)
+        ]
+        for index, chunk in enumerate(chunks):
+            self.remote_files[result_path + ".part{:04d}".format(index)] = chunk
+        manifest = "\n".join([
+            RESULT_PARTS_MAGIC,
+            "session_id=" + fields["session_id"],
+            "startup_nonce=" + fields["startup_nonce"],
+            "request_id=" + fields["request_id"],
+            "part_count=" + str(len(chunks)),
+            "total_length=" + str(len(envelope)),
+            "envelope_crc32=" + format(zlib.crc32(envelope) & 0xFFFFFFFF, "08x"),
+            "chunk_size=" + str(RFS_CHUNK_BYTES),
+            "",
+        ]).encode("ascii")
+        self.remote_files[result_path] = manifest
+
     @staticmethod
     def assert_publish_command(command, encoded_paths):
         if "[IO.File]::Move($source, $target)" not in command:
             raise AssertionError("publication must use atomic File.Move")
-        if "Get-FileHash" not in command or "$actual -ne $expected" not in command:
-            raise AssertionError("publication must verify SHA-256")
+        if (
+            "Get-FileHash" not in command
+            or "$actual -ne $expected" not in command
+            or "$actualLength -ne $expectedLength" not in command
+        ):
+            raise AssertionError("publication must verify complete length and SHA-256")
         if "refusing overwrite" not in command:
             raise AssertionError("publication must refuse overwrite")
         if len(encoded_paths) != 2:
@@ -272,7 +336,11 @@ class CaptureTclQueueTests(TestCase):
         staging = ntpath.join(REMOTE_DIR, "requests", "id.tmp")
         target = ntpath.join(REMOTE_DIR, "requests", "id.req")
         digest = hashlib.sha256(b"request").hexdigest()
-        command = build_publish_capture_request_command(staging, target, digest)
+        create_command = build_create_request_staging_command(staging)
+        self.assertIn("[IO.FileMode]::CreateNew", create_command)
+        self.assertIn("[IO.FileShare]::None", create_command)
+        self.assertNotIn(staging, create_command)
+        command = build_publish_capture_request_command(staging, target, digest, 123)
         self.assertIn("Get-FileHash", command)
         self.assertIn("[IO.File]::Move($source, $target)", command)
         self.assertIn("refusing overwrite", command)
@@ -280,6 +348,31 @@ class CaptureTclQueueTests(TestCase):
         self.assertNotIn(target, command)
         self.assertIn(base64.b64encode(staging.encode()).decode(), command)
         self.assertIn(base64.b64encode(target.encode()).decode(), command)
+
+    def test_existing_staging_path_is_never_overwritten(self):
+        request_id = str(uuid.uuid4())
+        staging_path = ntpath.join(REMOTE_DIR, "requests", request_id + ".tmp")
+        self.client.remote_files[staging_path] = b"pre-existing"
+        with self.assertRaises(CaptureTclOutcomeUnknown):
+            self.queue.submit(
+                "must not overwrite",
+                user_authorized=True,
+                request_id=request_id,
+            )
+        self.assertEqual(self.client.remote_files[staging_path], b"pre-existing")
+        self.assertEqual(
+            sum(1 for action, _payload in self.client.filesystem_calls if action == "write"),
+            0,
+        )
+        self.assertEqual(len(self.client.shell_calls), 1)
+        self.assertEqual(self.session.state, SessionState.UNKNOWN)
+
+    def test_submit_uses_shell_create_new_then_rfs_append_only(self):
+        request = self.queue.submit("set safe 1", user_authorized=True)
+        self.assertIn("[IO.FileMode]::CreateNew", self.client.shell_calls[0][0])
+        self.assertTrue(all(payload.get("mode") == "a" for action, payload in self.client.filesystem_calls if action == "write"))
+        self.assertTrue(all(action == "write" for action, _payload in self.client.filesystem_calls))
+        self.assertTrue(request.request_path.endswith(request.request_id + ".req"))
 
     def test_submit_requires_explicit_user_authorization_without_remote_side_effects(self):
         with self.assertRaises(CaptureAuthorizationError):
@@ -300,12 +393,14 @@ class CaptureTclQueueTests(TestCase):
         self.assertIsNone(self.manifest.active_request_id)
         actions = [action for action, _payload in self.client.filesystem_calls]
         self.assertEqual(actions.count("write"), 1)
+        # Small request occupies one 16 KiB-or-smaller RFS frame; result
+        # retrieval consists of one manifest plus one result part.
         self.assertEqual(actions.count("read"), 2)
-        self.assertEqual(len(self.client.shell_calls), 1)
+        self.assertEqual(len(self.client.shell_calls), 2)
         manifest = SessionManifest.load(self.manifest_path)
         self.assertEqual(manifest.state, SessionState.READY.value)
         self.assertIsNone(manifest.active_request_id)
-        command = self.client.shell_calls[0][0]
+        command = self.client.shell_calls[1][0]
         self.assertIn("[IO.File]::Move($source, $target)", command)
         self.assertNotIn("/api/v1/eda/", command)
 
@@ -320,7 +415,7 @@ class CaptureTclQueueTests(TestCase):
             value="invalid command",
             error_info="stack trace",
         )
-        self.client.remote_files[request.result_path] = raw
+        self.client.store_result_parts(request.result_path, raw)
         result = self.queue.wait_for_result(request.request_id, timeout_seconds=1)
         self.assertFalse(result.success)
         self.assertEqual(result.value, "invalid command")
@@ -342,7 +437,7 @@ class CaptureTclQueueTests(TestCase):
             self.queue.submit("puts once", user_authorized=True)
         self.assertEqual(self.session.state, SessionState.UNKNOWN)
         self.assertEqual(raised.exception.request_id, self.manifest.active_request_id)
-        self.assertEqual(len(self.client.shell_calls), 1)
+        self.assertEqual(len(self.client.shell_calls), 2)
         self.assertEqual(
             sum(1 for action, _ in self.client.filesystem_calls if action == "write"),
             1,
@@ -354,7 +449,7 @@ class CaptureTclQueueTests(TestCase):
         self.assertTrue(result.success)
         self.assertEqual(self.session.state, SessionState.READY)
         self.assertEqual(self.inspector.calls, 1)
-        self.assertEqual(len(self.client.shell_calls), 1)
+        self.assertEqual(len(self.client.shell_calls), 2)
 
     def test_unknown_result_without_owned_process_evidence_stays_unknown(self):
         self.client.fail_publish_after_move = True
@@ -364,7 +459,7 @@ class CaptureTclQueueTests(TestCase):
         with self.assertRaises(CaptureTclOutcomeUnknown):
             self.queue.reconcile(raised.exception.request_id)
         self.assertEqual(self.session.state, SessionState.UNKNOWN)
-        self.assertEqual(len(self.client.shell_calls), 1)
+        self.assertEqual(len(self.client.shell_calls), 2)
 
     def test_rfs_read_rejects_a_different_remote_path(self):
         remote_path = ntpath.join(REMOTE_DIR, "results", "expected.result")
@@ -396,6 +491,87 @@ class CaptureTclQueueTests(TestCase):
         with self.assertRaises(CaptureTclQueueError):
             self.queue._read_remote_bytes(remote_path)
 
+    def test_large_request_is_uploaded_as_16k_chunks_before_hash_publish(self):
+        script = 'set large "' + ("x" * 40000) + '"'
+        expected_envelope, _digest, _crc = build_capture_request_envelope(
+            self.manifest.session_id,
+            self.manifest.startup_nonce,
+            str(uuid.uuid4()),
+            script,
+        )
+        request = self.queue.submit(script, user_authorized=True)
+        uploaded = self.client.remote_files[request.request_path]
+        self.assertEqual(len(uploaded), len(expected_envelope))
+        self.assertEqual(
+            hashlib.sha256(uploaded).hexdigest(),
+            hashlib.sha256(build_capture_request_envelope(
+                self.manifest.session_id,
+                self.manifest.startup_nonce,
+                request.request_id,
+                script,
+            )[0]).hexdigest(),
+        )
+        self.assertGreater(len(self.client.write_chunk_lengths), 1)
+        self.assertLessEqual(max(self.client.write_chunk_lengths), RFS_CHUNK_BYTES)
+        self.assertIn("$expectedLength = [int64]", self.client.shell_calls[1][0])
+
+    def test_large_result_is_reassembled_from_16k_parts(self):
+        self.client.auto_result = False
+        request = self.queue.submit("large result", user_authorized=True)
+        result_bytes = build_capture_result_envelope(
+            self.manifest.session_id,
+            self.manifest.startup_nonce,
+            request.request_id,
+            request.script_sha256,
+            success=True,
+            value="R" * 50000,
+        )
+        self.client.store_result_parts(request.result_path, result_bytes)
+        result = self.queue.wait_for_result(request.request_id, timeout_seconds=1)
+        self.assertTrue(result.success)
+        self.assertEqual(result.value, "R" * 50000)
+        self.assertGreater(len(self.client.read_chunk_lengths), 1)
+        self.assertLessEqual(max(self.client.read_chunk_lengths), RFS_CHUNK_BYTES)
+
+    def test_result_parts_manifest_missing_part_marks_unknown(self):
+        self.client.auto_result = False
+        request = self.queue.submit("missing part", user_authorized=True)
+        result_bytes = build_capture_result_envelope(
+            self.manifest.session_id,
+            self.manifest.startup_nonce,
+            request.request_id,
+            request.script_sha256,
+            success=True,
+            value="P" * 50000,
+        )
+        self.client.store_result_parts(request.result_path, result_bytes)
+        self.client.remote_files.pop(request.result_path + ".part0001")
+        with self.assertRaises(CaptureTclOutcomeUnknown):
+            self.queue.wait_for_result(request.request_id, timeout_seconds=1)
+        self.assertEqual(self.session.state, SessionState.UNKNOWN)
+
+    def test_result_parts_manifest_crc_detects_corrupt_assembly(self):
+        self.client.auto_result = False
+        request = self.queue.submit("bad part crc", user_authorized=True)
+        result_bytes = build_capture_result_envelope(
+            self.manifest.session_id,
+            self.manifest.startup_nonce,
+            request.request_id,
+            request.script_sha256,
+            success=True,
+            value="C" * 50000,
+        )
+        self.client.store_result_parts(request.result_path, result_bytes)
+        manifest = self.client.remote_files[request.result_path].decode("ascii")
+        manifest = manifest.replace(
+            "envelope_crc32=" + format(zlib.crc32(result_bytes) & 0xFFFFFFFF, "08x"),
+            "envelope_crc32=00000000",
+        )
+        self.client.remote_files[request.result_path] = manifest.encode("ascii")
+        with self.assertRaises(CaptureTclOutcomeUnknown):
+            self.queue.wait_for_result(request.request_id, timeout_seconds=1)
+        self.assertEqual(self.session.state, SessionState.UNKNOWN)
+
     def test_result_timeout_marks_unknown_and_does_not_resubmit(self):
         self.client.auto_result = False
         clock = Clock()
@@ -405,7 +581,7 @@ class CaptureTclQueueTests(TestCase):
         with self.assertRaises(CaptureTclOutcomeUnknown):
             self.queue.wait_for_result(request.request_id, timeout_seconds=1.5)
         self.assertEqual(self.session.state, SessionState.UNKNOWN)
-        self.assertEqual(len(self.client.shell_calls), 1)
+        self.assertEqual(len(self.client.shell_calls), 2)
         self.assertEqual(
             sum(1 for action, _ in self.client.filesystem_calls if action == "write"),
             1,
@@ -414,13 +590,16 @@ class CaptureTclQueueTests(TestCase):
     def test_mismatched_result_hash_is_rejected_and_session_becomes_unknown(self):
         self.client.auto_result = False
         request = self.queue.submit("verify hash", user_authorized=True)
-        self.client.remote_files[request.result_path] = build_capture_result_envelope(
-            self.manifest.session_id,
-            self.manifest.startup_nonce,
-            request.request_id,
-            hashlib.sha256(b"other script").hexdigest(),
-            success=True,
-            value="wrong",
+        self.client.store_result_parts(
+            request.result_path,
+            build_capture_result_envelope(
+                self.manifest.session_id,
+                self.manifest.startup_nonce,
+                request.request_id,
+                hashlib.sha256(b"other script").hexdigest(),
+                success=True,
+                value="wrong",
+            ),
         )
         with self.assertRaises(CaptureTclOutcomeUnknown):
             self.queue.wait_for_result(request.request_id, timeout_seconds=1)
@@ -438,7 +617,7 @@ class CaptureTclQueueTests(TestCase):
         self.assertEqual(len(self.client.filesystem_calls), writes_before + 1)
         self.assertEqual(self.client.filesystem_calls[-1][0], "read")
         self.assertEqual(self.session.state, SessionState.UNKNOWN)
-        self.assertEqual(len(self.client.shell_calls), 1)
+        self.assertEqual(len(self.client.shell_calls), 2)
 
 
 if __name__ == "__main__":

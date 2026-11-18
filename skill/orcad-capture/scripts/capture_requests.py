@@ -42,8 +42,10 @@ from capture_session import (
 MAX_SCRIPT_BYTES = 256 * 1024
 MAX_RESULT_BYTES = 512 * 1024
 MAX_RESULT_ENVELOPE_BYTES = 1_100_000
+RFS_CHUNK_BYTES = 16 * 1024
 REQUEST_MAGIC = "AB_CAPTURE_REQUEST_V1"
 RESULT_MAGIC = "AB_CAPTURE_RESULT_V1"
+RESULT_PARTS_MAGIC = "AB_CAPTURE_RESULT_PARTS_V1"
 
 
 class CaptureTclQueueError(RuntimeError):
@@ -134,13 +136,37 @@ def build_capture_request_envelope(
     return ("\n".join(lines) + "\n").encode("ascii"), digest, crc
 
 
+def build_create_request_staging_command(staging_path: str) -> str:
+    """Create an empty, unique staging file without overwriting any existing file."""
+    path_b64 = base64.b64encode(staging_path.encode("utf-8")).decode("ascii")
+    return (
+        "$ErrorActionPreference = 'Stop'; "
+        "$path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("
+        + "'" + path_b64 + "'" + ")); "
+        "$stream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, "
+        "[IO.FileAccess]::Write, [IO.FileShare]::None); "
+        "$stream.Dispose(); "
+        "[pscustomobject]@{created=$true; path=$path; length=(Get-Item -LiteralPath $path).Length} | ConvertTo-Json -Compress"
+    )
+
+
 def build_publish_capture_request_command(
-    staging_path: str, request_path: str, expected_sha256: str
+    staging_path: str,
+    request_path: str,
+    expected_sha256: str,
+    expected_length: int,
 ) -> str:
-    """Verify uploaded bytes on Host B, then publish with no-overwrite File.Move."""
+    """Verify complete staging bytes on Host B, then publish without overwrite."""
     digest = str(expected_sha256 or "").lower()
     if not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise CaptureTclQueueError("expected request SHA-256 is invalid")
+    if (
+        isinstance(expected_length, bool)
+        or not isinstance(expected_length, int)
+        or expected_length < 1
+        or expected_length > 400000
+    ):
+        raise CaptureTclQueueError("expected request length is invalid")
     source_b64 = base64.b64encode(staging_path.encode("utf-8")).decode("ascii")
     target_b64 = base64.b64encode(request_path.encode("utf-8")).decode("ascii")
     return (
@@ -150,12 +176,15 @@ def build_publish_capture_request_command(
         "$target = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("
         + "'" + target_b64 + "'" + ")); "
         "$expected = '" + digest + "'; "
+        "$expectedLength = [int64]" + str(expected_length) + "; "
         "if (-not [IO.File]::Exists($source)) { throw 'Request staging file is absent' }; "
         "if ([IO.File]::Exists($target)) { throw 'Request destination already exists; refusing overwrite' }; "
+        "$actualLength = (Get-Item -LiteralPath $source).Length; "
+        "if ($actualLength -ne $expectedLength) { throw 'Request staging length mismatch' }; "
         "$actual = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant(); "
         "if ($actual -ne $expected) { throw 'Request staging SHA-256 mismatch' }; "
         "[IO.File]::Move($source, $target); "
-        "[pscustomobject]@{published=$true; path=$target; sha256=$actual} | ConvertTo-Json -Compress"
+        "[pscustomobject]@{published=$true; path=$target; sha256=$actual; length=$actualLength} | ConvertTo-Json -Compress"
     )
 
 
@@ -266,7 +295,13 @@ class CaptureTclQueue:
         result_path = ntpath.join(
             manifest.remote_session_dir, "results", rid + ".result"
         )
-        upload_request_id = str(uuid.uuid4())
+        envelope_sha256 = hashlib.sha256(envelope).hexdigest()
+        envelope_chunks = [
+            envelope[offset:offset + RFS_CHUNK_BYTES]
+            for offset in range(0, len(envelope), RFS_CHUNK_BYTES)
+        ]
+        create_staging_request_id = str(uuid.uuid4())
+        upload_chunk_request_ids = [str(uuid.uuid4()) for _ in envelope_chunks]
         publish_request_id = str(uuid.uuid4())
         record = {
             "schema_version": 1,
@@ -277,7 +312,11 @@ class CaptureTclQueue:
             "staging_path": staging_path,
             "request_path": request_path,
             "result_path": result_path,
-            "upload_request_id": upload_request_id,
+            "envelope_sha256": envelope_sha256,
+            "envelope_length": len(envelope),
+            "create_staging_request_id": create_staging_request_id,
+            "upload_chunk_request_ids": upload_chunk_request_ids,
+            "uploaded_chunk_count": 0,
             "publish_request_id": publish_request_id,
             "state": "prepared",
             "created_at_utc": _utc_now(),
@@ -297,35 +336,71 @@ class CaptureTclQueue:
             raise
 
         try:
-            upload_receipt = self.client.filesystem(
-                "write",
-                {
-                    "path": staging_path,
-                    "content": base64.b64encode(envelope).decode("ascii"),
-                    "is_base64": True,
-                    "mode": "w",
-                    "request_id": upload_request_id,
-                },
-                timeout_seconds=self.config.shell_timeout_seconds + 10,
+            create_command = build_create_request_staging_command(staging_path)
+            create_response = self.client.shell_execute(
+                create_command,
+                shell="powershell",
+                task_timeout_seconds=self.config.shell_timeout_seconds,
+                async_mode=False,
+                request_id=create_staging_request_id,
             )
-            if not isinstance(upload_receipt, Mapping) or upload_receipt.get("success") is not True:
-                raise CaptureTclOutcomeUnknown(
-                    "RFS request upload did not return a trustworthy receipt", rid
+            self._unwrap_create_staging_response(
+                create_response, create_staging_request_id, staging_path
+            )
+
+            uploaded_length = 0
+            for index, chunk in enumerate(envelope_chunks):
+                chunk_request_id = upload_chunk_request_ids[index]
+                upload_receipt = self.client.filesystem(
+                    "write",
+                    {
+                        "path": staging_path,
+                        "content": base64.b64encode(chunk).decode("ascii"),
+                        "is_base64": True,
+                        "mode": "a",
+                        "request_id": chunk_request_id,
+                    },
+                    timeout_seconds=self.config.shell_timeout_seconds + 10,
                 )
-            if str(upload_receipt.get("path") or "").casefold() != staging_path.casefold():
+                uploaded_length += len(chunk)
+                if not isinstance(upload_receipt, Mapping) or upload_receipt.get("success") is not True:
+                    raise CaptureTclOutcomeUnknown(
+                        "RFS request chunk upload did not return a trustworthy receipt", rid
+                    )
+                if (
+                    not isinstance(upload_receipt.get("path"), str)
+                    or ntpath.normcase(ntpath.normpath(upload_receipt["path"]))
+                    != ntpath.normcase(ntpath.normpath(staging_path))
+                ):
+                    raise CaptureTclOutcomeUnknown(
+                        "RFS request chunk receipt path did not match", rid
+                    )
+                receipt_size = upload_receipt.get("size")
+                if (
+                    isinstance(receipt_size, bool)
+                    or not isinstance(receipt_size, int)
+                    or receipt_size != uploaded_length
+                ):
+                    raise CaptureTclOutcomeUnknown(
+                        "RFS request chunk receipt size did not match", rid
+                    )
+                record["uploaded_chunk_count"] = index + 1
+                self._update_record(record_path, record, "uploading")
+
+            if uploaded_length != len(envelope):
                 raise CaptureTclOutcomeUnknown(
-                    "RFS request upload receipt path did not match", rid
+                    "RFS request chunk assembly length did not match", rid
                 )
             self._update_record(record_path, record, "uploaded")
 
-            uploaded = self._read_remote_bytes(staging_path)
-            if uploaded != envelope:
-                raise CaptureTclOutcomeUnknown(
-                    "RFS request read-back did not match the exact request bytes", rid
-                )
-
+            # RFS is a single-ABFP-frame operation. Do not read the staging
+            # file back as one object; Host-B Shell verifies complete length
+            # and SHA-256 before atomically publishing the .req file.
             publish_command = build_publish_capture_request_command(
-                staging_path, request_path, hashlib.sha256(envelope).hexdigest()
+                staging_path,
+                request_path,
+                envelope_sha256,
+                len(envelope),
             )
             shell_response = self.client.shell_execute(
                 publish_command,
@@ -335,7 +410,11 @@ class CaptureTclQueue:
                 request_id=publish_request_id,
             )
             receipt = self._unwrap_publish_response(
-                shell_response, publish_request_id, request_path, hashlib.sha256(envelope).hexdigest()
+                shell_response,
+                publish_request_id,
+                request_path,
+                envelope_sha256,
+                len(envelope),
             )
             if receipt.get("published") is not True:
                 raise CaptureTclOutcomeUnknown(
@@ -407,7 +486,7 @@ class CaptureTclQueue:
 
         while True:
             try:
-                raw = self._read_remote_bytes(record["result_path"])
+                raw = self._read_result_envelope(record["result_path"], rid)
             except (AirBridgeTransportError, AirBridgeHTTPError, CaptureTclQueueError) as exc:
                 if self.session.state is not SessionState.UNKNOWN:
                     self._mark_unknown(record_path, record, rid, str(exc))
@@ -455,7 +534,7 @@ class CaptureTclQueue:
         record_path, record = self._load_record(rid)
 
         try:
-            raw = self._read_remote_bytes(record["result_path"])
+            raw = self._read_result_envelope(record["result_path"], rid)
         except (AirBridgeTransportError, AirBridgeHTTPError, CaptureTclQueueError) as exc:
             raise CaptureTclOutcomeUnknown(
                 "read-only reconciliation could not retrieve the original result",
@@ -480,14 +559,23 @@ class CaptureTclQueue:
         self._complete(record_path, record, result, allow_unknown=True)
         return result
 
-    def _read_remote_bytes(self, remote_path: str) -> Optional[bytes]:
+    def _read_remote_bytes(
+        self, remote_path: str, *, max_preview_bytes: int = RFS_CHUNK_BYTES
+    ) -> Optional[bytes]:
+        if (
+            isinstance(max_preview_bytes, bool)
+            or not isinstance(max_preview_bytes, int)
+            or max_preview_bytes < 1
+            or max_preview_bytes > RFS_CHUNK_BYTES
+        ):
+            raise ValueError("max_preview_bytes must be between 1 and 16 KiB")
         try:
             response = self.client.filesystem(
                 "read",
                 {
                     "path": remote_path,
                     "as_base64": True,
-                    "max_preview_bytes": MAX_RESULT_ENVELOPE_BYTES,
+                    "max_preview_bytes": max_preview_bytes,
                     "request_id": str(uuid.uuid4()),
                 },
                 timeout_seconds=self.config.shell_timeout_seconds + 10,
@@ -522,8 +610,8 @@ class CaptureTclQueue:
             raw = base64.b64decode(content.encode("ascii"), validate=True)
         except (ValueError, UnicodeEncodeError) as exc:
             raise CaptureTclQueueError("RFS returned invalid Base64 queue bytes") from exc
-        if len(raw) > MAX_RESULT_ENVELOPE_BYTES:
-            raise CaptureTclQueueError("RFS queue file exceeded the transport size limit")
+        if len(raw) > max_preview_bytes:
+            raise CaptureTclQueueError("RFS queue response exceeded the requested frame-safe preview")
         declared_size = response.get("size")
         if declared_size is not None and (
             isinstance(declared_size, bool)
@@ -532,6 +620,100 @@ class CaptureTclQueue:
         ):
             raise CaptureTclQueueError("RFS queue file size did not match its content")
         return raw
+
+    def _read_result_envelope(
+        self, manifest_path: str, request_id: str
+    ) -> Optional[bytes]:
+        """Read the small result manifest then reassemble bounded RFS chunks."""
+        raw_manifest = self._read_remote_bytes(
+            manifest_path, max_preview_bytes=4096
+        )
+        if raw_manifest is None:
+            return None
+        try:
+            manifest_text = raw_manifest.decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise CaptureTclQueueError("result parts manifest is not ASCII") from exc
+        lines = manifest_text.split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+        keys = (
+            "session_id",
+            "startup_nonce",
+            "request_id",
+            "part_count",
+            "total_length",
+            "envelope_crc32",
+            "chunk_size",
+        )
+        if (
+            not lines
+            or lines[0] != RESULT_PARTS_MAGIC
+            or len(lines) != len(keys) + 1
+        ):
+            raise CaptureTclQueueError("result parts manifest shape is invalid")
+        fields = {}
+        for key, line in zip(keys, lines[1:]):
+            prefix = key + "="
+            if not line.startswith(prefix):
+                raise CaptureTclQueueError("result parts manifest field order is invalid")
+            fields[key] = line[len(prefix):]
+
+        if fields["session_id"] != self.session.manifest.session_id:
+            raise CaptureIdentityError("result parts Session ID does not match")
+        if not hmac.compare_digest(
+            fields["startup_nonce"], self.session.manifest.startup_nonce
+        ):
+            raise CaptureIdentityError("result parts Startup Nonce does not match")
+        if fields["request_id"] != request_id:
+            raise CaptureIdentityError("result parts Request ID does not match")
+        if not re.fullmatch(r"[0-9a-f]{8}", fields["envelope_crc32"]):
+            raise CaptureTclQueueError("result parts envelope CRC-32 is invalid")
+        if fields["chunk_size"] != str(RFS_CHUNK_BYTES):
+            raise CaptureTclQueueError("result parts chunk size is not 16 KiB")
+
+        try:
+            part_count = int(fields["part_count"])
+            total_length = int(fields["total_length"])
+        except (TypeError, ValueError) as exc:
+            raise CaptureTclQueueError("result parts count or length is invalid") from exc
+        max_parts = (MAX_RESULT_ENVELOPE_BYTES + RFS_CHUNK_BYTES - 1) // RFS_CHUNK_BYTES
+        if (
+            part_count < 1
+            or part_count > max_parts
+            or total_length < 1
+            or total_length > MAX_RESULT_ENVELOPE_BYTES
+            or part_count != (total_length + RFS_CHUNK_BYTES - 1) // RFS_CHUNK_BYTES
+        ):
+            raise CaptureTclQueueError("result parts count or total length is out of range")
+
+        chunks = []
+        for index in range(part_count):
+            part_path = manifest_path + ".part{:04d}".format(index)
+            part = self._read_remote_bytes(
+                part_path, max_preview_bytes=RFS_CHUNK_BYTES
+            )
+            if part is None:
+                raise CaptureTclQueueError(
+                    "result manifest exists but part {:04d} is missing".format(index)
+                )
+            expected_length = (
+                RFS_CHUNK_BYTES
+                if index < part_count - 1
+                else total_length - RFS_CHUNK_BYTES * (part_count - 1)
+            )
+            if len(part) != expected_length:
+                raise CaptureTclQueueError(
+                    "result part {:04d} has an unexpected size".format(index)
+                )
+            chunks.append(part)
+
+        envelope = b"".join(chunks)
+        if len(envelope) != total_length:
+            raise CaptureTclQueueError("reassembled result length does not match")
+        if _crc32_hex(envelope) != fields["envelope_crc32"]:
+            raise CaptureTclQueueError("reassembled result envelope CRC-32 does not match")
+        return envelope
 
     def _parse_result(
         self, raw: bytes, request_id: str, record: Mapping[str, Any]
@@ -611,8 +793,50 @@ class CaptureTclQueue:
         )
 
     @staticmethod
+    def _unwrap_create_staging_response(
+        response: Any, request_id: str, expected_path: str
+    ) -> Mapping[str, Any]:
+        if not isinstance(response, Mapping):
+            raise CaptureTclOutcomeUnknown(
+                "Shell staging-file creation returned no structured response", request_id
+            )
+        if response.get("request_id") != request_id or response.get("state") != "completed":
+            raise CaptureTclOutcomeUnknown(
+                "Shell staging-file creation was not confirmed complete", request_id
+            )
+        result = response.get("result")
+        if (
+            not isinstance(result, Mapping)
+            or result.get("success") is not True
+            or result.get("exit_code") != 0
+        ):
+            raise CaptureTclOutcomeUnknown(
+                "Shell staging-file creation did not return success", request_id
+            )
+        try:
+            receipt = json.loads(str(result.get("stdout") or ""))
+        except json.JSONDecodeError as exc:
+            raise CaptureTclOutcomeUnknown(
+                "Shell staging-file receipt is malformed", request_id
+            ) from exc
+        if (
+            not isinstance(receipt, Mapping)
+            or receipt.get("created") is not True
+            or str(receipt.get("path") or "").casefold() != expected_path.casefold()
+            or receipt.get("length") != 0
+        ):
+            raise CaptureTclOutcomeUnknown(
+                "Shell staging-file receipt identity or size mismatch", request_id
+            )
+        return receipt
+
+    @staticmethod
     def _unwrap_publish_response(
-        response: Any, request_id: str, expected_path: str, expected_sha256: str
+        response: Any,
+        request_id: str,
+        expected_path: str,
+        expected_sha256: str,
+        expected_length: int,
     ) -> Mapping[str, Any]:
         if not isinstance(response, Mapping):
             raise CaptureTclOutcomeUnknown(
@@ -642,6 +866,7 @@ class CaptureTclQueue:
             or receipt.get("published") is not True
             or str(receipt.get("path") or "").casefold() != expected_path.casefold()
             or str(receipt.get("sha256") or "").lower() != expected_sha256
+            or receipt.get("length") != expected_length
         ):
             raise CaptureTclOutcomeUnknown(
                 "Shell publication receipt identity/hash mismatch", request_id
@@ -744,18 +969,51 @@ class CaptureTclQueue:
         allowed = {
             "schema_version", "session_id", "request_id", "script_sha256",
             "script_length", "staging_path", "request_path", "result_path",
-            "upload_request_id", "publish_request_id", "state",
+            "envelope_sha256", "envelope_length",
+            "create_staging_request_id", "upload_chunk_request_ids",
+            "uploaded_chunk_count", "publish_request_id", "state",
             "created_at_utc", "updated_at_utc",
         }
         if not isinstance(value, Mapping) or set(value) != allowed:
             raise CaptureTclQueueError("local Request record fields are invalid")
+        expected_chunks = (
+            (value.get("envelope_length", 0) + RFS_CHUNK_BYTES - 1) // RFS_CHUNK_BYTES
+            if isinstance(value.get("envelope_length"), int)
+            and not isinstance(value.get("envelope_length"), bool)
+            else 0
+        )
+        chunk_ids = value.get("upload_chunk_request_ids")
+        uploaded_count = value.get("uploaded_chunk_count")
         if (
             value["schema_version"] != 1
             or value["session_id"] != self.session.manifest.session_id
             or value["request_id"] != request_id
             or not re.fullmatch(r"[0-9a-f]{64}", str(value["script_sha256"]))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(value["envelope_sha256"]))
+            or not isinstance(value.get("envelope_length"), int)
+            or isinstance(value.get("envelope_length"), bool)
+            or not 1 <= value["envelope_length"] <= 400000
+            or not isinstance(chunk_ids, list)
+            or len(chunk_ids) != expected_chunks
+            or not isinstance(value.get("create_staging_request_id"), str)
+            or not re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                value["create_staging_request_id"],
+            )
+            or not isinstance(value.get("publish_request_id"), str)
+            or not re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                value["publish_request_id"],
+            )
+            or any(not isinstance(item, str) or not re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                item,
+            ) for item in chunk_ids)
+            or isinstance(uploaded_count, bool)
+            or not isinstance(uploaded_count, int)
+            or not 0 <= uploaded_count <= expected_chunks
         ):
-            raise CaptureIdentityError("local Request record identity is invalid")
+            raise CaptureIdentityError("local Request record identity or chunk ledger is invalid")
         return path, dict(value)
 
     def _save_session(self) -> None:
