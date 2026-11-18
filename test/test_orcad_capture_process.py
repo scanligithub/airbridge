@@ -113,6 +113,7 @@ class CaptureInventoryParserTests(TestCase):
             {"pid": 0},
             {"pid": "7412"},
             {"pid": 7412, "process_name": "allegro.exe"},
+            {"pid": 7412},
             {"pid": 7412, "executable_path": "capture.exe"},
             {"pid": 7412, "started_at_utc": "2026-11-18T10:00:00"},
         ]
