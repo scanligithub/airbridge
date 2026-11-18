@@ -258,7 +258,7 @@ class CaptureExitBridgeOrderingTests(TestCase):
             )
             tcl.eval("vwait ::done")
             self.assertEqual(tcl.getvar("done"), "exit_called")
-            self.assertEqual(tcl.getvar("exit_result_present"), "1")
+            self.assertEqual(tcl.getvar("exit_result_present"), 1)
             self.assertTrue((session_dir / "results" / (request_id + ".result")).is_file())
 
 
