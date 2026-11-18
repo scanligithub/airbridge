@@ -62,34 +62,42 @@ def _tcl_quote(value: str) -> str:
 
 
 def build_exit_prepare_script(session_id: str, pid: int, tcl_version: str) -> str:
-    """Read-only Tcl probe; does not save, mutate, close or exit Capture."""
+    """Read-only Tcl probe using the verified Capture DboSession wrapper."""
     return r"""
 set __ab_lines [list "%s"]
 lappend __ab_lines "session_id=%s"
 lappend __ab_lines "expected_pid=%s"
 lappend __ab_lines "tcl_pid=[pid]"
 lappend __ab_lines "tcl_version=[info patchlevel]"
+set __ab_session_exists [info exists ::DboSession_s_pDboSession]
 set __ab_session ""
-set __ab_session_rc [catch {set __ab_session $::DboSession_s_pDboSession}]
-lappend __ab_lines "dbo_session_rc=$__ab_session_rc"
-lappend __ab_lines "dbo_session_present=[expr {$__ab_session ne \"\" && $__ab_session ne \"NULL\"}]"
+set __ab_session_rc -1
+set __ab_wrapper_rc -1
 set __ab_active ""
-set __ab_active_rc [catch {set __ab_active [$__ab_session GetActiveDesign]}]
-lappend __ab_lines "active_design_rc=$__ab_active_rc"
-lappend __ab_lines "active_design_present=[expr {$__ab_active ne \"\" && $__ab_active ne \"NULL\"}]"
-if {$__ab_active_rc == 0 && $__ab_active ne "" && $__ab_active ne "NULL"} {
-    set __ab_name ""
-    set __ab_name_rc [catch {
-        set __ab_cstr [DboTclHelper_sMakeCString]
-        $__ab_active GetName $__ab_cstr
-        set __ab_name [DboTclHelper_sGetConstCharPtr $__ab_cstr]
-    }]
-    lappend __ab_lines "active_design_name_rc=$__ab_name_rc"
-    lappend __ab_lines "active_design_name_b64=[binary encode base64 -maxlen 0 [encoding convertto utf-8 $__ab_name]]"
-} else {
-    lappend __ab_lines "active_design_name_rc=0"
-    lappend __ab_lines "active_design_name_b64="
+set __ab_active_rc -1
+set __ab_name ""
+set __ab_name_rc 0
+if {$__ab_session_exists && $::DboSession_s_pDboSession ne "" && $::DboSession_s_pDboSession ne "NULL"} {
+    set __ab_session $::DboSession_s_pDboSession
+    set __ab_session_rc 0
+    set __ab_wrapper_rc [catch {DboSession -this $__ab_session}]
+    if {$__ab_wrapper_rc == 0} {
+        set __ab_active_rc [catch {set __ab_active [$__ab_session GetActiveDesign]}]
+        if {$__ab_active_rc == 0 && $__ab_active ne "" && $__ab_active ne "NULL"} {
+            set __ab_name_rc [catch {
+                set __ab_cstr [DboTclHelper_sMakeCString]
+                $__ab_active GetName $__ab_cstr
+                set __ab_name [DboTclHelper_sGetConstCharPtr $__ab_cstr]
+            }]
+        }
+    }
 }
+lappend __ab_lines "session_present=$__ab_session_exists"
+lappend __ab_lines "session_wrapper_rc=$__ab_wrapper_rc"
+lappend __ab_lines "active_design_rc=$__ab_active_rc"
+lappend __ab_lines "active_design_present=[expr {$__ab_active ne "" && $__ab_active ne "NULL"}]"
+lappend __ab_lines "active_design_name_rc=$__ab_name_rc"
+lappend __ab_lines "active_design_name_b64=[binary encode base64 -maxlen 0 [encoding convertto utf-8 $__ab_name]]"
 join $__ab_lines "\n"
 """ % (
         PREPARE_MAGIC,
@@ -113,7 +121,7 @@ def parse_exit_prepare_report(value: str, *, session_id: str, pid: int,
         fields[key] = item
     required = {
         "session_id", "expected_pid", "tcl_pid", "tcl_version",
-        "dbo_session_rc", "dbo_session_present",
+        "session_present", "session_wrapper_rc",
         "active_design_rc", "active_design_present", "active_design_name_rc",
         "active_design_name_b64",
     }
@@ -124,8 +132,8 @@ def parse_exit_prepare_report(value: str, *, session_id: str, pid: int,
         or fields["expected_pid"] != str(pid)
         or fields["tcl_pid"] != str(pid)
         or fields["tcl_version"] != tcl_version
-        or fields["dbo_session_rc"] != "0"
-        or fields["dbo_session_present"] != "1"
+        or fields["session_present"] != "1"
+        or fields["session_wrapper_rc"] != "0"
         or fields["active_design_rc"] != "0"
         or fields["active_design_present"] not in ("0", "1")
         or fields["active_design_name_rc"] != "0"
