@@ -236,6 +236,12 @@ class CaptureSessionModelTests(TestCase):
             )
         )
 
+    def test_manifest_rejects_invalid_startup_nonce_encoding(self):
+        values = self.manifest.to_dict()
+        values["startup_nonce"] = "contains+invalid/characters"
+        with self.assertRaises(CaptureSessionError):
+            SessionManifest.from_dict(values)
+
     def test_session_id_and_startup_nonce_are_generated_per_session(self):
         another = SessionManifest.create(self.config)
         self.assertNotEqual(self.manifest.session_id, another.session_id)
@@ -284,6 +290,23 @@ class CaptureSessionModelTests(TestCase):
                     file_version="17.2-2016",
                 )
             )
+        self.assertIsNone(manifest.pid)
+
+    def test_start_requires_capture_version_selection_and_verified_file_version(self):
+        config = CaptureConfig(capture_exe_path=self.CAPTURE_EXE)
+        manifest = SessionManifest.create(config)
+        session = CaptureSession(manifest, config)
+        session.begin_inspection()
+        session.begin_start()
+
+        identity = ProcessIdentity(
+            pid=7412,
+            executable_path=self.CAPTURE_EXE,
+            started_at_utc=self.STARTED_AT,
+            file_version="17.2-2016",
+        )
+        with self.assertRaises(CaptureIdentityError):
+            session.record_process_identity(identity)
         self.assertIsNone(manifest.pid)
 
     def test_ready_requires_matching_session_nonce_pid_tcl_and_bridge_hash(self):
