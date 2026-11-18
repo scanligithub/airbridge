@@ -42,8 +42,7 @@ Set `AIRBRIDGE_AGENT_TOKEN` in the Agent's Host-A environment. Provision only th
 
 - `shell.execute` for remote process inspection and launch commands;
 - `shell.read` for asynchronous Shell task status;
-- `filesystem.read` for READY, Manifest, result and diagnostic reads;
-- `filesystem.write` for creating this Skill's directories and uploading its own Bridge / Hook / request files.
+- `filesystem.write` for POST `/api/v1/fs/*` operations that create directories and upload Bridge / Hook / request files. The current AirBridge HTTP authorization map also classifies POST `/api/v1/fs/read` as `filesystem.write`; until the action-specific read/write scope split from PR #7 is integrated, the same scope is required for RFS reads.
 
 Use `request.read` only when the calling workflow needs correlated request records. Do not request `eda.execute`.
 

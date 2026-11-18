@@ -40,6 +40,7 @@ from capture_session import (
 
 MAX_SCRIPT_BYTES = 256 * 1024
 MAX_RESULT_BYTES = 512 * 1024
+MAX_RESULT_ENVELOPE_BYTES = 1_100_000
 REQUEST_MAGIC = "AB_CAPTURE_REQUEST_V1"
 RESULT_MAGIC = "AB_CAPTURE_RESULT_V1"
 
@@ -486,7 +487,7 @@ class CaptureTclQueue:
                 {
                     "path": remote_path,
                     "as_base64": True,
-                    "max_preview_bytes": MAX_RESULT_BYTES * 2 + 16384,
+                    "max_preview_bytes": MAX_RESULT_ENVELOPE_BYTES,
                     "request_id": str(uuid.uuid4()),
                 },
                 timeout_seconds=self.config.shell_timeout_seconds + 10,
@@ -523,7 +524,7 @@ class CaptureTclQueue:
     def _parse_result(
         self, raw: bytes, request_id: str, record: Mapping[str, Any]
     ) -> CaptureTclResult:
-        if len(raw) > MAX_RESULT_BYTES * 2 + 16384:
+        if len(raw) > MAX_RESULT_ENVELOPE_BYTES:
             raise CaptureTclQueueError("Capture result envelope exceeds the size limit")
         try:
             text = raw.decode("ascii")

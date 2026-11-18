@@ -251,6 +251,23 @@ class CaptureTclQueueTests(TestCase):
                         script,
                     )
 
+    def test_result_envelope_allows_worst_case_utf8_within_transport_limit(self):
+        request_id = str(uuid.uuid4())
+        script_hash = hashlib.sha256(b"unicode").hexdigest()
+        value = "😀" * 100000
+        raw = build_capture_result_envelope(
+            self.manifest.session_id,
+            self.manifest.startup_nonce,
+            request_id,
+            script_hash,
+            success=True,
+            value=value,
+            error_info=value,
+        )
+        # The Bridge limits each Tcl string to 100,000 characters. Four-byte
+        # UTF-8 characters plus Base64 must still fit the RFS read preview.
+        self.assertLess(len(raw), 1_100_000)
+
     def test_publish_command_uses_sha_check_and_atomic_no_overwrite_move(self):
         staging = ntpath.join(REMOTE_DIR, "requests", "id.tmp")
         target = ntpath.join(REMOTE_DIR, "requests", "id.req")
