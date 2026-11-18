@@ -15,7 +15,7 @@ import secrets
 import tempfile
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import PureWindowsPath
 from pathlib import Path
@@ -114,7 +114,9 @@ def _utc_now() -> str:
 def _validate_timestamp(value: str, field_name: str) -> str:
     raw = str(value or "").strip()
     try:
-        datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+            raise ValueError("timestamp must be explicitly UTC")
     except ValueError as exc:
         raise CaptureSessionError("{} must be an ISO-8601 timestamp".format(
             field_name
@@ -124,6 +126,21 @@ def _validate_timestamp(value: str, field_name: str) -> str:
 
 def _normalize_windows_path(value: str) -> str:
     return ntpath.normcase(ntpath.normpath(str(value).strip()))
+
+def _sanitize_error_message(value: Any) -> str:
+    """Avoid persisting common Bearer/token forms in a Session Manifest."""
+    message = str(value or "")[:1024]
+    message = re.sub(
+        r"(?i)Bearer\\s+[^\\s,;]+",
+        "Bearer [REDACTED]",
+        message,
+    )
+    message = re.sub(
+        r"(?i)abg1\\.[0-9a-f]{32}\\.[A-Za-z0-9_-]+",
+        "[REDACTED_AGENT_TOKEN]",
+        message,
+    )
+    return message[:512]
 
 
 @dataclass(frozen=True)
@@ -277,6 +294,10 @@ class SessionManifest:
             raise CaptureSessionError("capture_exe_path must be an absolute Windows path")
         if not isinstance(self.reconciliation_required, bool):
             raise CaptureSessionError("reconciliation_required must be a boolean")
+        if self.state == SessionState.UNKNOWN.value and not self.reconciliation_required:
+            raise CaptureSessionError(
+                "UNKNOWN sessions must require explicit reconciliation"
+            )
         if self.pid is not None and (
             isinstance(self.pid, bool) or not isinstance(self.pid, int) or self.pid <= 0
         ):
@@ -489,9 +510,11 @@ class CaptureSession:
                 "Capture process image path must be absolute"
             )
         expected_path = self.manifest.capture_exe_path
-        if expected_path and _normalize_windows_path(actual_path) != _normalize_windows_path(
-            expected_path
-        ):
+        if not expected_path:
+            raise CaptureIdentityError(
+                "an explicit Capture executable path must be selected before start"
+            )
+        if _normalize_windows_path(actual_path) != _normalize_windows_path(expected_path):
             raise CaptureIdentityError(
                 "Capture process image path does not match configured capture.exe"
             )
@@ -512,19 +535,18 @@ class CaptureSession:
     def mark_bridge_pending(
         self,
         *,
+        bridge_sha256: str,
         remote_session_dir: Optional[str] = None,
         hook_path: Optional[str] = None,
-        bridge_sha256: Optional[str] = None,
     ) -> None:
         if self.manifest.pid is None or not self.manifest.process_started_at_utc:
             raise CaptureIdentityError(
                 "verified Capture process identity is required before Bridge setup"
             )
-        if bridge_sha256:
-            digest = str(bridge_sha256).lower()
-            if not re.fullmatch(r"[0-9a-f]{64}", digest):
-                raise CaptureIdentityError("Bridge SHA-256 must be a 64-character hex digest")
-            self.manifest.bridge_sha256 = digest
+        digest = str(bridge_sha256 or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise CaptureIdentityError("Bridge SHA-256 must be a 64-character hex digest")
+        self.manifest.bridge_sha256 = digest
         if remote_session_dir:
             self.manifest.remote_session_dir = str(remote_session_dir)
         if hook_path:
@@ -544,7 +566,11 @@ class CaptureSession:
             evidence_session_id = str(uuid.UUID(evidence.session_id))
         except (ValueError, TypeError, AttributeError) as exc:
             raise CaptureIdentityError("READY record has an invalid Session ID") from exc
-        if evidence.schema_version != 1:
+        if (
+            isinstance(evidence.schema_version, bool)
+            or not isinstance(evidence.schema_version, int)
+            or evidence.schema_version != 1
+        ):
             raise CaptureIdentityError("READY record schema version is unsupported")
         if evidence_session_id != self.manifest.session_id:
             raise CaptureIdentityError("READY Session ID does not match this session")
@@ -608,17 +634,21 @@ class CaptureSession:
         self._move_to(SessionState.UNKNOWN)
         self.manifest.reconciliation_required = True
         self.manifest.last_error_code = str(code or "OUTCOME_UNKNOWN")[:128]
-        self.manifest.last_error_message = str(message or "Remote outcome is unknown")[:512]
+        self.manifest.last_error_message = _sanitize_error_message(
+            message or "Remote outcome is unknown"
+        )
         # Keep active_request_id intact so a later read-only reconciliation can
         # query the same Request ID rather than submitting a duplicate operation.
 
     def mark_failed(self, code: str, message: str) -> None:
         self._move_to(SessionState.FAILED)
         self.manifest.last_error_code = str(code or "CAPTURE_SESSION_FAILED")[:128]
-        self.manifest.last_error_message = str(message or "Capture session failed")[:512]
+        self.manifest.last_error_message = _sanitize_error_message(
+            message or "Capture session failed"
+        )
 
     def begin_close(self, *, user_authorized: bool = False) -> None:
-        if not user_authorized:
+        if user_authorized is not True:
             raise CaptureAuthorizationError(
                 "closing Capture requires explicit user authorization"
             )
