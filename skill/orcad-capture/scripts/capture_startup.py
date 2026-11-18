@@ -340,9 +340,14 @@ class CaptureStartupCoordinator:
             )
         if not isinstance(session, CaptureSession):
             raise TypeError("session must be a CaptureSession")
-        if session.state not in (SessionState.ABSENT, SessionState.CLOSED):
+        if session.state is not SessionState.ABSENT:
             raise CaptureStateTransitionError(
-                "Capture startup requires an ABSENT or CLOSED session"
+                "each Capture launch requires a fresh ABSENT Session ID / Nonce; "
+                "create a new SessionManifest after a prior session is closed"
+            )
+        if session.manifest.pid is not None or session.manifest.reconciliation_required:
+            raise CaptureStateTransitionError(
+                "a Manifest with a prior PID or unresolved outcome cannot start a new Capture process"
             )
 
         session.begin_inspection()
@@ -350,10 +355,7 @@ class CaptureStartupCoordinator:
 
         # A Capture process that already exists is never adopted implicitly.
         assessment = self.inspector.inspect_session(session.manifest)
-        if assessment.disposition not in (
-            CaptureProcessDisposition.NO_PROCESS,
-            CaptureProcessDisposition.ORIGINAL_PROCESS_ABSENT,
-        ):
+        if assessment.disposition is not CaptureProcessDisposition.NO_PROCESS:
             raise CaptureStartupError(
                 "Capture startup refused: {}".format(
                     assessment.detail or assessment.disposition.value
