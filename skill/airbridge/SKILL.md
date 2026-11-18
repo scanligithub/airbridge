@@ -11,6 +11,13 @@ Operate the isolated machine (host B) from the control machine (host A) through 
 
 All agent calls go to **host A localhost only**. Never assume the sandbox can reach the user's 127.0.0.1. Every `/api/` request must include `Authorization: Bearer <AGENT_TOKEN>`. Use the Agent's configured token; never ask the user to paste a secret into a prompt or write the token into logs or task files.
 
+Use least-privilege scopes:
+- Shell submit: `shell.execute`; Shell task status/list: `shell.read`; Shell task termination: `shell.manage`.
+- RFS read operations (`drives`, `ls`, `read`, `stat`, `pull`): `filesystem.read`.
+- RFS mutations (`write`, `mkdir`, `rm`, `mv`): `filesystem.write`.
+- Optional correlated request polling: `request.read`.
+Do not grant `filesystem.write` merely because a Skill needs to inspect remote files.
+
 ## Architecture (do not confuse roles)
 
 | Role | Machine | AirBridge role |
