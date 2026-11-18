@@ -245,7 +245,9 @@ class CaptureStartupBuilderTests(TestCase):
     def test_hook_is_session_scoped_and_manual_capture_skips_it(self):
         sid = str(uuid.uuid4())
         nonce = "N" * 48
-        remote_dir = r"C:\Users\Agent\AppData\Local\AirBridgeSkills\Capture\sessions\" + sid
+        remote_dir = ntpath.join(
+            LOCAL_APP_DATA, "AirBridgeSkills", "Capture", "sessions", sid
+        )
         bridge_hash = hashlib.sha256(b"bridge").hexdigest()
 
         hook = render_capture_hook(sid, nonce, remote_dir, bridge_hash)
