@@ -13,7 +13,7 @@ except ImportError:
 
 API = "http://127.0.0.1:8888"
 TOKEN_ENV = "AIRBRIDGE_AGENT_TOKEN"
-TEMP = r"E:\\_airbridge_temp"
+TEMP = r"E:\_airbridge_temp"
 
 
 def post(path, body, headers):
@@ -39,15 +39,15 @@ def main():
     print(json.dumps(post("/api/v1/fs/drives", {"timeout": 10}, headers),
                      ensure_ascii=False, indent=2))
 
-    print(f"\\n=== ls {TEMP} ===")
+    print(f"\n=== ls {TEMP} ===")
     data = post("/api/v1/fs/ls", {"path": TEMP, "timeout": 10}, headers)
     print(json.dumps(data, ensure_ascii=False, indent=2))
     if not data.get("success"):
         return
 
     for name in ("_cadence_stdout.log", "_bootstrap.tcl"):
-        path = TEMP + "\\\\" + name
-        print(f"\\n=== read {path} ===")
+        path = TEMP + "\\" + name
+        print(f"\n=== read {path} ===")
         log = post(
             "/api/v1/fs/read",
             {"path": path, "max_preview_bytes": 12000, "timeout": 15},
