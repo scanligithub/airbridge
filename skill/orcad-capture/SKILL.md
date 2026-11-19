@@ -71,7 +71,7 @@ An unrecognized or manually launched Capture process is not owned by this Skill.
 
 The capAutoLoad Hook lives in a shared installation directory, so it additionally requires the unique Session ID and Startup Nonce environment ticket inherited by the exact `Start-Process` child. A manually launched Capture that encounters the Hook without this ticket returns immediately before sourcing the Bridge. The Hook clears both ticket variables from its own process environment before Bridge startup.
 
-Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. This foundation only allows a state transition into `closing` when the caller explicitly supplies authorization; it does not itself send an Exit command.
+Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. The M3.2.3 controlled-startup flow does not save or close Capture; the Session state model still requires explicit authorization before entering `closing`, and `closed` requires verified evidence that the original Capture process has exited.
 
 ## Configuration
 
@@ -103,4 +103,4 @@ python -m unittest discover -s test -p "test_orcad_capture_startup.py" -v
 python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py
 ```
 
-These tests validate the Skill foundation only. They do not emulate Capture, Tcl, Dbo APIs, capAutoLoad, the physical serial link or the two-host deployment.
+These tests cover mock HTTP, Session state transitions, read-only process inventory and controlled-startup orchestration. They do not emulate Capture 17.2, Tcl/Dbo business operations, the physical serial link or the two-host deployment; live Host-B startup acceptance remains a separate validation step.
