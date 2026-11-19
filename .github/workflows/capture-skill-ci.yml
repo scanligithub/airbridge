@@ -10,6 +10,7 @@ on:
       - ".github/workflows/capture-skill-ci.yml"
   pull_request:
     branches:
+      - main
       - docs/m3-skill-owned-lifecycle
     paths:
       - "skill/orcad-capture/**"
