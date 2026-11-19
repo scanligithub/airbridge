@@ -40,6 +40,7 @@ from capture_session import (  # noqa: E402
     CaptureAuthorizationError,
     CaptureConfig,
     CaptureSession,
+    CaptureStateTransitionError,
     SessionManifest,
     SessionState,
 )
@@ -380,6 +381,85 @@ class CaptureTclQueueTests(TestCase):
         self.assertEqual(self.client.filesystem_calls, [])
         self.assertEqual(self.client.shell_calls, [])
         self.assertEqual(self.session.state, SessionState.READY)
+
+    def test_unresolved_exit_intent_blocks_unrelated_tcl_submission(self):
+        context_path = self.manifest_path.with_name(self.manifest_path.name + ".exit.json")
+        schedule_request_id = str(uuid.uuid4())
+        context_path.write_text(
+            json.dumps({
+                "schema_version": 1,
+                "session_id": self.manifest.session_id,
+                "state": "exit_scheduling",
+                "schedule_request_id": schedule_request_id,
+            }),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(CaptureStateTransitionError):
+            self.queue.submit("unrelated Tcl operation", user_authorized=True)
+
+        self.assertEqual(self.session.state, SessionState.READY)
+        self.assertEqual(self.client.shell_calls, [])
+        self.assertEqual(self.client.filesystem_calls, [])
+
+    def test_only_original_exit_request_id_can_pass_pending_intent_gate(self):
+        context_path = self.manifest_path.with_name(self.manifest_path.name + ".exit.json")
+        schedule_request_id = str(uuid.uuid4())
+        context_path.write_text(
+            json.dumps({
+                "schema_version": 1,
+                "session_id": self.manifest.session_id,
+                "state": "exit_scheduling",
+                "schedule_request_id": schedule_request_id,
+            }),
+            encoding="utf-8",
+        )
+
+        result = self.queue.execute(
+            "after 1000 [list Exit]",
+            user_authorized=True,
+            request_id=schedule_request_id,
+            exit_intent_request_id=schedule_request_id,
+            timeout_seconds=1,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.request_id, schedule_request_id)
+        self.assertEqual(self.session.state, SessionState.READY)
+
+        another_request_id = str(uuid.uuid4())
+        with self.assertRaises(CaptureStateTransitionError):
+            self.queue.submit(
+                "second Exit or unrelated operation",
+                user_authorized=True,
+                request_id=another_request_id,
+                exit_intent_request_id=another_request_id,
+            )
+        self.assertEqual(len(self.client.shell_calls), 2)
+
+    def test_read_result_is_read_only_and_does_not_require_live_session_state(self):
+        request = self.queue.submit("read original result", user_authorized=True)
+        self.session.mark_unknown(
+            "TEST_UNKNOWN",
+            "test read-only result access while Session is UNKNOWN",
+        )
+        self.manifest.save(self.manifest_path)
+        shell_calls_before = len(self.client.shell_calls)
+        filesystem_calls_before = len(self.client.filesystem_calls)
+
+        result = self.queue.read_result(request.request_id)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.success)
+        self.assertEqual(result.request_id, request.request_id)
+        self.assertEqual(self.session.state, SessionState.UNKNOWN)
+        self.assertEqual(self.manifest.active_request_id, request.request_id)
+        self.assertEqual(len(self.client.shell_calls), shell_calls_before)
+        new_actions = [
+            action for action, _payload in self.client.filesystem_calls[filesystem_calls_before:]
+        ]
+        self.assertTrue(new_actions)
+        self.assertTrue(all(action == "read" for action in new_actions))
 
     def test_execute_uploads_verifies_publishes_and_correlates_result(self):
         result = self.queue.execute(

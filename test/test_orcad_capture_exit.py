@@ -1,0 +1,691 @@
+# -*- coding: utf-8 -*-
+"""M3.2.6 Capture Exit coordinator tests; no Cadence process is started."""
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import sys
+import subprocess
+import tempfile
+import uuid
+import tkinter
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import TestCase
+from unittest.mock import patch
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "skill" / "orcad-capture" / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+import capture_exit  # noqa: E402
+
+from capture_exit import (  # noqa: E402
+    PREPARE_MAGIC, SCHEDULE_MAGIC, CaptureExitCoordinator,
+    CaptureExitError, CaptureExitOutcomeUnknown,
+    build_exit_prepare_script, build_exit_schedule_script,
+    parse_exit_prepare_report,
+)
+from capture_process import (  # noqa: E402
+    CaptureProcessAssessment, CaptureProcessCandidate, CaptureProcessDisposition,
+)
+from capture_requests import build_capture_request_envelope  # noqa: E402
+from capture_session import (  # noqa: E402
+    CaptureAuthorizationError, CaptureSession, SessionManifest, SessionState,
+)
+
+
+PID = 7312
+SESSION_ID = str(uuid.uuid4())
+NONCE = "N" * 48
+STARTED = "2026-11-18T05:00:00.000Z"
+EXE = r"D:\Cadence\SPB_17.2\tools\bin\capture.exe"
+VERSION = "17.2-2016"
+TCL = "8.6.0"
+
+
+def prepare_report(*, active=True):
+    name = base64.b64encode("Board-A".encode()).decode() if active else ""
+    return "\n".join([
+        PREPARE_MAGIC, "session_id=" + SESSION_ID, "expected_pid=" + str(PID),
+        "tcl_pid=" + str(PID), "tcl_version=" + TCL,
+        "session_present=1", "session_wrapper_rc=0", "active_design_rc=0",
+        "active_design_present=" + ("1" if active else "0"),
+        "active_design_name_rc=0", "active_design_name_b64=" + name,
+    ])
+
+
+class FakeQueue:
+    def __init__(self, *, unknown_schedule=False):
+        self.calls = []
+        self.unknown_schedule = unknown_schedule
+        self.read_result_calls = []
+        self.read_result_value = None
+        self.read_result_error = None
+
+    def read_result(self, request_id):
+        self.read_result_calls.append(request_id)
+        if self.read_result_error is not None:
+            raise self.read_result_error
+        return self.read_result_value
+
+    def execute(self, script, **kwargs):
+        self.calls.append((script, kwargs))
+        if self.unknown_schedule and SCHEDULE_MAGIC in script:
+            raise RuntimeError("transport lost after schedule publication")
+        if PREPARE_MAGIC in script:
+            value = prepare_report()
+        elif SCHEDULE_MAGIC in script:
+            value = "\n".join([
+                SCHEDULE_MAGIC, "session_id=" + SESSION_ID, "pid=" + str(PID),
+                "tcl_version=" + TCL, "exit_scheduled=1",
+            ])
+        else:
+            raise AssertionError("unexpected Tcl script")
+        return SimpleNamespace(success=True, value=value, request_id=kwargs["request_id"])
+
+
+class FakeInspector:
+    def __init__(self, *, exit_after=0, mismatch=False):
+        self.calls = 0
+        self.exit_after = exit_after
+        self.mismatch = mismatch
+
+    def inspect(self):
+        self.calls += 1
+        if self.calls > self.exit_after:
+            return ()
+        pid = PID + 1 if self.mismatch else PID
+        return (CaptureProcessCandidate(
+            pid=pid, executable_path=EXE, started_at_utc=STARTED,
+            file_version=VERSION,
+        ),)
+
+    def inspect_session(self, manifest):
+        candidates = self.inspect()
+        if not candidates:
+            return CaptureProcessAssessment(CaptureProcessDisposition.ORIGINAL_PROCESS_ABSENT, ())
+        item = candidates[0]
+        if item.pid == manifest.pid and not self.mismatch:
+            return CaptureProcessAssessment(CaptureProcessDisposition.OWNED_INSTANCE, candidates, item)
+        return CaptureProcessAssessment(CaptureProcessDisposition.PID_REUSED_OR_IDENTITY_MISMATCH, candidates)
+
+
+class ProcessExitRaceInspector:
+    """Simulate the process exiting between two inventory snapshots."""
+
+    def __init__(self):
+        self.identity_checks = 0
+        self.inventory_reads = 0
+        self.candidate = CaptureProcessCandidate(
+            pid=PID, executable_path=EXE, started_at_utc=STARTED,
+            file_version=VERSION,
+        )
+
+    def inspect_session(self, manifest):
+        self.identity_checks += 1
+        if self.identity_checks > 2:
+            return CaptureProcessAssessment(
+                CaptureProcessDisposition.ORIGINAL_PROCESS_ABSENT, ()
+            )
+        return CaptureProcessAssessment(
+            CaptureProcessDisposition.OWNED_INSTANCE,
+            (self.candidate,), self.candidate,
+        )
+
+    def inspect(self):
+        self.inventory_reads += 1
+        if self.inventory_reads == 1:
+            return (self.candidate,)
+        return ()
+
+
+class CaptureExitTests(TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.manifest_path = Path(self.temp.name) / "session.json"
+        self.manifest = SessionManifest(
+            session_id=SESSION_ID, startup_nonce=NONCE, state=SessionState.READY.value,
+            capture_exe_path=EXE, cap_autoload_dir=r"D:\Cadence\SPB_17.2\tools\capture\tclscripts\capAutoLoad",
+            expected_capture_version=VERSION, expected_tcl_version=TCL,
+            capture_version=VERSION, tcl_version=TCL, pid=PID,
+            process_started_at_utc=STARTED, remote_session_dir=r"C:\Temp\CaptureSession",
+            bridge_sha256=hashlib.sha256(b"bridge").hexdigest(),
+        )
+        self.session = CaptureSession(self.manifest)
+        self.queue = FakeQueue()
+        self.inspector = FakeInspector(exit_after=2)
+        self.coordinator = CaptureExitCoordinator(
+            self.queue, self.inspector, self.session, self.manifest_path,
+            sleep_fn=lambda _seconds: None,
+            monotonic_fn=iter([0, 0, 0, 0, 0, 0, 0]).__next__,
+        )
+
+    def test_prepare_requires_authorization_without_side_effects(self):
+        with self.assertRaises(CaptureAuthorizationError):
+            self.coordinator.prepare_exit()
+        self.assertEqual(self.queue.calls, [])
+        self.assertFalse(self.coordinator.context_path.exists())
+
+    def test_prepare_checks_tcl_pid_and_reports_active_design_read_only(self):
+        report = self.coordinator.prepare_exit(user_authorized=True)
+        self.assertTrue(report["active_design_present"])
+        self.assertEqual(report["active_design_name"], "Board-A")
+        self.assertTrue(self.coordinator.context_path.exists())
+        self.assertEqual(self.session.state, SessionState.READY)
+
+    def test_exit_prepare_tcl_probe_uses_dbo_session_wrapper_and_start_page_guard(self):
+        tcl = tkinter.Tcl()
+        if not tcl.eval("info patchlevel").startswith("8.6."):
+            self.skipTest("Tcl 8.6 is required")
+        runtime_pid = int(tcl.eval("pid"))
+        runtime_tcl_version = tcl.eval("info patchlevel")
+        tcl.eval("""
+            set ::DboSession_s_pDboSession mockSession
+            proc DboSession {args} { return "" }
+            proc mockSession {method args} {
+                if {$method eq "GetActiveDesign"} { return NULL }
+                error "unexpected Dbo method"
+            }
+        """)
+        raw = tcl.eval(build_exit_prepare_script(SESSION_ID, runtime_pid, runtime_tcl_version))
+        report = parse_exit_prepare_report(
+            raw, session_id=SESSION_ID, pid=runtime_pid, tcl_version=runtime_tcl_version
+        )
+        self.assertFalse(report["active_design_present"])
+        self.assertEqual(report["active_design_name"], "")
+
+    def test_prepare_report_rejects_wrong_pid(self):
+        value = prepare_report().replace("tcl_pid=" + str(PID), "tcl_pid=9999")
+        with self.assertRaises(Exception):
+            parse_exit_prepare_report(value, session_id=SESSION_ID, pid=PID, tcl_version=TCL)
+
+    def test_schedule_requires_both_exit_and_design_confirmation(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        with self.assertRaises(CaptureAuthorizationError):
+            self.coordinator.request_exit(user_authorized=True)
+        with self.assertRaises(CaptureAuthorizationError):
+            self.coordinator.request_exit(
+                user_authorized=True, design_saved_or_no_changes_confirmed=False
+            )
+        self.assertEqual(len(self.queue.calls), 1)
+
+    def test_process_exit_between_inventory_snapshots_does_not_become_unknown(self):
+        race_inspector = ProcessExitRaceInspector()
+        coordinator = CaptureExitCoordinator(
+            self.queue, race_inspector, self.session, self.manifest_path,
+            sleep_fn=lambda _seconds: None,
+            monotonic_fn=iter([0, 0, 0, 0, 0, 0, 0]).__next__,
+        )
+        coordinator.prepare_exit(user_authorized=True)
+        evidence = coordinator.request_exit(
+            user_authorized=True,
+            design_saved_or_no_changes_confirmed=True,
+            timeout_seconds=5,
+        )
+        self.assertTrue(evidence.process_absent)
+        self.assertEqual(self.session.state, SessionState.CLOSED)
+        self.assertEqual(race_inspector.inventory_reads, 2)
+        self.assertEqual(race_inspector.identity_checks, 2)
+
+    def test_invalid_exit_delay_is_rejected_before_schedule_or_unknown_state(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        with self.assertRaises(ValueError):
+            self.coordinator.request_exit(
+                user_authorized=True,
+                design_saved_or_no_changes_confirmed=True,
+                delay_ms=0,
+            )
+        self.assertEqual(self.session.state, SessionState.READY)
+        self.assertEqual(len(self.queue.calls), 1)
+        context = self.coordinator._load_context()
+        self.assertEqual(context["state"], "prepared")
+        self.assertNotIn("schedule_request_id", context)
+
+    def test_exit_schedules_after_result_then_confirms_original_pid_absent(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        evidence = self.coordinator.request_exit(
+            user_authorized=True, design_saved_or_no_changes_confirmed=True,
+            timeout_seconds=5,
+        )
+        self.assertEqual(evidence.pid, PID)
+        self.assertTrue(evidence.process_absent)
+        self.assertEqual(self.session.state, SessionState.CLOSED)
+        self.assertEqual(len(self.queue.calls), 2)
+        self.assertIn("after 1000 [list Exit]", self.queue.calls[1][0])
+
+    def test_ambiguous_schedule_is_unknown_and_never_retried(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        self.queue.unknown_schedule = True
+        with self.assertRaises(CaptureExitOutcomeUnknown):
+            self.coordinator.request_exit(
+                user_authorized=True, design_saved_or_no_changes_confirmed=True
+            )
+        self.assertEqual(self.session.state, SessionState.UNKNOWN)
+        with self.assertRaises(CaptureExitError):
+            self.coordinator.request_exit(
+                user_authorized=True, design_saved_or_no_changes_confirmed=True
+            )
+        self.assertEqual(len(self.queue.calls), 2)
+
+    def test_pid_identity_mismatch_blocks_exit(self):
+        self.inspector.mismatch = True
+        with self.assertRaises(Exception):
+            self.coordinator.prepare_exit(user_authorized=True)
+        self.assertEqual(self.queue.calls, [])
+
+    def test_scheduled_sidecar_commit_failure_marks_session_unknown(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        original_atomic_json = capture_exit._atomic_json
+
+        def fail_exit_scheduled_once(path, value):
+            if value.get("state") == "exit_scheduled":
+                raise OSError("simulated sidecar commit failure")
+            return original_atomic_json(path, value)
+
+        with patch("capture_exit._atomic_json", side_effect=fail_exit_scheduled_once):
+            with self.assertRaises(CaptureExitOutcomeUnknown):
+                self.coordinator.request_exit(
+                    user_authorized=True,
+                    design_saved_or_no_changes_confirmed=True,
+                    timeout_seconds=5,
+                )
+
+        self.assertEqual(self.session.state, SessionState.UNKNOWN)
+        persisted = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["state"], SessionState.UNKNOWN.value)
+        self.assertEqual(self.coordinator._load_context()["state"], "unknown")
+        self.assertEqual(len(self.queue.calls), 2)
+
+        with self.assertRaises(CaptureExitOutcomeUnknown):
+            self.coordinator.request_exit(
+                user_authorized=True,
+                design_saved_or_no_changes_confirmed=True,
+            )
+        self.assertEqual(len(self.queue.calls), 2)
+
+    def test_closed_manifest_remains_authoritative_if_sidecar_finalization_fails(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        original_atomic_json = capture_exit._atomic_json
+
+        def fail_closed_sidecar(path, value):
+            if value.get("state") == "closed":
+                raise OSError("simulated final sidecar commit failure")
+            return original_atomic_json(path, value)
+
+        with patch("capture_exit._atomic_json", side_effect=fail_closed_sidecar):
+            with self.assertRaises(CaptureExitError) as raised:
+                self.coordinator.request_exit(
+                    user_authorized=True,
+                    design_saved_or_no_changes_confirmed=True,
+                    timeout_seconds=5,
+                )
+
+        self.assertIn("confirmed CLOSED", str(raised.exception))
+        self.assertEqual(self.session.state, SessionState.CLOSED)
+        persisted = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["state"], SessionState.CLOSED.value)
+        # A stale exit_scheduled sidecar is non-retryable and does not contradict
+        # the persisted process-exit evidence in the Session Manifest.
+        self.assertEqual(self.coordinator._load_context()["state"], "exit_scheduled")
+        self.assertEqual(len(self.queue.calls), 2)
+
+    def test_stale_scheduling_intent_recovers_ready_manifest_to_unknown_without_retry(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        context = self.coordinator._load_context()
+        schedule_request_id = str(uuid.uuid4())
+        context["state"] = "exit_scheduling"
+        context["schedule_request_id"] = schedule_request_id
+        original_atomic_json = capture_exit._atomic_json
+        original_atomic_json(self.coordinator.context_path, context)
+
+        with self.assertRaises(CaptureExitOutcomeUnknown) as raised:
+            self.coordinator.request_exit(
+                user_authorized=True,
+                design_saved_or_no_changes_confirmed=True,
+            )
+
+        self.assertEqual(raised.exception.request_id, schedule_request_id)
+        self.assertEqual(self.session.state, SessionState.UNKNOWN)
+        persisted = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["state"], SessionState.UNKNOWN.value)
+        self.assertEqual(self.coordinator._load_context()["state"], "unknown")
+        self.assertEqual(len(self.queue.calls), 1)
+
+        with self.assertRaises(CaptureExitOutcomeUnknown):
+            self.coordinator.request_exit(
+                user_authorized=True,
+                design_saved_or_no_changes_confirmed=True,
+            )
+        self.assertEqual(len(self.queue.calls), 1)
+
+    def test_reconcile_exit_marks_closed_from_authoritative_pid_absence_after_restart(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        request_id = str(uuid.uuid4())
+        context = self.coordinator._load_context()
+        context["state"] = "exit_scheduling"
+        context["schedule_request_id"] = request_id
+        context["schedule_script_sha256"] = hashlib.sha256(
+            build_exit_schedule_script(SESSION_ID, PID, TCL).encode("utf-8")
+        ).hexdigest()
+        capture_exit._atomic_json(self.coordinator.context_path, context)
+
+        self.manifest.save(self.manifest_path)
+        restarted_session = CaptureSession(
+            SessionManifest.from_dict(self.manifest.to_dict())
+        )
+        self.inspector.exit_after = 1
+        restarted = CaptureExitCoordinator(
+            self.queue,
+            self.inspector,
+            restarted_session,
+            self.manifest_path,
+            sleep_fn=lambda _seconds: None,
+            monotonic_fn=iter([0, 0, 0, 0, 0, 0]).__next__,
+        )
+        lock_path = restarted.context_path.with_name(
+            restarted.context_path.name + ".lock"
+        )
+        lock_path.write_text("stale legacy lock from interrupted Host A", encoding="ascii")
+        execute_calls_before = len(self.queue.calls)
+
+        evidence = restarted.reconcile_exit(timeout_seconds=5)
+
+        self.assertTrue(evidence.process_absent)
+        self.assertEqual(restarted_session.state, SessionState.CLOSED)
+        persisted = SessionManifest.from_dict(
+            json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        )
+        self.assertEqual(persisted.state, SessionState.CLOSED.value)
+        self.assertEqual(restarted._load_context()["state"], "closed")
+        self.assertEqual(self.queue.read_result_calls, [])
+        self.assertEqual(len(self.queue.calls), execute_calls_before)
+        self.assertTrue(lock_path.exists())
+
+    def test_reconcile_exit_uses_original_receipt_when_process_is_still_running(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        request_id = str(uuid.uuid4())
+        context = self.coordinator._load_context()
+        context["state"] = "exit_scheduling"
+        context["schedule_request_id"] = request_id
+        context["schedule_script_sha256"] = hashlib.sha256(
+            build_exit_schedule_script(SESSION_ID, PID, TCL).encode("utf-8")
+        ).hexdigest()
+        capture_exit._atomic_json(self.coordinator.context_path, context)
+
+        self.manifest.state = SessionState.BUSY.value
+        self.manifest.active_request_id = request_id
+        self.manifest.save(self.manifest_path)
+        restarted_session = CaptureSession(
+            SessionManifest.from_dict(self.manifest.to_dict())
+        )
+        self.queue.read_result_value = SimpleNamespace(
+            request_id=request_id,
+            script_sha256=hashlib.sha256(
+                build_exit_schedule_script(SESSION_ID, PID, TCL).encode("utf-8")
+            ).hexdigest(),
+            success=True,
+            value="\n".join([
+                SCHEDULE_MAGIC,
+                "session_id=" + SESSION_ID,
+                "pid=" + str(PID),
+                "tcl_version=" + TCL,
+                "exit_scheduled=1",
+            ]),
+        )
+        self.inspector.exit_after = 2
+        restarted = CaptureExitCoordinator(
+            self.queue,
+            self.inspector,
+            restarted_session,
+            self.manifest_path,
+            sleep_fn=lambda _seconds: None,
+            monotonic_fn=iter([0, 0, 0, 0, 0, 0, 0]).__next__,
+        )
+        execute_calls_before = len(self.queue.calls)
+
+        evidence = restarted.reconcile_exit(timeout_seconds=5)
+
+        self.assertTrue(evidence.process_absent)
+        self.assertEqual(self.queue.read_result_calls, [request_id])
+        self.assertEqual(restarted_session.state, SessionState.CLOSED)
+        self.assertEqual(len(self.queue.calls), execute_calls_before)
+
+    def test_reconcile_exit_rejects_matching_receipt_text_with_wrong_script_hash(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        request_id = str(uuid.uuid4())
+        context = self.coordinator._load_context()
+        context["state"] = "exit_scheduling"
+        context["schedule_request_id"] = request_id
+        expected_script_sha256 = hashlib.sha256(
+            build_exit_schedule_script(SESSION_ID, PID, TCL).encode("utf-8")
+        ).hexdigest()
+        context["schedule_script_sha256"] = expected_script_sha256
+        capture_exit._atomic_json(self.coordinator.context_path, context)
+
+        self.manifest.state = SessionState.BUSY.value
+        self.manifest.active_request_id = request_id
+        self.manifest.save(self.manifest_path)
+        restarted_session = CaptureSession(
+            SessionManifest.from_dict(self.manifest.to_dict())
+        )
+        self.queue.read_result_value = SimpleNamespace(
+            request_id=request_id,
+            script_sha256="0" * 64,
+            success=True,
+            value="\n".join([
+                SCHEDULE_MAGIC,
+                "session_id=" + SESSION_ID,
+                "pid=" + str(PID),
+                "tcl_version=" + TCL,
+                "exit_scheduled=1",
+            ]),
+        )
+        self.inspector.exit_after = 2
+        restarted = CaptureExitCoordinator(
+            self.queue,
+            self.inspector,
+            restarted_session,
+            self.manifest_path,
+        )
+        execute_calls_before = len(self.queue.calls)
+
+        with self.assertRaises(CaptureExitOutcomeUnknown):
+            restarted.reconcile_exit(timeout_seconds=5)
+
+        self.assertEqual(restarted_session.state, SessionState.UNKNOWN)
+        persisted = SessionManifest.from_dict(
+            json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        )
+        self.assertEqual(persisted.state, SessionState.UNKNOWN.value)
+        self.assertEqual(persisted.active_request_id, request_id)
+        self.assertEqual(self.queue.read_result_calls, [request_id])
+        self.assertEqual(len(self.queue.calls), execute_calls_before)
+
+    def test_reconcile_exit_keeps_unknown_when_receipt_is_missing_and_pid_is_live(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+        request_id = str(uuid.uuid4())
+        context = self.coordinator._load_context()
+        context["state"] = "exit_scheduling"
+        context["schedule_request_id"] = request_id
+        context["schedule_script_sha256"] = hashlib.sha256(
+            build_exit_schedule_script(SESSION_ID, PID, TCL).encode("utf-8")
+        ).hexdigest()
+        capture_exit._atomic_json(self.coordinator.context_path, context)
+
+        self.manifest.state = SessionState.BUSY.value
+        self.manifest.active_request_id = request_id
+        self.manifest.save(self.manifest_path)
+        restarted_session = CaptureSession(
+            SessionManifest.from_dict(self.manifest.to_dict())
+        )
+        self.queue.read_result_value = None
+        self.inspector.exit_after = 2
+        restarted = CaptureExitCoordinator(
+            self.queue,
+            self.inspector,
+            restarted_session,
+            self.manifest_path,
+        )
+        execute_calls_before = len(self.queue.calls)
+
+        with self.assertRaises(CaptureExitOutcomeUnknown) as raised:
+            restarted.reconcile_exit(timeout_seconds=5)
+
+        self.assertEqual(raised.exception.request_id, request_id)
+        self.assertEqual(restarted_session.state, SessionState.UNKNOWN)
+        persisted = SessionManifest.from_dict(
+            json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        )
+        self.assertEqual(persisted.state, SessionState.UNKNOWN.value)
+        self.assertEqual(persisted.active_request_id, request_id)
+        self.assertEqual(restarted._load_context()["state"], "unknown")
+        self.assertEqual(len(self.queue.calls), execute_calls_before)
+
+    def test_exit_kernel_lock_is_released_after_holder_process_exits(self):
+        lock_context_path = Path(self.temp.name) / "restart-lock.exit.json"
+        holder = r'''
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from capture_exit import CaptureExitCoordinator
+
+coordinator = object.__new__(CaptureExitCoordinator)
+coordinator.context_path = Path(sys.argv[2])
+lock = coordinator._exclusive_exit_lock()
+lock.__enter__()
+print("LOCKED", flush=True)
+time.sleep(60)
+'''
+        process = subprocess.Popen(
+            [sys.executable, "-c", holder, str(SCRIPTS_DIR), str(lock_context_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            line = process.stdout.readline()
+            self.assertEqual(line.strip(), "LOCKED")
+            process.terminate()
+            process.wait(timeout=10)
+
+            coordinator = object.__new__(CaptureExitCoordinator)
+            coordinator.context_path = lock_context_path
+            with coordinator._exclusive_exit_lock():
+                pass
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+
+    def test_reentrant_exit_request_cannot_schedule_a_second_exit(self):
+        self.coordinator.prepare_exit(user_authorized=True)
+
+        class ReentrantQueue(FakeQueue):
+            def __init__(self):
+                super().__init__()
+                self.coordinator = None
+                self.reentrant_error = None
+                self.triggered = False
+
+            def execute(self, script, **kwargs):
+                if SCHEDULE_MAGIC in script and not self.triggered:
+                    self.triggered = True
+                    try:
+                        self.coordinator.request_exit(
+                            user_authorized=True,
+                            design_saved_or_no_changes_confirmed=True,
+                            timeout_seconds=5,
+                        )
+                    except Exception as exc:
+                        self.reentrant_error = exc
+                return super().execute(script, **kwargs)
+
+        reentrant_queue = ReentrantQueue()
+        reentrant_queue.coordinator = self.coordinator
+        self.coordinator.queue = reentrant_queue
+
+        evidence = self.coordinator.request_exit(
+            user_authorized=True,
+            design_saved_or_no_changes_confirmed=True,
+            timeout_seconds=5,
+        )
+
+        self.assertTrue(evidence.process_absent)
+        self.assertIsInstance(reentrant_queue.reentrant_error, CaptureExitError)
+        self.assertEqual(len(reentrant_queue.calls), 1)
+        self.assertEqual(len(self.queue.calls), 1)
+        self.assertEqual(self.session.state, SessionState.CLOSED)
+
+    def test_exit_script_has_no_save_discard_or_force_kill_commands(self):
+        script = build_exit_schedule_script(SESSION_ID, PID, TCL)
+        for forbidden in ("SaveDesign", "SaveAs", "Discard", "taskkill", "Stop-Process"):
+            self.assertNotIn(forbidden, script)
+        with self.assertRaises(CaptureExitError):
+            build_exit_schedule_script(SESSION_ID, PID, "8.6.0} ; Exit ; {")
+
+
+
+class CaptureExitBridgeOrderingTests(TestCase):
+    """Run the real Tcl Bridge under Tcl 8.6 and prove result publication precedes Exit."""
+
+    def test_bridge_publishes_schedule_result_before_delayed_exit_callback(self):
+        scripts = Path(__file__).resolve().parents[1] / "skill" / "orcad-capture" / "assets" / "bridge"
+        bridge_path = scripts / "capture_bridge.tcl"
+        if not bridge_path.is_file():
+            self.skipTest("Capture Tcl Bridge source is unavailable")
+        try:
+            tcl = tkinter.Tcl()
+            if not tcl.eval("info patchlevel").startswith("8.6."):
+                self.skipTest("Tcl 8.6 is required")
+        except Exception as exc:
+            self.skipTest("Tcl runtime is unavailable: {}".format(exc))
+
+        with tempfile.TemporaryDirectory() as root:
+            session_dir = Path(root)
+            for name in ("requests", "running", "results"):
+                (session_dir / name).mkdir()
+            request_id = str(uuid.uuid4())
+            runtime_pid = int(tcl.eval("pid"))
+            runtime_tcl_version = tcl.eval("info patchlevel")
+            envelope, _digest, _crc = build_capture_request_envelope(
+                SESSION_ID, NONCE, request_id,
+                build_exit_schedule_script(SESSION_ID, runtime_pid, runtime_tcl_version, delay_ms=250),
+            )
+            (session_dir / "requests" / (request_id + ".req")).write_bytes(envelope)
+
+            tcl.call("source", str(bridge_path))
+            tcl.call("set", "::test_result_dir", str(session_dir / "results"))
+            tcl.call("set", "::test_request_id", request_id)
+            tcl.eval("""
+                set ::done ""
+                set ::exit_result_present 0
+                proc Exit {} {
+                    set result_path [file join $::test_result_dir "$::test_request_id.result"]
+                    set ::exit_result_present [file exists $result_path]
+                    set ::done "exit_called"
+                }
+                after 3000 {
+                    if {$::done eq ""} { set ::done "timeout" }
+                }
+            """)
+            tcl.call(
+                "::AirBridgeSkill::bootstrap", SESSION_ID, NONCE, str(session_dir),
+                hashlib.sha256(b"bridge fixture").hexdigest(),
+            )
+            tcl.eval("vwait ::done")
+            self.assertEqual(tcl.getvar("done"), "exit_called")
+            self.assertEqual(tcl.getvar("exit_result_present"), 1)
+            self.assertTrue((session_dir / "results" / (request_id + ".result")).is_file())
+
+
+if __name__ == "__main__":
+    import unittest
+    unittest.main()
