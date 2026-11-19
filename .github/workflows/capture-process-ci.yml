@@ -9,6 +9,14 @@ on:
       - "test/test_orcad_capture_*.py"
       - "doc/README.md"
       - ".github/workflows/capture-process-ci.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "skill/orcad-capture/**"
+      - "test/test_orcad_capture_*.py"
+      - "doc/README.md"
+      - ".github/workflows/capture-process-ci.yml"
   workflow_dispatch:
 
 permissions:
