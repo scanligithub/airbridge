@@ -52,7 +52,7 @@ The client rejects non-loopback API origins so that the Bearer token cannot be s
 ## Current code
 
 - `scripts/airbridge_client.py` — standard-library HTTP client. It sends Bearer-authenticated JSON requests to the loopback API, validates JSON objects, preserves HTTP 202 acceptance responses, refuses redirects, and never automatically retries. A transport error after submission is an **unknown outcome**; reconcile using the original identity before deciding what to do next.
-- `scripts/capture_session.py` — non-secret configuration, Session Manifest persistence, process / READY evidence structures and the allowed state transitions. Capture-specific process and application decisions remain in this Skill.
+- `scripts/capture_session.py` — non-secret configuration, Session Manifest persistence, process / READY / exit evidence structures and guarded state transitions. Closing requires `ProcessExitEvidence` matching the exact original Capture PID and process start time, an explicit process-absent result, and a UTC check timestamp. This is an evidence contract only; remote process inspection is not wired yet.
 - `../../test/test_orcad_capture_skill.py` — local mock-HTTP and state-model tests.
 
 ## Session and safety rules
@@ -67,7 +67,7 @@ Before a future implementation may mark a session READY, it must match the Sessi
 
 An unrecognized or manually launched Capture process is not owned by this Skill. Never inject a Hook into it, close it, or start a second instance merely because the existing process cannot be identified.
 
-Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. This foundation only allows a state transition into `closing` when the caller explicitly supplies authorization; it does not itself send an Exit command.
+Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. This foundation only allows a state transition into `closing` when the caller explicitly supplies authorization; it does not itself send an Exit command. A session can become `closed` only with structured evidence matching the original PID and original process start time, confirming that process is absent at a recorded UTC check time.
 
 ## Configuration
 
