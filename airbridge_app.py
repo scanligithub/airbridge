@@ -1334,6 +1334,50 @@ class SerialWorker(threading.Thread):
           json.dumps({"success": True, "tasks": tasks}, ensure_ascii=False).encode("utf-8"),
       )
 
+    elif frame.frame_type == FrameType.SHELL_TASK_GET:
+      # Read-only query: return the current state of an existing Shell task.
+      try:
+        req = json.loads(frame.payload.decode("utf-8", errors="replace"))
+      except Exception:
+        req = {}
+      request_id = req.get("request_id")
+      try:
+        request_id = str(uuid.UUID(request_id))
+      except (ValueError, TypeError, AttributeError):
+        self.sig.sig_rx_log.emit("WARN", "Shell task query 缺少有效 request_id，已忽略")
+        return
+
+      task_id = req.get("task_id", "")
+      try:
+        result = self.shell_engine.get_task_result(task_id)
+      except Exception as exc:
+        result = {
+            "success": False,
+            "request_state": "unknown",
+            "error": {"code": "SHELL_TASK_QUERY_ERROR", "message": str(exc)},
+        }
+
+      if result.get("success") is False and result.get("error") == "任务不存在":
+        result["request_state"] = "unknown"
+      elif result.get("finished") is False:
+        result["request_state"] = "accepted"
+      else:
+        result.setdefault("request_state", "completed")
+      result["request_id"] = request_id
+      try:
+        response_payload = encode_bounded_json_payload(result, MAX_PAYLOAD_LEN)
+      except RequestTrackerError as exc:
+        response_payload = encode_bounded_json_payload({
+            "request_id": request_id,
+            "success": False,
+            "request_state": "failed",
+            "error": {
+                "code": "RESULT_ENCODING_ERROR",
+                "message": str(exc),
+            },
+        }, MAX_PAYLOAD_LEN)
+      self.send_frame(FrameType.SHELL_RESULT, response_payload)
+
     elif frame.frame_type == FrameType.SHELL_OUTPUT:
       # 对端推来的实时输出，转成日志显示
       try:
@@ -1355,7 +1399,10 @@ class SerialWorker(threading.Thread):
             else "failed"
             if obj.get("request_state") == "failed" or obj.get("success") is False and obj.get("error")
             else "accepted"
-            if obj.get("status") == "running" and obj.get("async") is True
+            if (
+                obj.get("finished") is False
+                or obj.get("status") == "running" and obj.get("async") is True
+            )
             else "completed"
         )
         if request_id and self.request_tracker.complete(
@@ -1805,7 +1852,11 @@ class AntigravityIPCServer:
           if path == "/api/v1/message":
             return "runtime.message"
           if path.startswith("/api/v1/fs/"):
-            return "filesystem.write"
+            fs_action = path.rsplit("/", 1)[-1]
+            if fs_action in ("drives", "ls", "read", "stat", "pull"):
+              return "filesystem.read"
+            if fs_action in ("write", "mkdir", "rm", "mv", "exec"):
+              return "filesystem.write"
         # Fail closed for new or unclassified /api routes. An explicit
         # administrator scope is required until the route is classified.
         return "api.admin"
@@ -1819,7 +1870,12 @@ class AntigravityIPCServer:
         self._audit_decision = "denied"
         self._audit_reason = None
         self._audit_request_id = (
-            path.rsplit("/", 1)[-1] if path.startswith("/api/v1/requests/") else None
+            path.rsplit("/", 1)[-1]
+            if (
+                path.startswith("/api/v1/requests/")
+                or path.startswith("/api/v1/shell/tasks/by-request/")
+            )
+            else None
         )
         self._principal = None
 
@@ -1902,7 +1958,14 @@ class AntigravityIPCServer:
           }, extra_headers={"Retry-After": str(retry_after)})
           return False
 
-        if required_scope == "request.read" and not security_ref.can_read_request(
+        request_owner_required = (
+            required_scope == "request.read"
+            or (
+                method == "GET"
+                and path.startswith("/api/v1/shell/tasks/by-request/")
+            )
+        )
+        if request_owner_required and not security_ref.can_read_request(
             self._audit_request_id or "", principal
         ):
           # Return the same result for unknown and foreign request IDs.
@@ -1972,6 +2035,118 @@ class AntigravityIPCServer:
               else 200
           )
           self._reply_json(status_code, result)
+        elif path.startswith("/api/v1/shell/tasks/by-request/"):
+          request_id = path.rsplit("/", 1)[-1]
+          self._set_request_audit(request_id)
+          try:
+            original = worker_ref.request_tracker.get(request_id)
+          except RequestTrackerError as exc:
+            self._reply_json(400, {"error": str(exc)})
+            return
+
+          if original.get("state") == "not_found" or original.get("kind") != "shell.exec":
+            self._reply_json(404, {
+                "request_id": request_id,
+                "state": "not_found",
+                "error": "Shell request is unknown or expired",
+            })
+            return
+
+          original_state = original.get("state")
+          if original_state == "pending":
+            self._reply_json(202, original)
+            return
+          if original_state == "unknown":
+            self._reply_json(503, original)
+            return
+          if original_state == "failed":
+            self._reply_json(502, original)
+            return
+
+          original_result = original.get("result") or {}
+          task_id = original_result.get("task_id")
+          if not task_id:
+            self._reply_json(409, {
+                "request_id": request_id,
+                "state": "not_ready",
+                "error": "The Shell request has no task_id to query yet.",
+            })
+            return
+
+          if not worker_ref.is_serial_connected():
+            self._reply_json(503, {
+                "request_id": request_id,
+                "state": "unavailable",
+                "error": "serial link is disconnected; Shell task status was not queried",
+            })
+            return
+
+          peer_status = worker_ref.get_session_peer_status()
+          if (
+              peer_status.get("state") != "negotiated"
+              or "request.correlation" not in peer_status.get("features", [])
+              or "shell.task.result-query" not in peer_status.get("features", [])
+          ):
+            self._reply_json(503, {
+                "request_id": request_id,
+                "state": "unsupported",
+                "error": "peer has not confirmed shell.task.result-query capability",
+                "peer_state": peer_status.get("state"),
+                "peer_features": peer_status.get("features", []),
+            })
+            return
+
+          query_id = str(uuid.uuid4())
+          try:
+            security_ref.bind_request_owner(query_id, self._principal.agent_id)
+            worker_ref.request_tracker.register(query_id, "shell.task.get")
+          except (AgentSecurityError, RequestTrackerError) as exc:
+            security_ref.release_request_owner(query_id, self._principal.agent_id)
+            self._reply_json(503, {
+                "request_id": request_id,
+                "state": "not_submitted",
+                "error": str(exc),
+            })
+            return
+
+          try:
+            worker_ref.send_frame(
+                FrameType.SHELL_TASK_GET,
+                json.dumps({
+                    "request_id": query_id,
+                    "task_id": task_id,
+                }, ensure_ascii=False).encode("utf-8"),
+            )
+          except Exception as exc:
+            worker_ref.request_tracker.fail(query_id, str(exc), state="unknown")
+            query_result = worker_ref.request_tracker.get(query_id)
+            self._reply_json(503, {
+                "request_id": request_id,
+                "query_request_id": query_id,
+                "task_id": task_id,
+                "state": "unknown",
+                "error": query_result.get("error") or str(exc),
+            })
+            return
+
+          query_result = worker_ref.request_tracker.wait(query_id, 5.0)
+          query_state = query_result.get("state")
+          status_code = (
+              200 if query_state == "completed"
+              else 202 if query_state in ("pending", "accepted")
+              else 503 if query_state == "unknown"
+              else 502 if query_state == "failed"
+              else 404
+          )
+          self._reply_json(status_code, {
+              "request_id": request_id,
+              "query_request_id": query_id,
+              "task_id": task_id,
+              "state": query_state,
+              "result": query_result.get("result"),
+              "error": query_result.get("error"),
+          })
+
         elif path == "/api/v1/eda/versions":
           res = worker_ref.send_fs_request_sync(
               {"action": "eda_versions"}, timeout=10.0

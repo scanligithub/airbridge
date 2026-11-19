@@ -41,6 +41,7 @@ class FrameType:
     SHELL_KILL      = 0x33   # 强制结束任务
     SHELL_LIST      = 0x34   # 列出当前任务
     SHELL_LIST_RESP = 0x35   # 列表响应
+    SHELL_TASK_GET  = 0x36   # 查询指定 Shell 任务的最终状态和输出
 
 class ABFPFrame:
     def __init__(self, frame_type: int, seq_id: int, payload: bytes = b''):

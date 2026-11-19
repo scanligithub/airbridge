@@ -22,14 +22,27 @@ class FakeWorker:
         self.auto_complete = True
         self.raise_on_send = False
         self.frames = []
+        self.shell_task_finished = True
+        self.shell_task_missing = False
 
     def is_serial_connected(self):
         return self.connected
 
+    def send_fs_request_sync(self, req_dict, timeout=15.0):
+        return {
+            "req_id": req_dict.get("req_id", 1),
+            "action": req_dict.get("action", ""),
+            "success": True,
+            "exists": True,
+            "is_dir": False,
+            "size": 5,
+            "content": "hello",
+        }
+
     def get_session_peer_status(self):
         return {
             "state": "negotiated",
-            "features": ["handshake", "request.correlation", "request.deduplication"],
+            "features": ["handshake", "request.correlation", "request.deduplication", "shell.task.result-query"],
         }
 
     def send_frame(self, frame_type, payload=b""):
@@ -65,6 +78,37 @@ class FakeWorker:
                 response_state = "accepted"
             self.request_tracker.complete(
                 request_id, result, state=response_state
+            )
+        elif frame_type == FrameType.SHELL_TASK_GET:
+            if self.shell_task_missing:
+                self.request_tracker.complete(
+                    request_id,
+                    {
+                        "request_id": request_id,
+                        "success": False,
+                        "error": "任务不存在",
+                        "request_state": "unknown",
+                    },
+                    state="unknown",
+                )
+                return
+            finished = self.shell_task_finished
+            result = {
+                "request_id": request_id,
+                "success": True,
+                "task_id": data["task_id"],
+                "finished": finished,
+                "killed": False,
+                "exit_code": 0 if finished else None,
+                "stdout": "complete async shell output" if finished else "partial output",
+                "stderr": "",
+                "command": "Write-Output hello",
+                "cwd": r"E:\\_airbridge_temp",
+            }
+            self.request_tracker.complete(
+                request_id,
+                result,
+                state="completed" if finished else "accepted",
             )
 
 
@@ -130,6 +174,63 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             self.last_headers = dict(exc.headers.items())
             return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def test_rfs_read_and_write_actions_require_separate_scopes(self):
+        read_token = self.security.issue_token(
+            "rfs-reader",
+            ["filesystem.read"],
+        )
+        write_token = self.security.issue_token(
+            "rfs-writer",
+            ["filesystem.write"],
+        )
+
+        read_status, read_result = self._request_json(
+            "POST",
+            "/api/v1/fs/read",
+            {"path": r"E:\_airbridge_temp\probe.txt"},
+            token=read_token["token"],
+        )
+        self.assertEqual(read_status, 200, read_result)
+        self.assertTrue(read_result["success"])
+
+        read_denied_status, read_denied = self._request_json(
+            "POST",
+            "/api/v1/fs/write",
+            {
+                "path": r"E:\_airbridge_temp\probe.txt",
+                "content": "should not write",
+            },
+            token=read_token["token"],
+        )
+        self.assertEqual(read_denied_status, 403, read_denied)
+        self.assertEqual(
+            read_denied["error"]["required_scope"],
+            "filesystem.write",
+        )
+
+        write_denied_status, write_denied = self._request_json(
+            "POST",
+            "/api/v1/fs/read",
+            {"path": r"E:\_airbridge_temp\probe.txt"},
+            token=write_token["token"],
+        )
+        self.assertEqual(write_denied_status, 403, write_denied)
+        self.assertEqual(
+            write_denied["error"]["required_scope"],
+            "filesystem.read",
+        )
+
+        write_status, write_result = self._request_json(
+            "POST",
+            "/api/v1/fs/write",
+            {
+                "path": r"E:\_airbridge_temp\probe.txt",
+                "content": "write allowed",
+            },
+            token=write_token["token"],
+        )
+        self.assertEqual(write_status, 200, write_result)
 
     def test_eda_post_returns_correlated_structured_result(self):
         status, body = self._request_json(
@@ -262,6 +363,134 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(poll_status, 202, polled)
         self.assertEqual(polled["state"], "accepted")
         self.assertEqual(polled["result"]["status"], "running")
+
+    def test_async_shell_task_result_can_be_queried_by_original_request_id(self):
+        submit_status, accepted = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "command": "Write-Output hello",
+                "timeout": 30,
+                "async": True,
+            },
+        )
+        self.assertEqual(submit_status, 202, accepted)
+        self.assertEqual(accepted["state"], "accepted")
+        original_request_id = accepted["request_id"]
+
+        query_status, task = self._request_json(
+            "GET",
+            f"/api/v1/shell/tasks/by-request/{original_request_id}",
+        )
+        self.assertEqual(query_status, 200, task)
+        self.assertEqual(task["request_id"], original_request_id)
+        self.assertEqual(task["state"], "completed")
+        self.assertEqual(task["result"]["task_id"], "shell-http-test")
+        self.assertEqual(task["result"]["stdout"], "complete async shell output")
+
+        sent_type, sent_payload = self.worker.frames[-1]
+        self.assertEqual(sent_type, FrameType.SHELL_TASK_GET)
+        query = json.loads(sent_payload.decode("utf-8"))
+        self.assertEqual(query["task_id"], "shell-http-test")
+        self.assertEqual(query["request_id"], task["query_request_id"])
+
+        query_poll_status, query_poll = self._request_json(
+            "GET", f"/api/v1/requests/{task['query_request_id']}"
+        )
+        self.assertEqual(query_poll_status, 200, query_poll)
+        self.assertEqual(query_poll["kind"], "shell.task.get")
+        self.assertTrue(query_poll["result"]["finished"])
+
+    def test_async_shell_task_query_reports_missing_task_as_unknown(self):
+        submit_status, accepted = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "command": "Write-Output hello",
+                "timeout": 30,
+                "async": True,
+            },
+        )
+        self.assertEqual(submit_status, 202, accepted)
+        self.worker.shell_task_missing = True
+
+        query_status, task = self._request_json(
+            "GET",
+            f"/api/v1/shell/tasks/by-request/{accepted['request_id']}",
+        )
+        self.assertEqual(query_status, 503, task)
+        self.assertEqual(task["state"], "unknown")
+        self.assertEqual(task["result"]["request_state"], "unknown")
+
+    def test_async_shell_task_query_reports_running_state(self):
+        self.worker.shell_task_finished = False
+        submit_status, accepted = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "command": "Start-LongRunningTask",
+                "timeout": 120,
+                "async": True,
+            },
+        )
+        self.assertEqual(submit_status, 202, accepted)
+
+        query_status, task = self._request_json(
+            "GET",
+            f"/api/v1/shell/tasks/by-request/{accepted['request_id']}",
+        )
+        self.assertEqual(query_status, 202, task)
+        self.assertEqual(task["state"], "accepted")
+        self.assertFalse(task["result"]["finished"])
+
+    def test_async_shell_task_query_is_restricted_to_request_owner(self):
+        submit_status, accepted = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "command": "Write-Output private",
+                "timeout": 30,
+                "async": True,
+            },
+        )
+        self.assertEqual(submit_status, 202, accepted)
+        other = self.security.issue_token(
+            "other-agent",
+            ["shell.read", "request.read"],
+        )
+
+        query_status, result = self._request_json(
+            "GET",
+            f"/api/v1/shell/tasks/by-request/{accepted['request_id']}",
+            token=other["token"],
+        )
+        self.assertEqual(query_status, 404, result)
+        self.assertEqual(result["state"], "not_found")
+        self.assertEqual(self.worker.frames[-1][0], FrameType.SHELL_EXEC)
+
+    def test_async_shell_task_query_requires_peer_capability(self):
+        submit_status, accepted = self._request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            {
+                "command": "Write-Output hello",
+                "timeout": 30,
+                "async": True,
+            },
+        )
+        self.assertEqual(submit_status, 202, accepted)
+        self.worker.get_session_peer_status = lambda: {
+            "state": "negotiated",
+            "features": ["handshake", "request.correlation", "request.deduplication"],
+        }
+
+        query_status, result = self._request_json(
+            "GET",
+            f"/api/v1/shell/tasks/by-request/{accepted['request_id']}",
+        )
+        self.assertEqual(query_status, 503, result)
+        self.assertEqual(result["state"], "unsupported")
+        self.assertEqual(self.worker.frames[-1][0], FrameType.SHELL_EXEC)
 
     def test_caller_supplied_request_id_is_honored_and_not_submitted_twice(self):
         request_id = str(uuid.uuid4())

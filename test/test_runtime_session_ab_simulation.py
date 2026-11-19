@@ -95,6 +95,39 @@ def _connect_duplex(peer_a, peer_b):
 
 
 class RuntimeSessionABSimulationTests(unittest.TestCase):
+    def test_shell_task_result_query_round_trips_between_peers(self):
+        host_a = _new_worker()
+        host_b = _new_worker()
+        host_b.shell_engine = SimpleNamespace(
+            get_task_result=lambda task_id: {
+                "success": True,
+                "task_id": task_id,
+                "finished": True,
+                "killed": False,
+                "exit_code": 0,
+                "stdout": "finished output",
+                "stderr": "",
+                "command": "Write-Output hello",
+                "cwd": r"E:\\_airbridge_temp",
+            }
+        )
+        _connect_duplex(host_a, host_b)
+
+        request_id = str(uuid.uuid4())
+        host_a.request_tracker.register(request_id, "shell.task.get")
+        host_a.send_frame(
+            FrameType.SHELL_TASK_GET,
+            json.dumps({
+                "request_id": request_id,
+                "task_id": "shell-test-task",
+            }).encode("utf-8"),
+        )
+
+        result = host_a.request_tracker.get(request_id)
+        self.assertEqual(result["state"], "completed", result)
+        self.assertEqual(result["result"]["task_id"], "shell-test-task")
+        self.assertEqual(result["result"]["stdout"], "finished output")
+
     def test_both_peers_initiate_and_complete_correlated_handshakes(self):
         host_a = _new_worker()
         host_b = _new_worker()
@@ -117,10 +150,10 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertEqual(result_a["state"], "negotiated", result_a)
         self.assertEqual(result_b["state"], "negotiated", result_b)
         self.assertEqual(
-            result_a["peer_capabilities"]["features"], ["handshake", "request.correlation", "request.deduplication"]
+            result_a["peer_capabilities"]["features"], ["handshake", "request.correlation", "request.deduplication", "shell.task.result-query"]
         )
         self.assertEqual(
-            result_b["peer_capabilities"]["features"], ["handshake", "request.correlation", "request.deduplication"]
+            result_b["peer_capabilities"]["features"], ["handshake", "request.correlation", "request.deduplication", "shell.task.result-query"]
         )
 
         status_a = host_a.get_session_peer_status()
