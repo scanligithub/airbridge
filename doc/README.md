@@ -5,7 +5,7 @@
 ## 当前设计基线
 
 | [ADR-006：专业软件生命周期由 Agent Skill 自主掌握](ADR-006_Skill自主掌握专业软件生命周期.md) | 修订旧 Runtime Adapter / EDA Engine 的专业软件生命周期所有权；明确双端同一 AirBridge.exe、Skill 使用通用 Shell / RFS / 文件传输 | 2026-11-18 已采纳；M3 迁移按阶段实施 |
-| [M3.2：Capture Skill 自主生命周期实施设计 v1.0](M3.2_Capture_Skill_自主生命周期实施设计_v1.0.md) | Capture Skill 的目录结构、Session 状态机、Tcl Bridge、进程发现 / 启动、打开 / 保存 / 退出、安全边界和 M3.2 验收 | M3.2.1 Session / HTTP 基础已合并至 main（PR #8）；M3.2.2 只读进程盘点：PR #9（Ready for review）；M3.2.3 受控启动与 Bridge READY：PR #10（Draft，已同步 PR #9 最新基线）；M3.2.4 Tcl 请求 / 结果队列：PR #11（Draft，已同步 PR #10 最新基线；16 KiB 分块 RFS、Tcl 8.6 解释器测试，Hosted CI 曾在 Python 3.10/3.11/3.12 各 83 项通过）；M3.2.5 OPJ 打开与 Dbo 只读检查：PR #12（Draft，Tcl 8.6 + Mock Dbo 测试，96 项/版本）；真实 Capture 17.2 的 Dbo API 和 GUI 行为仍须 Host B 验收；保存 / 退出尚未完成 |
+| [M3.2：Capture Skill 自主生命周期实施设计 v1.0](M3.2_Capture_Skill_自主生命周期实施设计_v1.0.md) | Capture Skill 的目录结构、Session 状态机、Tcl Bridge、进程发现 / 启动、打开 / 保存 / 退出、安全边界和 M3.2 验收 | M3.2.1 Session / HTTP 基础已合并至 main（PR #8）；M3.2.2 只读进程盘点：PR #9（Ready for review）；M3.2.3 受控启动与 Bridge READY：PR #10（Draft，已同步 PR #9 最新基线）；M3.2.4 Tcl 请求 / 结果队列：PR #11（Draft，已同步 PR #10 最新基线；16 KiB 分块 RFS、Tcl 8.6 解释器测试，原 Hosted CI 在 Python 3.10/3.11/3.12 各 83 项通过）；M3.2.5 OPJ 打开与 Dbo 只读检查：PR #12（Draft，已同步 PR #11 最新基线；Tcl 8.6 + Mock Dbo 测试，原 Hosted CI 每个 Python 版本 96 项通过；真实 Dbo API / GUI 行为仍需按版本进行 Host B 验收）；保存 / 退出尚未完成 |
 | 文档 | 内容 | 状态 |
 |---|---|---|
 | [AirBridge 代码边界审计与渐进迁移计划 v1.0](AirBridge_代码边界审计与渐进迁移计划_v1.0.md) | 基于当前代码审计 Core / Adapter / Skill 混合点，提出 Capture Session 生命周期抽取、Polyfill 解耦、显式 Profile 路由与 Session 协议实施顺序 | 2026-11-13 静态审计完成；M1 已合并并实机验收；后续职责迁移渐进推进 |
