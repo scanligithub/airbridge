@@ -11,10 +11,11 @@ from tools import airbridge_agent_admin
 
 
 class _FakeSecurityStore:
-    def __init__(self, *, existing=None):
+    def __init__(self, *, existing=None, fail_revoke=False):
         self.existing = existing or []
         self.issued = None
         self.revoked = []
+        self.fail_revoke = fail_revoke
 
     def list_tokens(self, _agent_id):
         return self.existing
@@ -31,13 +32,18 @@ class _FakeSecurityStore:
 
     def revoke_token(self, token_id):
         self.revoked.append(token_id)
+        if self.fail_revoke:
+            raise RuntimeError("security store unavailable")
         return True
 
 
 class _FakeCredentialStore:
-    def __init__(self, *, fail_store=False):
+    def __init__(self, *, fail_store=False, fail_load=False, fail_delete=False):
         self.values = {}
         self.fail_store = fail_store
+        self.fail_load = fail_load
+        self.fail_delete = fail_delete
+        self.delete_calls = []
 
     def store(self, agent_id, token):
         if self.fail_store:
@@ -45,9 +51,14 @@ class _FakeCredentialStore:
         self.values[agent_id] = token
 
     def load(self, agent_id):
+        if self.fail_load:
+            raise airbridge_agent_admin.CredentialStoreError("vault readback failed")
         return self.values[agent_id]
 
     def delete(self, agent_id):
+        self.delete_calls.append(agent_id)
+        if self.fail_delete:
+            raise airbridge_agent_admin.CredentialStoreError("vault delete failed")
         return self.values.pop(agent_id, None) is not None
 
 
@@ -100,6 +111,38 @@ class AgentProvisioningTests(unittest.TestCase):
             with self.assertRaises(airbridge_agent_admin.CredentialStoreError):
                 airbridge_agent_admin._provision_agent(security, self._args())
         self.assertEqual(security.revoked, ["token-id"])
+
+    def test_rollback_attempts_local_cleanup_when_server_revoke_fails(self):
+        security = _FakeSecurityStore(fail_revoke=True)
+        credentials = _FakeCredentialStore(fail_load=True)
+        with patch.object(airbridge_agent_admin.os, "name", "nt"), patch.object(
+            airbridge_agent_admin, "WindowsCredentialStore", return_value=credentials
+        ):
+            with self.assertRaisesRegex(
+                airbridge_agent_admin.CredentialStoreError,
+                "rollback incomplete: server credential revocation",
+            ):
+                airbridge_agent_admin._provision_agent(security, self._args())
+
+        self.assertEqual(security.revoked, ["token-id"])
+        self.assertEqual(credentials.delete_calls, ["opencode"])
+        self.assertEqual(credentials.values, {})
+
+    def test_rollback_reports_local_cleanup_failure(self):
+        security = _FakeSecurityStore()
+        credentials = _FakeCredentialStore(fail_load=True, fail_delete=True)
+        with patch.object(airbridge_agent_admin.os, "name", "nt"), patch.object(
+            airbridge_agent_admin, "WindowsCredentialStore", return_value=credentials
+        ):
+            with self.assertRaisesRegex(
+                airbridge_agent_admin.CredentialStoreError,
+                "rollback incomplete: local credential deletion",
+            ):
+                airbridge_agent_admin._provision_agent(security, self._args())
+
+        self.assertEqual(security.revoked, ["token-id"])
+        self.assertEqual(credentials.delete_calls, ["opencode"])
+        self.assertIn("opencode", credentials.values)
 
     def test_provision_refuses_to_replace_existing_active_credential(self):
         security = _FakeSecurityStore(existing=[{"enabled": True}])
