@@ -52,6 +52,17 @@ class _FakeCredentialStore:
 
 
 class AgentProvisioningTests(unittest.TestCase):
+    def test_legacy_issue_requires_explicit_token_reveal_opt_in(self):
+        args = airbridge_agent_admin.build_parser().parse_args([
+            "issue", "--agent-id", "opencode", "--scope", "runtime.read"
+        ])
+        self.assertFalse(args.reveal_token)
+        explicit = airbridge_agent_admin.build_parser().parse_args([
+            "issue", "--agent-id", "opencode", "--scope", "runtime.read",
+            "--reveal-token",
+        ])
+        self.assertTrue(explicit.reveal_token)
+
     def _args(self, **overrides):
         values = {
             "agent_id": "OpenCode",
