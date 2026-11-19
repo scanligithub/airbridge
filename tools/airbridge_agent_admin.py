@@ -27,8 +27,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    issue = sub.add_parser("issue", help="Legacy: issue a visible one-time Bearer token.")
+    issue = sub.add_parser("issue", help="Legacy: issue a one-time Bearer token (explicit reveal required).")
     issue.add_argument("--agent-id", required=True)
+    issue.add_argument(
+        "--reveal-token", action="store_true",
+        help="Explicitly allow displaying the secret once; prefer the tokenless provision command.",
+    )
     issue.add_argument("--scope", action="append", required=True, choices=sorted(VALID_SCOPES))
     issue.add_argument("--label", default="")
     issue.add_argument("--expires-days", type=int, default=90)
@@ -103,6 +107,10 @@ def main() -> int:
     store = AgentSecurityStore.from_env()
     try:
         if args.command == "issue":
+            if not args.reveal_token:
+                raise CredentialStoreError(
+                    "Token display is disabled by default; use 'provision' or explicitly pass --reveal-token"
+                )
             result = store.issue_token(
                 args.agent_id,
                 args.scope,
