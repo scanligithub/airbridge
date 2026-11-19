@@ -62,6 +62,11 @@ def _provision_agent(store: AgentSecurityStore, args: argparse.Namespace) -> dic
             "Zero-Touch provisioning currently requires Windows Credential Manager"
         )
     credentials = WindowsCredentialStore()
+    existing = store.list_tokens(args.agent_id)
+    if any(item["enabled"] for item in existing):
+        raise CredentialStoreError(
+            "Agent already has an active credential; revoke it before provisioning a replacement"
+        )
     scopes = args.scope or DEFAULT_AGENT_SCOPES
     issued = store.issue_token(
         args.agent_id,
