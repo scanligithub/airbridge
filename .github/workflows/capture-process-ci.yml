@@ -11,8 +11,11 @@ on:
       - "doc/README.md"
       - ".github/workflows/capture-process-ci.yml"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
+      - main
       - feature/m3-2-2-capture-process-inventory
+      - feature/m3-2-3-capture-controlled-startup
     paths:
       - "skill/orcad-capture/**"
       - "test/test_orcad_capture_*.py"
