@@ -1,14 +1,24 @@
-"""Local administrator CLI for issuing and revoking AirBridge Agent tokens."""
+"""Local administrator CLI for issuing and revoking AirBridge Agent credentials."""
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "mcp_gateway"))
 
 from agent_security import AgentSecurityStore, VALID_SCOPES  # noqa: E402
+from airbridge_mcp_gateway.credential_store import (  # noqa: E402
+    CredentialStoreError,
+    WindowsCredentialStore,
+)
+
+DEFAULT_AGENT_SCOPES = ["runtime.read", "eda.versions.read", "request.read"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -17,11 +27,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    issue = sub.add_parser("issue", help="Issue a new Agent Bearer token.")
+    issue = sub.add_parser("issue", help="Legacy: issue a visible one-time Bearer token.")
     issue.add_argument("--agent-id", required=True)
     issue.add_argument("--scope", action="append", required=True, choices=sorted(VALID_SCOPES))
     issue.add_argument("--label", default="")
     issue.add_argument("--expires-days", type=int, default=90)
+
+    provision = sub.add_parser(
+        "provision",
+        help="Create an Agent credential directly in Windows Credential Manager; never display the Token.",
+    )
+    provision.add_argument("--agent-id", required=True)
+    provision.add_argument("--scope", action="append", choices=sorted(VALID_SCOPES))
+    provision.add_argument("--label", default="")
+    provision.add_argument("--expires-days", type=int, default=90)
 
     revoke = sub.add_parser("revoke", help="Revoke one token or every token for an Agent.")
     group = revoke.add_mutually_exclusive_group(required=True)
@@ -35,6 +54,43 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--agent-id")
     audit.add_argument("--limit", type=int, default=100)
     return parser
+
+
+def _provision_agent(store: AgentSecurityStore, args: argparse.Namespace) -> dict:
+    if os.name != "nt":
+        raise CredentialStoreError(
+            "Zero-Touch provisioning currently requires Windows Credential Manager"
+        )
+    credentials = WindowsCredentialStore()
+    scopes = args.scope or DEFAULT_AGENT_SCOPES
+    issued = store.issue_token(
+        args.agent_id,
+        scopes,
+        label=args.label,
+        expires_in_days=args.expires_days,
+    )
+    try:
+        credentials.store(issued["agent_id"], issued["token"])
+        stored = credentials.load(issued["agent_id"])
+        if not hmac.compare_digest(stored, issued["token"]):
+            raise CredentialStoreError(
+                "Credential verification failed after writing to Windows Credential Manager"
+            )
+    except Exception:
+        store.revoke_token(issued["token_id"])
+        try:
+            credentials.delete(issued["agent_id"])
+        except CredentialStoreError:
+            pass
+        raise
+    return {
+        "provisioned": True,
+        "agent_id": issued["agent_id"],
+        "token_id": issued["token_id"],
+        "scopes": issued["scopes"],
+        "expires_at": issued["expires_at"],
+        "gateway_environment": {"AIRBRIDGE_AGENT_ID": issued["agent_id"]},
+    }
 
 
 def main() -> int:
@@ -55,12 +111,25 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 0
+        if args.command == "provision":
+            print(json.dumps(_provision_agent(store, args), ensure_ascii=False, indent=2))
+            return 0
         if args.command == "revoke":
             if args.token_id:
                 changed = store.revoke_token(args.token_id)
+                credential_deleted = None
             else:
                 changed = store.revoke_agent(args.agent_id)
-            print(json.dumps({"revoked": changed}, ensure_ascii=False))
+                credential_deleted = None
+                if os.name == "nt":
+                    try:
+                        credential_deleted = WindowsCredentialStore().delete(args.agent_id)
+                    except CredentialStoreError:
+                        credential_deleted = False
+            result = {"revoked": changed}
+            if credential_deleted is not None:
+                result["credential_deleted"] = credential_deleted
+            print(json.dumps(result, ensure_ascii=False))
             return 0
         if args.command == "list":
             print(json.dumps(store.list_tokens(args.agent_id), ensure_ascii=False, indent=2))
