@@ -203,17 +203,64 @@ class GatewayTests(unittest.TestCase):
         with self.assertRaises(GatewayConfigurationError):
             GatewayConfig(base_url="https://127.0.0.1:8888")
 
-    def test_env_flag_is_explicit(self):
+    def test_env_flag_is_explicit_and_legacy_token_remains_compatible(self):
         config = GatewayConfig.from_env({
             "AIRBRIDGE_ENABLE_EDA_EXECUTE": "1",
             "AIRBRIDGE_AGENT_TOKEN": "test-token",
         })
         self.assertTrue(config.enable_eda_execute)
+        self.assertEqual(config.agent_token, "test-token")
         self.assertFalse(
             GatewayConfig.from_env({"AIRBRIDGE_AGENT_TOKEN": "test-token"}).enable_eda_execute
         )
         with self.assertRaises(GatewayConfigurationError):
             GatewayConfig.from_env({})
+
+    def test_agent_id_loads_token_from_injected_credential_store(self):
+        class FakeCredentialStore:
+            def __init__(self):
+                self.requested_agent_ids = []
+
+            def load(self, agent_id):
+                self.requested_agent_ids.append(agent_id)
+                return "vault-only-secret"
+
+            def store(self, _agent_id, _token):
+                raise AssertionError("not used by gateway configuration")
+
+            def delete(self, _agent_id):
+                raise AssertionError("not used by gateway configuration")
+
+        store = FakeCredentialStore()
+        config = GatewayConfig.from_env(
+            {"AIRBRIDGE_AGENT_ID": "OpenCode"},
+            credential_store=store,
+        )
+        self.assertEqual(config.agent_id, "opencode")
+        self.assertEqual(config.agent_token, "vault-only-secret")
+        self.assertEqual(store.requested_agent_ids, ["opencode"])
+        self.assertNotIn("vault-only-secret", repr(config))
+
+    def test_agent_id_and_legacy_token_cannot_be_configured_together(self):
+        with self.assertRaisesRegex(GatewayConfigurationError, "Do not configure both"):
+            GatewayConfig.from_env({
+                "AIRBRIDGE_AGENT_ID": "opencode",
+                "AIRBRIDGE_AGENT_TOKEN": "legacy-secret",
+            }, credential_store=object())
+
+    def test_agent_credential_store_failure_is_fail_closed(self):
+        class MissingCredentialStore:
+            def load(self, _agent_id):
+                from airbridge_mcp_gateway.credential_store import CredentialStoreError
+                raise CredentialStoreError("missing")
+
+        with self.assertRaisesRegex(
+            GatewayConfigurationError, "could not be loaded"
+        ):
+            GatewayConfig.from_env(
+                {"AIRBRIDGE_AGENT_ID": "opencode"},
+                credential_store=MissingCredentialStore(),
+            )
 
 
     def test_server_rejection_does_not_fabricate_a_pollable_request_id(self):
