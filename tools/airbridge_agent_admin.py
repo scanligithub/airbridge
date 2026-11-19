@@ -85,12 +85,24 @@ def _provision_agent(store: AgentSecurityStore, args: argparse.Namespace) -> dic
             raise CredentialStoreError(
                 "Credential verification failed after writing to Windows Credential Manager"
             )
-    except Exception:
-        store.revoke_token(issued["token_id"])
+    except Exception as provisioning_error:
+        # Roll back both sides independently. A failed server-side revoke must
+        # never prevent attempting to remove a credential already written
+        # to the user's Windows vault.
+        rollback_failures = []
+        try:
+            store.revoke_token(issued["token_id"])
+        except Exception:
+            rollback_failures.append("server credential revocation")
         try:
             credentials.delete(issued["agent_id"])
-        except CredentialStoreError:
-            pass
+        except Exception:
+            rollback_failures.append("local credential deletion")
+        if rollback_failures:
+            raise CredentialStoreError(
+                "Provisioning failed; rollback incomplete: "
+                + ", ".join(rollback_failures)
+            ) from provisioning_error
         raise
     return {
         "provisioned": True,
