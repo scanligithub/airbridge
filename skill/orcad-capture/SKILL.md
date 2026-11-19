@@ -7,7 +7,7 @@ description: Own OrCAD Capture version policy, process identity, Tcl Bridge sess
 
 ## Implementation status
 
-This package currently contains the **M3.2.1 foundation only**: configuration validation, a Session Manifest, a guarded lifecycle state model and a fail-closed AirBridge HTTP client. It does not yet launch Capture, deploy a Tcl Bridge, open a design, save a design or close Capture. Do not represent those later-stage capabilities as implemented.
+This package currently contains the **M3.2.1 session / HTTP foundation and M3.2.2 read-only process inventory**: configuration validation, a Session Manifest, a guarded lifecycle state model, a fail-closed AirBridge HTTP client and process identity inventory through generic Shell. It does not yet start Capture, deploy a Tcl Bridge, open a design, save a design or close Capture. Do not represent those later-stage capabilities as implemented.
 
 ## Ownership boundary
 
@@ -54,6 +54,7 @@ The client rejects non-loopback API origins so that the Bearer token cannot be s
 - `scripts/airbridge_client.py` — standard-library HTTP client. It sends Bearer-authenticated JSON requests to the loopback API, validates JSON objects, preserves HTTP 202 acceptance responses, refuses redirects, and never automatically retries. A transport error after submission is an **unknown outcome**; reconcile using the original identity before deciding what to do next.
 - `scripts/capture_session.py` — non-secret configuration, Session Manifest persistence, process / READY / exit evidence structures and guarded state transitions. Closing requires `ProcessExitEvidence` matching the exact original Capture PID and process start time, an explicit process-absent result, and a UTC check timestamp. This is an evidence contract only; remote process inspection is not wired yet.
 - `../../test/test_orcad_capture_skill.py` — local mock-HTTP and state-model tests.
+- `../../test/test_orcad_capture_process.py` — read-only process inventory, response parsing, multiple-instance and ownership-matching tests.
 
 ## Session and safety rules
 
@@ -65,7 +66,7 @@ Failures and indeterminate results are explicit `failed` or `unknown` states. `u
 
 Before a future implementation may mark a session READY, it must match the Session ID, high-entropy Startup Nonce, verified Capture PID, expected Tcl version and SHA-256 of the deployed Bridge. PID alone is not a process identity: compare the executable image path and process start time as well.
 
-An unrecognized or manually launched Capture process is not owned by this Skill. Never inject a Hook into it, close it, or start a second instance merely because the existing process cannot be identified.
+An unrecognized or manually launched Capture process is not owned by this Skill. The inventory classifies unmatched processes as unowned, multiple processes as ambiguous, and a reused or mismatched PID as an identity mismatch. Never inject a Hook into any of these processes, close them, or start a second instance merely because the existing process cannot be identified. An owned instance requires an exact PID, normalized executable path, process start timestamp and file-version match.
 
 Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. This foundation only allows a state transition into `closing` when the caller explicitly supplies authorization; it does not itself send an Exit command. A session can become `closed` only with structured evidence matching the original PID and original process start time, confirming that process is absent at a recorded UTC check time.
 
@@ -93,7 +94,8 @@ Run from the repository root:
 
 ```powershell
 python -m unittest discover -s test -p "test_orcad_capture_skill.py" -v
-python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py
+python -m unittest discover -s test -p "test_orcad_capture_process.py" -v
+python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py
 ```
 
 These tests validate the Skill foundation only. They do not emulate Capture, Tcl, Dbo APIs, capAutoLoad, the physical serial link or the two-host deployment.
