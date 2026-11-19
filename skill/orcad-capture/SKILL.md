@@ -7,7 +7,7 @@ description: Own OrCAD Capture version policy, process identity, Tcl Bridge sess
 
 ## Implementation status
 
-This package currently contains the **M3.2.1 foundation only**: configuration validation, a Session Manifest, a guarded lifecycle state model and a fail-closed AirBridge HTTP client. It does not yet launch Capture, deploy a Tcl Bridge, open a design, save a design or close Capture. Do not represent those later-stage capabilities as implemented.
+This package currently contains the **M3.2.1 session / HTTP foundation and M3.2.2 read-only process inventory**: configuration validation, a Session Manifest, a guarded lifecycle state model, a fail-closed AirBridge HTTP client and process identity inventory through generic Shell. It does not yet start Capture, deploy a Tcl Bridge, open a design, save a design or close Capture. Do not represent those later-stage capabilities as implemented.
 
 ## Ownership boundary
 
