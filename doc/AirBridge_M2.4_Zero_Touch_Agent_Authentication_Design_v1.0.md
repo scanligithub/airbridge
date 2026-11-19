@@ -149,9 +149,11 @@ Windows Credential Manager 可以避免明文 Token 出现在普通配置文件�
 - 旧 `issue` 命令现在必须显式提供 `--reveal-token` 才显示 Token；普通路径优先使用 `provision`。
 - Agent-wide revoke 同时尝试删除本机凭据；服务端撤销仍是安全有效性的权威步骤。
 - 新增 Windows Credential Manager 真实写入 / 读取 / 删除 round-trip 测试，以及 tokenless provisioning / 失败回滚 / 重复注册阻断 / 显式 Token reveal 测试。
-- PR #14 的 M2.4 Windows CI：Python 3.11 / 3.12 两个 Job 均 PASS；最近一次已完成运行每个版本 24 tests，Credential Manager round-trip 实际执行并通过。新加的 legacy reveal opt-in 测试已提交，等待新一轮 CI。
-- 现有 MCP Gateway CI：Python 3.11 / 3.12 两个 Job 在加入 admin 测试后的最近一轮曾因测试导入路径失败；修复后两版本已 PASS（后续 CLI 安全开关和新增测试提交仍等待新一轮最终验证）。
-- 尚未在 Host A 实机使用 Windows 用户凭据保险库接入 Agent；也尚未实现桌面管理 UI、自动生成 MCP Host 配置、自动轮换和现有配置迁移。
+- PR #14 的 M2.4 Windows CI Run #17：全部 PASS。Windows Python 3.10 的 Agent admin CLI 兼容性 Job 运行 4 tests；Python 3.11 / 3.12 的 Gateway + Credential Manager Job 各运行 25 tests（1 项非 Windows 专属用例按预期跳过），两个版本均实际执行并通过 Credential Manager round-trip。
+- 同一 PR revision 的现有 MCP Gateway CI Run #64：Python 3.11 / 3.12 均 PASS。
+- 同一 PR revision 的 Agent Security CI Run #58：Python 3.10 / 3.11 / 3.12 均 PASS。
+- 同一 PR revision 的 Capture Process Inventory CI Run #206：Python 3.10 / 3.11 / 3.12 均 PASS。
+- 尚未在 Host A 实机使用 Windows 用户凭据保险库接入真实 Agent；也尚未实现桌面管理 UI、自动生成 MCP Host 配置、自动轮换和现有配置迁移。
 
 - 建立凭据 Provider 接口和 Windows Credential Manager 后端；
 - Gateway 支持 Agent ID / credential reference；
