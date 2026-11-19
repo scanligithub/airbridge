@@ -43,7 +43,8 @@ Set `AIRBRIDGE_AGENT_TOKEN` in the Agent's Host-A environment. Provision only th
 
 - `shell.execute` for remote process inspection and launch commands;
 - `shell.read` for asynchronous Shell task status;
-- `filesystem.write` for POST `/api/v1/fs/*` operations that create directories and upload Bridge / Hook / request files. The current AirBridge HTTP authorization map also classifies POST `/api/v1/fs/read` as `filesystem.write`; until the action-specific read/write scope split from PR #7 is integrated, the same scope is required for RFS reads.
+- `filesystem.read` for POST `/api/v1/fs/read` and other RFS read actions (`drives`, `ls`, `stat`, `pull`).
+- `filesystem.write` for POST `/api/v1/fs/write` and directory mutations (`mkdir`, `rm`, `mv`) that create or update Skill-owned Bridge / Hook / request files.
 
 Use `request.read` only when the calling workflow needs correlated request records. Do not request `eda.execute`.
 
@@ -117,4 +118,4 @@ python -m unittest discover -s test -p "test_orcad_capture_design.py" -v
 python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py skill/orcad-capture/scripts/capture_requests.py skill/orcad-capture/scripts/capture_design.py
 ```
 
-These tests validate the Skill foundation only. They do not emulate Capture, Tcl, Dbo APIs, capAutoLoad, the physical serial link or the two-host deployment.
+These tests cover mock HTTP, Session transitions, process inventory, startup / queue orchestration, Tcl 8.6 Bridge behavior and the authorized Exit coordinator. The 2026-11-19 Host-B acceptance record documents a real Capture 17.2 / Tcl 8.6 run on an earlier integrated runtime baseline; later Exit locking and restart-reconciliation paths are covered by Hosted CI but still require a dedicated live Host-B restart / failure-scenario retest.
