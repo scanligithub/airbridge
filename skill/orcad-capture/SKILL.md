@@ -7,14 +7,14 @@ description: Own OrCAD Capture version policy, process identity, Tcl Bridge sess
 
 ## Implementation status
 
-This package currently contains the **M3.2.1 / M3.2.2 foundations and the M3.2.3 controlled-startup implementation**: configuration validation, Session Manifest, read-only process inventory, fail-closed HTTP client, guarded lifecycle state model, authorized Capture launch, unique capAutoLoad Hook deployment and Tcl READY handshake. The startup path is covered by Mock/Hosted CI only; it has not been executed on Host B or against a live Capture 17.2 installation. Opening a design, running Dbo workflows, saving and graceful exit remain unimplemented.
+This package currently contains the **M3.2.1–M3.2.4 foundations**: Session Manifest, fail-closed HTTP client, read-only process inventory, authorized Capture startup, unique capAutoLoad Hook, Tcl READY handshake and the Tcl request/result queue. The queue is covered by Mock/Hosted CI and Python-hosted Tcl 8.6 interpreter tests only; it has not been executed inside Capture on Host B or against a live Capture 17.2 installation. Opening a design, Dbo workflows, saving and graceful exit remain unimplemented.
 
 ## Ownership boundary
 
 This Skill owns Capture-specific decisions and workflow:
 
 - Capture version selection and process identity verification;
-- the per-session Tcl Bridge, capAutoLoad Hook, READY handshake and request/result queue;
+- the per-session Tcl Bridge, capAutoLoad Hook, READY handshake and request/result queue; each generic RFS operation is bounded to 16 KiB so its request and response fit within a single ABFP frame;
 - Capture Tcl and Dbo helpers;
 - opening and verifying a DSN/OPJ, save policy and graceful Tcl `Exit`;
 - checking the original Capture PID has exited before a session is marked closed.
@@ -42,8 +42,8 @@ Set `AIRBRIDGE_AGENT_TOKEN` in the Agent's Host-A environment. Provision only th
 
 - `shell.execute` for remote process inspection and launch commands;
 - `shell.read` for asynchronous Shell task status;
-- `filesystem.read` for READY, Manifest, result and diagnostic reads;
-- `filesystem.write` for creating this Skill's directories and uploading its own Bridge / Hook / request files.
+- `filesystem.read` for POST `/api/v1/fs/read` and other RFS read actions (`drives`, `ls`, `stat`, `pull`).
+- `filesystem.write` for POST `/api/v1/fs/write` and directory mutations (`mkdir`, `rm`, `mv`) that create or update Skill-owned Bridge / Hook / request files.
 
 Use `request.read` only when the calling workflow needs correlated request records. Do not request `eda.execute`.
 
@@ -55,7 +55,10 @@ The client rejects non-loopback API origins so that the Bearer token cannot be s
 - `scripts/capture_session.py` — non-secret configuration, Session Manifest persistence, process / READY evidence structures and the allowed state transitions. Capture-specific process and application decisions remain in this Skill.
 - `../../test/test_orcad_capture_skill.py` — local mock-HTTP and state-model tests.
 - `../../test/test_orcad_capture_process.py` — read-only process inventory, response parsing, multiple-instance and ownership-matching tests.
-- `../../test/test_orcad_capture_startup.py` — Mock end-to-end startup, authorization gate, per-child environment ticket, no-overwrite Hook creation, READY verification and UNKNOWN/no-retry tests.
+- `scripts/capture_requests.py` — authorized Tcl request submission in 16 KiB RFS write/append chunks, Host-B full-file length/SHA-256 verification and atomic publication, multipart result reassembly and read-only UNKNOWN reconciliation.
+- `../../test/test_orcad_capture_startup.py` — Mock startup, authorization gate, per-child environment ticket, no-overwrite Hook creation, READY verification and UNKNOWN/no-retry tests.
+- `../../test/test_orcad_capture_requests.py` — Mock queue protocol, exact identity/hash/CRC validation, authorization, no-overwrite publication, result polling, and UNKNOWN reconciliation tests.
+- `../../test/test_orcad_capture_bridge_queue.py` — executes the actual Tcl 8.6 Bridge with Python's Tcl interpreter to verify READY creation, Unicode request/result round-trip, Tcl errors, serial processing and duplicate suppression.
 
 ## Session and safety rules
 
@@ -63,7 +66,7 @@ The state vocabulary is:
 
 `absent → inspecting → starting → bridge_pending → ready ↔ busy → closing → closed`
 
-Failures and indeterminate results are explicit `failed` or `unknown` states. `unknown` may return only to read-only inspection; it is not permission to submit a duplicate operation or start another Capture process.
+Failures and indeterminate results are explicit `failed` or `unknown` states. `unknown` permits only read-only reconciliation by the original Request ID. A session may return to READY only after the matching result envelope and exact original Capture process identity are positively verified; it is never permission to resubmit.
 
 Before a future implementation may mark a session READY, it must match the Session ID, high-entropy Startup Nonce, verified Capture PID, expected Tcl version and SHA-256 of the deployed Bridge. PID alone is not a process identity: compare the executable image path and process start time as well.
 
@@ -71,7 +74,11 @@ An unrecognized or manually launched Capture process is not owned by this Skill.
 
 The capAutoLoad Hook lives in a shared installation directory, so it additionally requires the unique Session ID and Startup Nonce environment ticket inherited by the exact `Start-Process` child. A manually launched Capture that encounters the Hook without this ticket returns immediately before sourcing the Bridge. The Hook clears both ticket variables from its own process environment before Bridge startup.
 
-Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. The M3.2.3 controlled-startup flow does not save or close Capture; the Session state model still requires explicit authorization before entering `closing`, and `closed` requires verified evidence that the original Capture process has exited.
+The M3.2.4 queue accepts only explicitly authorized scripts. The current ABFP RFS endpoint sends one FS request/response per frame (maximum payload 65,000 bytes), so the Skill caps each raw transfer to 16 KiB. Host A writes the UUID-named `.tmp` request through RFS in one `w` chunk followed by `a` chunks. Generic Shell then verifies the complete staging-file length and SHA-256 and atomically renames it to `.req` without overwrite. Tcl 8.6 polls the session queue, claims one request by rename to `.running`, validates Session ID / Nonce / Request ID / payload length / CRC-32, evaluates the Tcl script once, and writes the ASCII result envelope to 16 KiB `.result.partNNNN` files. It publishes the small `.result` manifest only after all parts are written. Host A reads the manifest and each part using bounded RFS reads, reassembles the envelope and verifies total length and envelope CRC-32 before validating the result identity and per-field CRCs. The protocol requires no Tcl JSON or SHA package. Scripts are limited to 256 KiB; each result text field is limited to 512 KiB; the envelope is capped at 1.1 MB (at most 68 result parts).
+
+If upload, publication, execution or result retrieval becomes indeterminate, the Skill persists the original Request ID and marks the Session UNKNOWN. It does not retry the upload, publish, or Tcl script. Reconciliation reads only the original result file and verifies the original Capture PID/path/start-time/version using the read-only process inventory before clearing UNKNOWN.
+
+Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. The M3.2.3 controlled-startup and M3.2.4 request-queue flows do not save or close Capture; the Session state model still requires explicit authorization before entering `closing`, and `closed` requires verified evidence that the original Capture process has exited.
 
 ## Configuration
 
@@ -100,7 +107,9 @@ Run from the repository root:
 python -m unittest discover -s test -p "test_orcad_capture_skill.py" -v
 python -m unittest discover -s test -p "test_orcad_capture_process.py" -v
 python -m unittest discover -s test -p "test_orcad_capture_startup.py" -v
-python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py
+python -m unittest discover -s test -p "test_orcad_capture_requests.py" -v
+python -m unittest discover -s test -p "test_orcad_capture_bridge_queue.py" -v
+python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py skill/orcad-capture/scripts/capture_requests.py
 ```
 
-These tests cover mock HTTP, Session state transitions, read-only process inventory and controlled-startup orchestration. They do not emulate Capture 17.2, Tcl/Dbo business operations, the physical serial link or the two-host deployment; live Host-B startup acceptance remains a separate validation step.
+These tests cover mock HTTP, Session state transitions, read-only process inventory, mocked controlled startup and Tcl 8.6 queue behavior. They do not emulate the full Capture 17.2 GUI, Dbo business workflows, the physical serial link or a complete Host-A / Host-B deployment; live Capture acceptance is a separate validation step.
