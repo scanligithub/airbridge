@@ -3,6 +3,7 @@ name: Runtime Session CI (hosted Windows)
 on:
   push:
     branches:
+      - main
       - feature/runtime-session-p1-2
       - feature/m3-1-shell-task-result-query
     paths:

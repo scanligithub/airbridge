@@ -3,6 +3,7 @@ name: Capture Skill Core CI
 on:
   push:
     branches:
+      - main
       - feature/m3-2-1-capture-skill-core
     paths:
       - "skill/orcad-capture/**"

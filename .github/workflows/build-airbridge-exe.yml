@@ -3,6 +3,7 @@ name: AirBridge Windows EXE Build
 on:
   push:
     branches:
+      - main
       - feature/m3-2-6-capture-authorized-exit
     paths:
       - "AirBridge.spec"
