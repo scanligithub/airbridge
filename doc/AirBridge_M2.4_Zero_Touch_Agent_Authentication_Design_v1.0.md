@@ -1,7 +1,7 @@
 # M2.4：Zero-Touch Agent Authentication 与凭据生命周期管理设计
 
 - 日期：2026-11-19
-- 状态：设计草案；尚未实现，尚未部署
+- 状态：M2.4.1 首批代码已提交 Draft PR #14；Windows Credential Manager 与 Gateway CI（Python 3.11 / 3.12）PASS；尚未合并、尚未在 Host A 实机部署
 - 目标分支：`feature/m2-4-zero-touch-agent-auth`
 - 基线：当前 `main`（M2.3 Agent Security 已合并）
 - 上游设计：`AirBridge_MCP_Gateway_M2.3_Agent_Identity_Authorization_Design_v1.0.md`
@@ -141,6 +141,16 @@ Windows Credential Manager 可以避免明文 Token 出现在普通配置文件�
 ## 8. 实施分期
 
 ### M2.4.1 — Credential Provider 与 Gateway 透明读取
+**当前进展（PR #14，Draft）：**
+- 已新增 `credential_store.py`，使用当前 Windows 用户的 Windows Credential Manager（Generic Credential）保存每 Agent 凭据；不写入 MCP JSON 或普通配置文件。
+- Gateway 支持 `AIRBRIDGE_AGENT_ID`，通过 Credential Provider 读取 Token；`AIRBRIDGE_AGENT_TOKEN` 作为显式旧模式继续兼容。
+- 凭据读取失败时配置加载失败关闭；Agent ID 与旧 Token 环境变量同时配置会被拒绝。
+- 新增 Windows Credential Manager 真实写入 / 读取 / 删除 round-trip 测试。
+- PR #14 的 M2.4 Windows CI：Python 3.11 / 3.12 两个 Job 均 PASS；每个版本 21 tests，Credential Manager round-trip 实际执行并通过。
+- 现有 MCP Gateway CI：Python 3.11 / 3.12 两个 Job 均 PASS；每个版本 21 tests（非 Windows 专属用例按预期跳过）。
+- Capture Process Inventory CI 同时触发，Python 3.11 与 3.12 已 PASS；Python 3.10 Job 当时仍在运行，不能据此宣称整个工作流已完成。
+- 尚未在 Host A 实机使用 Windows 用户凭据保险库接入 Agent；也尚未实现注册 Broker、Agent Registry 管理入口、自动轮换和旧配置迁移。
+
 - 建立凭据 Provider 接口和 Windows Credential Manager 后端；
 - Gateway 支持 Agent ID / credential reference；
 - 保留旧环境变量兼容模式；
