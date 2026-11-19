@@ -100,7 +100,9 @@ _ALLOWED_TRANSITIONS = {
     SessionState.FAILED: {SessionState.INSPECTING, SessionState.UNKNOWN},
     # UNKNOWN may only return to read-only inspection. It cannot be restarted
     # or resubmitted until the Skill has reconciled the original outcome.
-    SessionState.UNKNOWN: {SessionState.INSPECTING},
+    # UNKNOWN may be reconciled to READY only by the dedicated method after
+    # a matching result and exact live process identity have been verified.
+    SessionState.UNKNOWN: {SessionState.INSPECTING, SessionState.READY},
 }
 
 
@@ -769,6 +771,29 @@ class CaptureSession:
         if self.manifest.active_request_id != normalized:
             raise CaptureIdentityError("result Request ID does not match active operation")
         self.manifest.active_request_id = None
+        self._move_to(SessionState.READY)
+
+    def resolve_unknown_operation(self, request_id: str) -> None:
+        """Resolve an UNKNOWN Tcl request using positive, read-only evidence.
+
+        The caller must first validate the original result envelope and confirm
+        that the exact original Capture process is still owned and running.
+        This method cannot be used to retry or resubmit a request.
+        """
+        if self.state is not SessionState.UNKNOWN or not self.manifest.reconciliation_required:
+            raise CaptureStateTransitionError(
+                "only an unresolved UNKNOWN session can reconcile a Tcl request"
+            )
+        try:
+            normalized = str(uuid.UUID(request_id))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise CaptureSessionError("operation request_id must be a UUID") from exc
+        if self.manifest.active_request_id != normalized:
+            raise CaptureIdentityError(
+                "reconciliation Request ID does not match the unresolved operation"
+            )
+        self.manifest.active_request_id = None
+        self.manifest.reconciliation_required = False
         self._move_to(SessionState.READY)
 
     def mark_unknown(self, code: str, message: str) -> None:
