@@ -42,7 +42,8 @@ Set `AIRBRIDGE_AGENT_TOKEN` in the Agent's Host-A environment. Provision only th
 
 - `shell.execute` for remote process inspection and launch commands;
 - `shell.read` for asynchronous Shell task status;
-- `filesystem.write` for POST `/api/v1/fs/*` operations that create directories and upload Bridge / Hook / request files. The current AirBridge HTTP authorization map also classifies POST `/api/v1/fs/read` as `filesystem.write`; until the action-specific read/write scope split from PR #7 is integrated, the same scope is required for RFS reads.
+- `filesystem.read` for POST `/api/v1/fs/read` and other RFS read actions (`drives`, `ls`, `stat`, `pull`).
+- `filesystem.write` for POST `/api/v1/fs/write` and directory mutations (`mkdir`, `rm`, `mv`) that create or update Skill-owned Bridge / Hook / request files.
 
 Use `request.read` only when the calling workflow needs correlated request records. Do not request `eda.execute`.
 
@@ -81,7 +82,7 @@ If upload, publication, execution or result retrieval becomes indeterminate, the
 
 M3.2.5 supports one `.opj` path per Capture Session. It first confirms that the remote file exists on Host B and that no Design is already active. Opening requires explicit user authorization. The `Open` command and active-design verification are one correlated Tcl request. Success requires a non-NULL Dbo `GetActiveDesign`, a non-NULL `GetActivePMDesign`, matching object identity, and matching READY Capture PID / Tcl version. The Skill refuses to switch or adopt an existing active Design. A local Design Context is created before the Open request; an UNKNOWN or unverifiable result blocks all further Open attempts until the original Request ID is reconciled. The read-only Dbo inventory enumerates only Designs and Libraries already loaded in the current Session. It does not call `GetDesign`, `GetLib`, save, remove, or mutate any object.
 
-Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. This foundation only allows a state transition into `closing` when the caller explicitly supplies authorization; it does not itself send an Exit command.
+Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. The M3.2.3 startup, M3.2.4 request queue and M3.2.5 OPJ / Dbo read-only flows do not save or close Capture; `closed` still requires verified evidence that the original Capture process has exited.
 
 ## Configuration
 
@@ -116,4 +117,4 @@ python -m unittest discover -s test -p "test_orcad_capture_design.py" -v
 python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py skill/orcad-capture/scripts/capture_requests.py skill/orcad-capture/scripts/capture_design.py
 ```
 
-These tests validate the Skill foundation only. They do not emulate Capture, Tcl, Dbo APIs, capAutoLoad, the physical serial link or the two-host deployment.
+These tests cover mock HTTP, Session transitions, process inventory, startup / queue orchestration and Tcl 8.6 execution with Mock Dbo wrappers. They do not validate real Cadence Dbo runtime signatures, the full Capture 17.2 GUI, the physical serial link or the complete two-host deployment; those remain explicit Host-B acceptance requirements.
