@@ -79,15 +79,12 @@ class GatewayConfig:
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_url", _validate_loopback_http_url(self.base_url))
         has_agent_id = bool(self.agent_id)
-        has_token = bool(self.agent_token.strip()) if isinstance(self.agent_token, str) else False
-        if has_agent_id == has_token:
+        if not isinstance(self.agent_token, str) or not self.agent_token.strip():
             raise GatewayConfigurationError(
-                "Configure exactly one credential source: AIRBRIDGE_AGENT_ID or legacy AIRBRIDGE_AGENT_TOKEN"
+                "An Agent credential is required from the system credential store or legacy environment variable"
             )
         if has_agent_id:
             object.__setattr__(self, "agent_id", _validate_agent_id(self.agent_id))
-        elif not isinstance(self.agent_token, str) or not self.agent_token.strip():
-            raise GatewayConfigurationError("AIRBRIDGE_AGENT_TOKEN is required")
         if not 1.0 <= self.http_timeout_seconds <= 60.0:
             raise GatewayConfigurationError(
                 "AIRBRIDGE_HTTP_TIMEOUT_SECONDS must be between 1 and 60"
