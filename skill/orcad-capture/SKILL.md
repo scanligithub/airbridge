@@ -42,7 +42,8 @@ Set `AIRBRIDGE_AGENT_TOKEN` in the Agent's Host-A environment. Provision only th
 
 - `shell.execute` for remote process inspection and launch commands;
 - `shell.read` for asynchronous Shell task status;
-- `filesystem.write` for POST `/api/v1/fs/*` operations that create directories and upload Bridge / Hook / request files. The current AirBridge HTTP authorization map also classifies POST `/api/v1/fs/read` as `filesystem.write`; until the action-specific read/write scope split from PR #7 is integrated, the same scope is required for RFS reads.
+- `filesystem.read` for POST `/api/v1/fs/read` and other RFS read actions (`drives`, `ls`, `stat`, `pull`).
+- `filesystem.write` for POST `/api/v1/fs/write` and directory mutations (`mkdir`, `rm`, `mv`) that create or update Skill-owned Bridge / Hook / request files.
 
 Use `request.read` only when the calling workflow needs correlated request records. Do not request `eda.execute`.
 
@@ -77,7 +78,7 @@ The M3.2.4 queue accepts only explicitly authorized scripts. The current ABFP RF
 
 If upload, publication, execution or result retrieval becomes indeterminate, the Skill persists the original Request ID and marks the Session UNKNOWN. It does not retry the upload, publish, or Tcl script. Reconciliation reads only the original result file and verifies the original Capture PID/path/start-time/version using the read-only process inventory before clearing UNKNOWN.
 
-Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. This foundation only allows a state transition into `closing` when the caller explicitly supplies authorization; it does not itself send an Exit command.
+Saving, overwriting, discarding changes, normal application exit and force termination require explicit user authorization. The M3.2.3 controlled-startup and M3.2.4 request-queue flows do not save or close Capture; the Session state model still requires explicit authorization before entering `closing`, and `closed` requires verified evidence that the original Capture process has exited.
 
 ## Configuration
 
@@ -111,4 +112,4 @@ python -m unittest discover -s test -p "test_orcad_capture_bridge_queue.py" -v
 python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py skill/orcad-capture/scripts/capture_requests.py
 ```
 
-These tests validate the Skill foundation only. They do not emulate Capture, Tcl, Dbo APIs, capAutoLoad, the physical serial link or the two-host deployment.
+These tests cover mock HTTP, Session state transitions, read-only process inventory, mocked controlled startup and Tcl 8.6 queue behavior. They do not emulate the full Capture 17.2 GUI, Dbo business workflows, the physical serial link or a complete Host-A / Host-B deployment; live Capture acceptance is a separate validation step.
