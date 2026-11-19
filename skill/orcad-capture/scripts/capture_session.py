@@ -150,6 +150,7 @@ class CaptureConfig:
 
     api_base_url: str = DEFAULT_API_BASE_URL
     capture_exe_path: Optional[str] = None
+    cap_autoload_dir: Optional[str] = None
     expected_capture_version: Optional[str] = None
     expected_tcl_version: Optional[str] = "8.6.0"
     remote_session_root: str = DEFAULT_REMOTE_SESSION_ROOT
@@ -172,10 +173,20 @@ class CaptureConfig:
             ) from exc
         if self.capture_exe_path:
             win_path = PureWindowsPath(self.capture_exe_path)
-            if not win_path.is_absolute():
+            if not win_path.is_absolute() or win_path.name.casefold() != "capture.exe":
                 raise CaptureConfigurationError(
-                    "capture_exe_path must be an absolute Windows path"
+                    "capture_exe_path must be an absolute path to capture.exe"
                 )
+        if self.cap_autoload_dir:
+            autoload_path = PureWindowsPath(self.cap_autoload_dir)
+            if not autoload_path.is_absolute():
+                raise CaptureConfigurationError(
+                    "cap_autoload_dir must be an absolute Windows path"
+                )
+        if bool(self.capture_exe_path) != bool(self.cap_autoload_dir):
+            raise CaptureConfigurationError(
+                "capture_exe_path and cap_autoload_dir must be configured together"
+            )
         if not str(self.remote_session_root or "").strip():
             raise CaptureConfigurationError("remote_session_root must not be empty")
         if (
@@ -236,6 +247,7 @@ class CaptureConfig:
         return cls(
             api_base_url=source.get("AIRBRIDGE_API_BASE_URL", DEFAULT_API_BASE_URL),
             capture_exe_path=optional("AIRBRIDGE_CAPTURE_EXE"),
+            cap_autoload_dir=optional("AIRBRIDGE_CAPTURE_AUTOLOAD_DIR"),
             expected_capture_version=optional("AIRBRIDGE_CAPTURE_VERSION"),
             expected_tcl_version=str(
                 source.get("AIRBRIDGE_CAPTURE_TCL_VERSION", "8.6.0") or ""
@@ -262,6 +274,7 @@ class SessionManifest:
     created_at_utc: str = ""
     updated_at_utc: str = ""
     capture_exe_path: Optional[str] = None
+    cap_autoload_dir: Optional[str] = None
     expected_capture_version: Optional[str] = None
     expected_tcl_version: Optional[str] = None
     capture_version: Optional[str] = None
@@ -271,8 +284,14 @@ class SessionManifest:
     process_exit_confirmed_at_utc: Optional[str] = None
     remote_session_dir: Optional[str] = None
     hook_path: Optional[str] = None
+    hook_sha256: Optional[str] = None
     bridge_sha256: Optional[str] = None
     active_request_id: Optional[str] = None
+    hook_install_request_id: Optional[str] = None
+    hook_cleanup_request_id: Optional[str] = None
+    hook_cleanup_completed: bool = False
+    hook_removed_at_utc: Optional[str] = None
+    startup_request_id: Optional[str] = None
     reconciliation_required: bool = False
     last_error_code: Optional[str] = None
     last_error_message: Optional[str] = None
@@ -309,10 +328,39 @@ class SessionManifest:
         self.updated_at_utc = _validate_timestamp(
             self.updated_at_utc, "updated_at_utc"
         )
-        if self.capture_exe_path and not PureWindowsPath(self.capture_exe_path).is_absolute():
-            raise CaptureSessionError("capture_exe_path must be an absolute Windows path")
+        if self.capture_exe_path and (
+            not PureWindowsPath(self.capture_exe_path).is_absolute()
+            or PureWindowsPath(self.capture_exe_path).name.casefold() != "capture.exe"
+        ):
+            raise CaptureSessionError(
+                "capture_exe_path must be an absolute path to capture.exe"
+            )
+        if self.cap_autoload_dir and not PureWindowsPath(self.cap_autoload_dir).is_absolute():
+            raise CaptureSessionError("cap_autoload_dir must be an absolute Windows path")
+        if bool(self.capture_exe_path) != bool(self.cap_autoload_dir):
+            raise CaptureSessionError(
+                "capture_exe_path and cap_autoload_dir must be configured together"
+            )
         if not isinstance(self.reconciliation_required, bool):
             raise CaptureSessionError("reconciliation_required must be a boolean")
+        if not isinstance(self.hook_cleanup_completed, bool):
+            raise CaptureSessionError("hook_cleanup_completed must be a boolean")
+        if bool(self.hook_path) != bool(self.hook_sha256):
+            raise CaptureSessionError(
+                "hook_path and hook_sha256 must be present together"
+            )
+        if self.hook_removed_at_utc:
+            self.hook_removed_at_utc = _validate_timestamp(
+                self.hook_removed_at_utc, "hook_removed_at_utc"
+            )
+        if self.hook_cleanup_completed and not self.hook_removed_at_utc:
+            raise CaptureSessionError(
+                "confirmed Hook cleanup requires hook_removed_at_utc"
+            )
+        if self.hook_removed_at_utc and not self.hook_cleanup_completed:
+            raise CaptureSessionError(
+                "hook_removed_at_utc requires confirmed Hook cleanup"
+            )
         if self.state == SessionState.UNKNOWN.value and not self.reconciliation_required:
             raise CaptureSessionError(
                 "UNKNOWN sessions must require explicit reconciliation"
@@ -353,15 +401,28 @@ class SessionManifest:
             raise CaptureSessionError(
                 "unresolved sessions cannot advance beyond read-only inspection"
             )
+        if self.hook_sha256:
+            self.hook_sha256 = self.hook_sha256.lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", self.hook_sha256):
+                raise CaptureSessionError("hook_sha256 must be a SHA-256 hex digest")
         if self.bridge_sha256:
             self.bridge_sha256 = self.bridge_sha256.lower()
             if not re.fullmatch(r"[0-9a-f]{64}", self.bridge_sha256):
                 raise CaptureSessionError("bridge_sha256 must be a SHA-256 hex digest")
-        if self.active_request_id:
-            try:
-                self.active_request_id = str(uuid.UUID(self.active_request_id))
-            except (ValueError, TypeError, AttributeError) as exc:
-                raise CaptureSessionError("active_request_id must be a UUID") from exc
+        for request_field in (
+            "active_request_id",
+            "hook_install_request_id",
+            "hook_cleanup_request_id",
+            "startup_request_id",
+        ):
+            request_value = getattr(self, request_field)
+            if request_value:
+                try:
+                    setattr(self, request_field, str(uuid.UUID(request_value)))
+                except (ValueError, TypeError, AttributeError) as exc:
+                    raise CaptureSessionError(
+                        "{} must be a UUID".format(request_field)
+                    ) from exc
         for name in ("last_error_code", "last_error_message"):
             value = getattr(self, name)
             if value is not None:
@@ -373,6 +434,7 @@ class SessionManifest:
             session_id=str(uuid.uuid4()),
             startup_nonce=secrets.token_urlsafe(32),
             capture_exe_path=config.capture_exe_path,
+            cap_autoload_dir=config.cap_autoload_dir,
             expected_capture_version=config.expected_capture_version,
             expected_tcl_version=config.expected_tcl_version,
         )
@@ -386,6 +448,7 @@ class SessionManifest:
             "created_at_utc": self.created_at_utc,
             "updated_at_utc": self.updated_at_utc,
             "capture_exe_path": self.capture_exe_path,
+            "cap_autoload_dir": self.cap_autoload_dir,
             "expected_capture_version": self.expected_capture_version,
             "expected_tcl_version": self.expected_tcl_version,
             "capture_version": self.capture_version,
@@ -395,8 +458,14 @@ class SessionManifest:
             "process_exit_confirmed_at_utc": self.process_exit_confirmed_at_utc,
             "remote_session_dir": self.remote_session_dir,
             "hook_path": self.hook_path,
+            "hook_sha256": self.hook_sha256,
             "bridge_sha256": self.bridge_sha256,
             "active_request_id": self.active_request_id,
+            "hook_install_request_id": self.hook_install_request_id,
+            "hook_cleanup_request_id": self.hook_cleanup_request_id,
+            "hook_cleanup_completed": self.hook_cleanup_completed,
+            "hook_removed_at_utc": self.hook_removed_at_utc,
+            "startup_request_id": self.startup_request_id,
             "reconciliation_required": self.reconciliation_required,
             "last_error_code": self.last_error_code,
             "last_error_message": self.last_error_message,
@@ -409,9 +478,11 @@ class SessionManifest:
         allowed = {
             "schema_version", "session_id", "startup_nonce", "state",
             "created_at_utc", "updated_at_utc", "capture_exe_path",
-            "expected_capture_version", "expected_tcl_version", "capture_version",
+            "cap_autoload_dir", "expected_capture_version", "expected_tcl_version", "capture_version",
             "tcl_version", "pid", "process_started_at_utc",
-            "process_exit_confirmed_at_utc", "remote_session_dir", "hook_path", "bridge_sha256", "active_request_id",
+            "process_exit_confirmed_at_utc", "remote_session_dir", "hook_path", "hook_sha256", "bridge_sha256", "active_request_id",
+            "hook_install_request_id", "hook_cleanup_request_id",
+            "hook_cleanup_completed", "hook_removed_at_utc", "startup_request_id",
             "reconciliation_required", "last_error_code",
             "last_error_message",
         }
@@ -602,6 +673,7 @@ class CaptureSession:
         bridge_sha256: str,
         remote_session_dir: Optional[str] = None,
         hook_path: Optional[str] = None,
+        hook_sha256: Optional[str] = None,
     ) -> None:
         if self.manifest.pid is None or not self.manifest.process_started_at_utc:
             raise CaptureIdentityError(
@@ -615,6 +687,15 @@ class CaptureSession:
             self.manifest.remote_session_dir = str(remote_session_dir)
         if hook_path:
             self.manifest.hook_path = str(hook_path)
+        if hook_sha256:
+            hook_digest = str(hook_sha256).lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", hook_digest):
+                raise CaptureIdentityError("Hook SHA-256 must be a 64-character hex digest")
+            self.manifest.hook_sha256 = hook_digest
+        if self.manifest.hook_path and not self.manifest.hook_sha256:
+            raise CaptureIdentityError(
+                "a deployed capAutoLoad Hook requires its verified SHA-256"
+            )
         self._move_to(SessionState.BRIDGE_PENDING)
 
     def mark_ready(self, evidence: BridgeReadyEvidence) -> None:
