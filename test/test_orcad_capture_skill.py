@@ -116,10 +116,12 @@ class AirBridgeClientTests(TestCase):
             "result": {"task_id": "shell-test", "async": True},
         }
 
+        request_id = str(uuid.uuid4())
         result = self.client.shell_execute(
             "Start-Process -FilePath 'D:\\Cadence\\SPB_17.2\\tools\\bin\\capture.exe'",
             async_mode=True,
             task_timeout_seconds=30,
+            request_id=request_id,
         )
 
         self.assertEqual(result["state"], "accepted")
@@ -128,6 +130,7 @@ class AirBridgeClientTests(TestCase):
         payload = json.loads(request["body"].decode("utf-8"))
         self.assertTrue(payload["async"])
         self.assertEqual(payload["timeout"], 30)
+        self.assertEqual(payload["request_id"], request_id)
 
     def test_filesystem_actions_are_allowlisted(self):
         self.client.filesystem("read", {"path": r"E:\_airbridge_temp\probe.txt"})
@@ -171,9 +174,14 @@ class AirBridgeClientTests(TestCase):
             token="test-agent-token",
             opener=failing_opener,
         )
+        request_id = str(uuid.uuid4())
         with self.assertRaises(AirBridgeTransportError) as raised:
-            client.post("/api/v1/shell/exec", {"command": "Start-Process"})
+            client.shell_execute(
+                "Start-Process -FilePath 'capture.exe'",
+                request_id=request_id,
+            )
         self.assertTrue(raised.exception.outcome_unknown)
+        self.assertEqual(raised.exception.request_id, request_id)
         self.assertEqual(len(attempted), 1)
 
     def test_token_must_exist_and_api_origin_must_be_loopback(self):
@@ -215,6 +223,7 @@ class CaptureSessionModelTests(TestCase):
     def setUp(self):
         self.config = CaptureConfig(
             capture_exe_path=self.CAPTURE_EXE,
+            cap_autoload_dir=r"D:\\Cadence\\SPB_17.2\\tools\\capture\\tclscripts\\capAutoLoad",
             expected_capture_version="17.2-2016",
             expected_tcl_version="8.6.0",
         )
@@ -235,6 +244,7 @@ class CaptureSessionModelTests(TestCase):
         self.session.mark_bridge_pending(
             remote_session_dir=r"C:\Users\Agent\AppData\Local\AirBridgeSkills\Capture\sessions\test",
             hook_path=r"D:\Cadence\SPB_17.2\tools\capture\tclscripts\capAutoLoad\ab_skill_test.tcl",
+            hook_sha256=hashlib.sha256(b"capture-skill-hook").hexdigest(),
             bridge_sha256=self.BRIDGE_HASH,
         )
         self.session.mark_ready(
@@ -322,7 +332,10 @@ class CaptureSessionModelTests(TestCase):
         self.assertIsNone(manifest.pid)
 
     def test_start_requires_capture_version_selection_and_verified_file_version(self):
-        config = CaptureConfig(capture_exe_path=self.CAPTURE_EXE)
+        config = CaptureConfig(
+            capture_exe_path=self.CAPTURE_EXE,
+            cap_autoload_dir=r"D:\\Cadence\\SPB_17.2\\tools\\capture\\tclscripts\\capAutoLoad",
+        )
         manifest = SessionManifest.create(config)
         session = CaptureSession(manifest, config)
         session.begin_inspection()
@@ -556,10 +569,12 @@ class CaptureSessionModelTests(TestCase):
         config = CaptureConfig.from_env({
             "AIRBRIDGE_API_BASE_URL": "http://127.0.0.1:8888",
             "AIRBRIDGE_CAPTURE_EXE": self.CAPTURE_EXE,
+            "AIRBRIDGE_CAPTURE_AUTOLOAD_DIR": r"D:\\Cadence\\SPB_17.2\\tools\\capture\\tclscripts\\capAutoLoad",
             "AIRBRIDGE_CAPTURE_VERSION": "17.2-2016",
             "AIRBRIDGE_AGENT_TOKEN": "do-not-copy-into-config",
         })
         self.assertEqual(config.capture_exe_path, self.CAPTURE_EXE)
+        self.assertTrue(config.cap_autoload_dir.endswith("capAutoLoad"))
         self.assertFalse(hasattr(config, "token"))
         self.assertNotIn("do-not-copy-into-config", repr(config))
 
