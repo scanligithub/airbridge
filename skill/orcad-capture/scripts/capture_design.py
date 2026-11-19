@@ -213,7 +213,7 @@ def _bool_field(fields: Mapping[str, list[str]], key: str, *, required: bool = T
 def build_active_design_probe_script() -> str:
     """Inspect the current Session and active design without opening anything."""
     return r"""
-set __lines [list "AB_CAPTURE_ACTIVE_DESIGN_V1" "tcl_pid=[pid]" "tcl_version=$::tcl_version"]
+set __lines [list "AB_CAPTURE_ACTIVE_DESIGN_V1" "tcl_pid=[pid]" "tcl_version=[info patchlevel]"]
 set __session_exists [info exists ::DboSession_s_pDboSession]
 lappend __lines "session_present=$__session_exists"
 set __session_wrapper_rc -1
@@ -307,7 +307,7 @@ def parse_active_design_report(value: str) -> CaptureActiveDesign:
 def build_dbo_session_inventory_script() -> str:
     """Enumerate only Designs and Libraries already loaded in the current Session."""
     return r"""
-set __lines [list "AB_CAPTURE_DBO_INVENTORY_V1" "tcl_pid=[pid]" "tcl_version=$::tcl_version"]
+set __lines [list "AB_CAPTURE_DBO_INVENTORY_V1" "tcl_pid=[pid]" "tcl_version=[info patchlevel]"]
 set __session_exists [info exists ::DboSession_s_pDboSession]
 lappend __lines "session_present=$__session_exists"
 set __wrapper_rc -1
@@ -486,7 +486,7 @@ def build_open_project_script(opj_path: str) -> str:
 set __path [encoding convertfrom utf-8 [binary decode base64 {%s}]]
 set __open_rc [catch {Open $__path} __open_value __open_options]
 set __open_value_b64 [binary encode base64 -maxlen 0 [encoding convertto utf-8 $__open_value]]
-set __lines [list "AB_CAPTURE_OPEN_RESULT_V1" "requested_path_b64=%s" "open_rc=$__open_rc" "open_result_b64=$__open_value_b64" "tcl_pid=[pid]" "tcl_version=$::tcl_version"]
+set __lines [list "AB_CAPTURE_OPEN_RESULT_V1" "requested_path_b64=%s" "open_rc=$__open_rc" "open_result_b64=$__open_value_b64" "tcl_pid=[pid]" "tcl_version=[info patchlevel]"]
 set __session_exists [info exists ::DboSession_s_pDboSession]
 lappend __lines "session_present=$__session_exists"
 set __wrapper_rc -1

@@ -7,6 +7,7 @@ on:
       - feature/m3-2-3-capture-controlled-startup
       - feature/m3-2-4-capture-tcl-request-queue
       - feature/m3-2-5-capture-design-open-dbo-readonly
+      - feature/m3-2-6-capture-authorized-exit
     paths:
       - "skill/orcad-capture/**"
       - "test/test_orcad_capture_*.py"
@@ -20,6 +21,7 @@ on:
       - feature/m3-2-3-capture-controlled-startup
       - feature/m3-2-4-capture-tcl-request-queue
       - feature/m3-2-5-capture-design-open-dbo-readonly
+      - feature/m3-2-6-capture-authorized-exit
     paths:
       - "skill/orcad-capture/**"
       - "test/test_orcad_capture_*.py"
@@ -53,7 +55,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python --version
-          python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py skill/orcad-capture/scripts/capture_requests.py skill/orcad-capture/scripts/capture_design.py
+          python -m py_compile skill/orcad-capture/scripts/airbridge_client.py skill/orcad-capture/scripts/capture_session.py skill/orcad-capture/scripts/capture_process.py skill/orcad-capture/scripts/capture_startup.py skill/orcad-capture/scripts/capture_requests.py skill/orcad-capture/scripts/capture_design.py skill/orcad-capture/scripts/capture_exit.py
 
       - name: Run Capture Skill and process inventory unit tests
         shell: pwsh

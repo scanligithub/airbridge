@@ -256,12 +256,57 @@ class CaptureTclQueue:
         self.sleep_fn = sleep_fn
         self.monotonic_fn = monotonic_fn
 
+    def _assert_exit_intent_allows_submit(
+        self, request_id: str, exit_intent_request_id: Optional[str]
+    ) -> None:
+        """Block unrelated Tcl work while a durable Exit intent is unresolved."""
+        context_path = self.manifest_path.with_name(
+            self.manifest_path.name + ".exit.json"
+        )
+        if not context_path.exists():
+            if exit_intent_request_id is not None:
+                raise CaptureIdentityError(
+                    "an authorized Exit Request ID has no persisted Exit intent"
+                )
+            return
+        try:
+            context = json.loads(context_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CaptureStateTransitionError(
+                "Capture Exit intent is unavailable or malformed; block Tcl submission"
+            ) from exc
+        if (
+            not isinstance(context, Mapping)
+            or type(context.get("schema_version")) is not int
+            or context.get("schema_version") != 1
+            or context.get("session_id") != self.session.manifest.session_id
+        ):
+            raise CaptureIdentityError(
+                "Capture Exit intent does not match the current Session"
+            )
+
+        state = context.get("state")
+        if state == "prepared" and exit_intent_request_id is None:
+            return
+        if (
+            state == "exit_scheduling"
+            and exit_intent_request_id is not None
+            and exit_intent_request_id == request_id
+            and context.get("schedule_request_id") == request_id
+        ):
+            return
+        raise CaptureStateTransitionError(
+            "a pending or completed Capture Exit intent blocks new Tcl submissions; "
+            "only the original Exit Request or read-only reconciliation is allowed"
+        )
+
     def submit(
         self,
         script: str,
         *,
         user_authorized: bool = False,
         request_id: Optional[str] = None,
+        exit_intent_request_id: Optional[str] = None,
     ) -> CaptureTclRequest:
         """Persist local intent, upload a unique staging file, then publish once."""
         if user_authorized is not True:
@@ -283,6 +328,12 @@ class CaptureTclQueue:
             )
 
         rid = _uuid(request_id, "request_id")
+        allowed_exit_rid = (
+            _uuid(exit_intent_request_id, "exit_intent_request_id")
+            if exit_intent_request_id is not None
+            else None
+        )
+        self._assert_exit_intent_allows_submit(rid, allowed_exit_rid)
         envelope, script_sha256, _script_crc = build_capture_request_envelope(
             manifest.session_id, manifest.startup_nonce, rid, script
         )
@@ -451,12 +502,14 @@ class CaptureTclQueue:
         *,
         user_authorized: bool = False,
         request_id: Optional[str] = None,
+        exit_intent_request_id: Optional[str] = None,
         timeout_seconds: float = 60.0,
     ) -> CaptureTclResult:
         request = self.submit(
             script,
             user_authorized=user_authorized,
             request_id=request_id,
+            exit_intent_request_id=exit_intent_request_id,
         )
         return self.wait_for_result(request.request_id, timeout_seconds=timeout_seconds)
 
@@ -521,6 +574,21 @@ class CaptureTclQueue:
                     rid,
                 )
             self.sleep_fn(min(self.config.poll_interval_seconds, 1.0))
+
+    def read_result(self, request_id: str) -> Optional[CaptureTclResult]:
+        """Read and validate one original result without changing Session state.
+
+        Unlike reconcile(), this low-level read does not require the original
+        Capture process to remain alive. That is important for lifecycle Skills
+        whose request intentionally causes the process to exit. It performs
+        only bounded RFS reads and never writes Host B or mutates the Manifest.
+        """
+        rid = _uuid(request_id, "request_id")
+        _record_path, record = self._load_record(rid)
+        raw = self._read_result_envelope(record["result_path"], rid)
+        if raw is None:
+            return None
+        return self._parse_result(raw, rid, record)
 
     def reconcile(self, request_id: str) -> Optional[CaptureTclResult]:
         """Read the original result and original process identity; never mutate Host B."""

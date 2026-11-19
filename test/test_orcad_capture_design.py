@@ -392,6 +392,21 @@ proc Open {path} {
         self.assertEqual(returned_path, path)
         self.assertTrue(active.verified)
 
+    def test_all_design_reports_use_full_tcl_patchlevel(self):
+        expected_patchlevel = self.tcl.eval("info patchlevel")
+
+        active_value = self.tcl.eval(build_active_design_probe_script())
+        active = parse_active_design_report(active_value)
+        self.assertEqual(active.tcl_version, expected_patchlevel)
+
+        inventory_value = self.tcl.eval(build_dbo_session_inventory_script())
+        inventory = parse_dbo_session_inventory(inventory_value)
+        self.assertEqual(inventory.tcl_version, expected_patchlevel)
+
+        open_value = self.tcl.eval(build_open_project_script(OPJ))
+        opened, open_rc, _open_result, _returned_path = parse_open_project_report(open_value)
+        self.assertEqual(open_rc, 0)
+        self.assertEqual(opened.tcl_version, expected_patchlevel)
 
 if __name__ == "__main__":
     import unittest
