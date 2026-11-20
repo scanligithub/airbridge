@@ -5,12 +5,17 @@ STDIO child process does not initialize Qt or load the desktop UI.
 """
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Callable, Sequence
 from typing import TextIO
 
 
 def _run_stdio() -> int:
+    # Enforce the M2.5 per-user Gateway/Agent policy for every Tool call.
+    # This marker is set internally and is not supplied by MCP client config.
+    os.environ["AIRBRIDGE_M2_5_GATEWAY_POLICY"] = "1"
+
     # A --windowed PyInstaller EXE starts with Python standard streams set to
     # None. Restore the MCP Host's inherited pipe handles before importing MCP.
     from stdio_io import restore_windows_stdio
