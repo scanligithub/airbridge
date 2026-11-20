@@ -108,6 +108,26 @@ Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭�
 - loopback 不是身份认证，启动前必须完成本地客户端访问认证设计；
 - 端口冲突必须明确报错，不能静默改成任意端口后不更新 MCP 客户端配置。
 
+**M2.5 默认 TCP 端口：**
+
+| 服务 | 默认端口 | HTTPS Endpoint |
+|---|---:|---|
+| OAuth Broker | 38861 | `https://localhost:38861/` |
+| 首个 Antigravity Worker | 38862 | `https://localhost:38862/mcp` |
+| 首个 OpenCode Worker | 38863 | `https://localhost:38863/mcp` |
+
+端口管理要求：
+- AirBridge HTTP API 继续使用现有 `127.0.0.1:8888`；不得与 Gateway Broker / Worker 共用端口。
+- Broker 和每个 Agent Worker 使用独立 TCP 端口；同一客户端类型可以注册多个 Agent 实例，每个实例必须有独立端口。
+- 默认候选池为 `38801–38864`；新增实例自动选择池内未分配且通过本机检查的空闲端口，并持久化。用户可在 GUI 主动修改为池内其他空闲端口。
+- 服务只绑定 loopback（`127.0.0.1` / `::1`）；客户端 endpoint 使用 `localhost`。不得绑定通配地址或自动开放 LAN / 公网访问。
+- 启动前做实际 TCP bind / 占用验证，并检查系统当前动态端口和 excluded port range。不能只依赖进程列表或默认 Windows 端口范围。
+- 冲突时 GUI 显示端口和可取得的进程名称 / PID；Broker 冲突阻断 Managed HTTPS OAuth，Worker 冲突仅阻断对应 Agent。不得静默换随机端口；可让其它独立 Worker 继续运行。
+- 用户主动修改端口时，先验证新端口，再同步 endpoint、Resource / issuer metadata 与相应 MCP Client 当前用户配置。写入前备份、原子更新；任一步骤失败回滚。
+- Worker 端口变更导致 Resource Audience 改变；Broker 端口变更导致 OAuth issuer 改变。两种情况均要求对应 Client 重新 discovery / OAuth 授权，旧 Grant 不得直接迁移到新 Resource / issuer。
+- 证书 SAN 绑定 hostname（`localhost`），不包含端口；端口变化不改变 SAN，但仍必须进行完整 TLS 校验。
+- 首次安装采用上述默认端口；升级安装保留用户已经配置的端口。
+
 ### 5.5 本机 HTTPS 证书与用户信任
 
 - 安装 / 初始配置时，GUI 必须清楚说明本机证书用途、信任范围和影响，并在用户明确同意后才导入。
