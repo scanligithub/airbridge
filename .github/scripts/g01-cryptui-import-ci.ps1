@@ -165,7 +165,7 @@ try {
     # NO_UI is intentionally used only in this disposable hosted-CI test.
     # Production G-01B calls the same native API without NO_UI, so Windows
     # displays its import wizard to the target user.
-    $importResult = Invoke-G01CryptUIWizImport -CertificateFile $rootCer -DestinationStore $destStore -WizardTitle 'AirBridge G-01 CI API test' -NoUI
+    $importResult = Invoke-G01CryptUIWizImport -CertificateFile $rootCer -DestinationStore $destStore -WizardTitle 'AirBridge G-01 CI API test' -NoUI -PhaseFile $phaseFile
     $results.api_return = 'TRUE'
     $results.actual_flags = $importResult.Flags
     $results.current_user_root_import = 'PASS'
