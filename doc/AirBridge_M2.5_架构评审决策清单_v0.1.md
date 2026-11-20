@@ -215,6 +215,24 @@
 
 **因此 G-01 当前状态为 Partial Research / NOT PASS。** 不得因 Chrome 成功或证书导入成功就判定目标 MCP 客户端兼容；不得扩大到 LocalMachine Root、要求管理员权限、设置 TLS bypass 或降级为无认证 HTTP。
 
+### 4.1.1 G-01A：GitHub Actions Windows CurrentUser 存储测试（CI 层）
+
+新增独立 workflow：
+- `.github/workflows/g01-windows-currentuser-ci.yml`
+- `.github/scripts/g01-currentuser-trust.ps1`
+
+CI 层应验证：
+1. 在 Windows `windows-2025` Runner 当前用户上下文中生成一次性测试 CA / Leaf，并只导出 CA 公钥 CER；
+2. 在已记录用户 Consent 的等效测试前提下，将公钥写入 `CurrentUser\\Root`，用 `certutil -user -store Root <thumbprint>` 回读；
+3. 确认 CurrentUser Root 条目没有私钥，CA 私钥留在 CurrentUser My 的临时测试证书对象中；
+4. `X509Chain.Build` 对已信任 CA 签发的 Leaf 成功，对未导入信任的另一 CA 签发的 Leaf 失败；
+5. LocalMachine Root 在导入前、导入后和清理后 Thumbprint 集合完全一致；
+6. 通过精确 Thumbprint 清理本次创建 / 导入的证书，并保存不包含私钥的 JSON / certutil 证据。
+
+**CI 的证明边界：** GitHub-hosted Windows Runner 当前以 `runneradmin` 账户运行，日志已显示该进程为 elevated administrator。该 workflow 能验证 Windows CurrentUser 存储路径与 LocalMachine 隔离，但单凭 hosted runner 不能证明普通非管理员用户的完整部署权限体验；需要后续增加标准用户上下文测试或用目标环境补充验证。它也不运行 Antigravity / OpenCode 桌面客户端，不证明这些客户端读取相同信任库。
+
+因此 G-01 分为 CI OS store / chain 子项和真实 MCP Client TLS / OAuth 子项；CI 子项通过不能单独把 G-01 总体标记为 PASS。当前 workflow 已接入 PR #16，执行状态与实际结论以该 workflow run 为准。
+
 ### 4.2 G-01 必须执行的 Windows PoC 矩阵
 
 **主机范围澄清：** G-01 不绑定 Host A / Host B 角色。Managed HTTPS endpoints 只监听 loopback，`localhost` 指向 MCP Client 所在的本机，因此 Gateway 与 MCP Client 必须位于同一台 Windows 主机。每台实际部署 M2.5 的主机都在部署阶段导入适用于该机 localhost 的 CA 公钥；CurrentUser Root 是该机当前 Windows 用户的信任库，不跨机器共享。不得依赖固定 Host A / Host B 作为 CA 来源。正式 CA 签发 / 供应模型尚未冻结；若 A、B 都部署 M2.5，必须分别执行部署导入和信任检查；Gateway OFF 不跳过部署阶段的 CA 导入。
