@@ -122,6 +122,42 @@ class GatewayPolicyTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "GATEWAY_POLICY_INVALID")
         self.assertEqual(self.client.calls, [])
 
+    def test_boolean_schema_version_is_rejected_as_invalid(self):
+        self.policy_path.parent.mkdir(parents=True, exist_ok=True)
+        self.policy_path.write_text(
+            json.dumps({
+                "schema_version": True,
+                "enabled": True,
+                "agents": {"antigravity": {"enabled": True}},
+            }),
+            encoding="utf-8",
+        )
+
+        result = self.gateway.get_capabilities()
+
+        self.assertEqual(result["state"], "unavailable")
+        self.assertEqual(result["error"]["code"], "GATEWAY_POLICY_INVALID")
+        self.assertEqual(self.client.calls, [])
+
+    def test_missing_agent_entry_fails_closed(self):
+        self.policy.write(enabled=True, agents={"opencode": True})
+
+        result = self.gateway.get_capabilities()
+
+        self.assertEqual(result["state"], "unavailable")
+        self.assertEqual(result["error"]["code"], "GATEWAY_POLICY_INVALID")
+        self.assertEqual(self.client.calls, [])
+
+    def test_policy_over_size_limit_fails_closed(self):
+        self.policy_path.parent.mkdir(parents=True, exist_ok=True)
+        self.policy_path.write_bytes(b" " * (64 * 1024 + 1))
+
+        result = self.gateway.get_capabilities()
+
+        self.assertEqual(result["state"], "unavailable")
+        self.assertEqual(result["error"]["code"], "GATEWAY_POLICY_INVALID")
+        self.assertEqual(self.client.calls, [])
+
     def test_policy_writer_is_atomic_and_does_not_store_credentials(self):
         self.policy.write(enabled=True, agents={"Antigravity": True, "OpenCode": False})
 
