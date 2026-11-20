@@ -91,6 +91,7 @@ M2.5 的最终交付是一个统一的 AirBridge Windows 安装包 / AirBridge.e
 - A/B 使用相同页面和功能；
 - OFF 时 Gateway 不运行，但其他 AirBridge 能力正常；
 - ON 时按 Agent 配置启动 Worker；
+- 新安装后默认 OFF，无 Worker 自动启动；升级时保留原有 Gateway 开关配置；
 - GUI 状态与进程真实状态一致；
 - 配置损坏、写入失败和端口冲突有明确恢复行为。
 
@@ -214,7 +215,7 @@ M2.5 不得破坏以下既有能力：
 - 只构建和发布一个 AirBridge Windows 安装包 / EXE；
 - 主机 A 和主机 B 安装同一个版本；
 - 两端配置分别保存在各自本机；
-- 新安装默认 Gateway OFF 仍是建议项，尚待用户最终确认；升级安装应保留已有配置；
+- **用户已确认：新安装 Gateway 总开关默认 OFF**，安装完成后不得自动启动任何 Gateway Worker；升级安装保留已有用户配置，不重置 ON / OFF 状态；
 - 主机 A 可由用户在 GUI 启用 Gateway 并配置 Agent；
 - 主机 B 可保持 OFF，仍具有完整 Gateway 管理能力；
 - 不要求在 B 上安装不同软件或移除 Gateway 模块。
@@ -387,6 +388,8 @@ AirBridge 不读取 Antigravity / OpenCode 的客户端 Token Vault。Broker 有
 
 ### 8.7 发布前额外验收
 
+- [ ] 首次安装后 Gateway 总开关默认 OFF，且所有 Worker 保持停止。
+- [ ] 升级安装保留此前的 Gateway ON / OFF 配置。
 - [ ] AirBridge EXE 和 Gateway 使用 Python 3.11+ 同一运行时。
 - [ ] AirBridge Build Workflow 与依赖版本锁定。
 - [ ] Worker 使用同一 EXE，PyInstaller onefile 独立运行测试通过。
