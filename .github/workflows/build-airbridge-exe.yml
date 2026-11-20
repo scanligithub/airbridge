@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feature/m3-2-6-capture-authorized-exit
+      - feature/m2-4-zero-touch-agent-auth
     paths:
       - "AirBridge.spec"
       - "airbridge_app.py"
