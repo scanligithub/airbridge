@@ -91,7 +91,9 @@
 - 只有通过 Streamable HTTP、HTTPS 和 MCP OAuth 兼容性验证的客户端，才能进入受管 Gateway 模式；
 - 不开放无限制的任意 CIMD Metadata URL fetch；DCR / CIMD 注册不代表用户已授权 Agent；新 Client / 新 Grant 必须明确 Consent。
 
-**待产品决策：** 是否接受首版提供“通用手动接入”入口，以及后续是否按需增加 Cursor、VS Code Copilot、Cline 等专用 Adapter。
+**已确认：** M2.5 首批专用 Adapter 仅包含 Antigravity 和 OpenCode；Cursor、VS Code / Copilot、Cline 等不属于首批专用适配器开发范围，留待后续版本按需求和兼容性验证评估。
+
+**仍待产品决策：** 通用 MCP Client 手动接入是否纳入 M2.5 首版。该决定与首批专用 Adapter 名单相互独立。
 
 ### D-08：双机冲突弹窗行为
 
@@ -113,10 +115,11 @@
 - Agent 类型不写死为 Antigravity / OpenCode。
 - 每个注册实例有独立且稳定的内部 Agent ID；Agent 类型 / Adapter ID 与 Agent 实例 ID 分离。
 - Worker、Service Credential、OAuth Grant、Resource Audience 和 Scope 按 Agent 实例隔离。
-- 首版内置 Antigravity / OpenCode 专用 Adapter；通用模式不修改第三方配置文件，只生成配置片段和授权指引。
+- **用户已确认：** 首版专用 Adapter 仅有 Antigravity / OpenCode；不开发其他产品的专用 Adapter。
+- 通用模式（若获准纳入首版）不修改第三方配置文件，只生成配置片段和授权指引。
 - 后续增加产品专用 Adapter 时不修改 Gateway 核心 Worker / OAuth Broker。
 
-待决定：是否接受通用手动接入作为首版能力；第三方专用 Adapter 按兼容性验证结果逐步增加。
+已确认首批专用 Adapter 范围：仅 Antigravity / OpenCode。待决定：是否接受通用手动接入作为首版能力；其他产品专用 Adapter 留待后续版本评估。
 
 ## 4. 必须通过技术 PoC 的事项
 
