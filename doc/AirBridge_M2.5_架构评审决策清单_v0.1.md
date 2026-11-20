@@ -240,9 +240,9 @@ G-01A 的证据 JSON 将 `current_user_root_import` 记为 `NOT_RUN_INTERACTIVE_
 
 ### 4.1.2 G-01A2：CryptUIWizImport Native API CI 子 Gate
 
-Hosted Actions 在一次性标准用户 Profile 中通过 .github/scripts/g01-cryptui-import-ci.ps1 调用 CryptUIWizImport 的 NO_UI 模式，验证 P/Invoke、CRYPTUI_WIZ_IMPORT_SRC_INFO、CertOpenStore 的 CurrentUser Root 目标句柄、ALLOW_CERT / NO_CHANGE_DEST_STORE 标志、API 返回、Thumbprint 回读、Windows 默认链、LocalMachine Root 不变和精确清理。临时用户 Profile 在测试后按 SID 删除。
+Hosted Actions 在一次性标准用户 Profile 中通过 .github/scripts/g01-cryptui-import-ci.ps1 调用 CryptUIWizImport 的 NO_UI 模式，但目标 Store 使用 CurrentUser\\My（非受保护的个人证书库），验证 P/Invoke、CRYPTUI_WIZ_IMPORT_SRC_INFO、CertOpenStore 句柄、ALLOW_CERT / NO_CHANGE_DEST_STORE 标志、API 返回、Thumbprint 回读、Root 库不变和精确清理。临时用户 Profile 在测试后按 SID 删除。此前同一 API 对 CurrentUser\\Root 的 hosted no-UI 试验已在 native call 内 120 秒超时，不作为 PASS；该 Root 路径继续保留为真实交互式 G-01B 验收。
 
-G-01A2 不显示交互向导、不代表用户批准，也不构成 G-01B 交互式导入 PASS。它只验证 API 导入链路。
+G-01A2 不显示交互向导、不代表用户批准，也不构成 G-01B 交互式导入 PASS。它只验证 CryptUI API / 结构体 / P/Invoke 在 CurrentUser\\My 控制场景下的基本链路，不能推断 Root 写入成功。
 
 ### 4.1.3 G-01B：交互式 CurrentUser Root 导入子 Gate
 
