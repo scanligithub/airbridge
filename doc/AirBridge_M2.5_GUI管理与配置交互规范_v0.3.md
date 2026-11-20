@@ -70,8 +70,10 @@ AirBridge GUI 必须成为 Gateway 的统一管理控制台。用户无需手工
 ### 5.1 总开关
 
 `Gateway enabled` 是本机总开关：
+- **首次安装默认 OFF**：安装后的初始配置为关闭状态，不自动启动任何 Gateway Worker；用户必须在 GUI 中明确启用。
 - ON：允许 Gateway Supervisor 启动已启用 Agent 的 Worker。
 - OFF：停止所有受管 Worker；不关闭 AirBridge HTTP API、Runtime Session 或串行通信。
+- 升级安装不得把已有 Gateway 开关重置为默认值；应保留用户已保存的 ON / OFF 设置。
 - 配置更改必须持久化；写入失败时恢复 UI 原值并提示错误。
 
 ### 5.2 随 AirBridge 启动
@@ -251,6 +253,8 @@ Cursor、VS Code / Copilot、Cline 等不属于首批专用 Adapter 范围。Gen
 ## 12. GUI 验收清单
 
 - [ ] A/B 两端显示相同 Gateway 页面和相同功能入口。
+- [ ] 首次安装完成后 Gateway 总开关为 OFF，且没有任何 Gateway Worker 自动启动。
+- [ ] 升级安装保留已有 Gateway 总开关配置。
 - [ ] Gateway OFF 时所有管理页面仍可访问，AirBridge Runtime 正常。
 - [ ] 总开关、Agent 开关和随 AirBridge 启动配置正确持久化。
 - [ ] GUI 能准确显示配置状态与实际运行状态。
