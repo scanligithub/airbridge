@@ -11,6 +11,21 @@ from typing import TextIO
 
 
 def _run_stdio() -> int:
+    # A --windowed PyInstaller EXE starts with Python standard streams set to
+    # None. Restore the MCP Host's inherited pipe handles before importing MCP.
+    from stdio_io import restore_windows_stdio
+
+    try:
+        restore_windows_stdio()
+    except Exception as exc:
+        try:
+            if sys.stderr is not None:
+                sys.stderr.write(f"AirBridge MCP STDIO pipe setup failed: {exc}\\n")
+                sys.stderr.flush()
+        except Exception:
+            pass
+        return 2
+
     # Import lazily: stdout is reserved exclusively for MCP protocol frames.
     from airbridge_mcp_gateway.server import main as run_mcp_stdio
 
