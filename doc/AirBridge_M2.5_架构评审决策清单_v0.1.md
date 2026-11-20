@@ -41,7 +41,7 @@
 | T-08 | Antigravity / OpenCode 分别使用独立配置 Adapter，配置成功与 OAuth 授权成功分开显示 | 官方 schema 不同 |
 | T-09 | Runtime Session 复用现有 0x15 / 0x16 增加可选 gateway.state.v1，不新分配 ABFP 帧 | ADR-011 提案；新旧 EXE 双向测试待完成 |
 
-## 3. 仍需产品决策的默认行为
+## 3. 默认行为决策记录（已确认项与待决策项）
 
 以下项目仍需产品决策；已由用户明确确认的条目已在条目内标记为冻结，不再视为待决策。
 
