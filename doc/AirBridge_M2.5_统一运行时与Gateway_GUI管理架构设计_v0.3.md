@@ -10,7 +10,7 @@
 
 ## 1. 目标
 
-M2.5 将 MCP Gateway 纳入 AirBridge 桌面产品的统一交付、运行时和 GUI 管理体系。用户在 AirBridge GUI 中即可完成 Gateway 的启用、配置、Agent 实例管理、启动/停止、运行状态查看和日志诊断。M2.5 首批专用 MCP Client 配置 Adapter 仅覆盖 Antigravity / OpenCode；其他专用 Adapter 不属于首批范围。通用 MCP Client 手动接入是否纳入首版，仍是独立待决策项。
+M2.5 将 MCP Gateway 纳入 AirBridge 桌面产品的统一交付、运行时和 GUI 管理体系。用户在 AirBridge GUI 中即可完成 Gateway 的启用、配置、Agent 实例管理、启动/停止、运行状态查看和日志诊断。M2.5 首批专用 MCP Client 配置 Adapter 仅覆盖 Antigravity / OpenCode；其他专用 Adapter 不属于首批范围。Generic / Manual 通用 MCP Client 手动接入已确认不纳入首版，留待后续版本评估。
 
 M2.5 不改变 AirBridge 的产品定位：AirBridge 仍是通用、透明的双机通信与 Runtime 基础设施；Gateway 是其本机 MCP 接入层，不承担 Capture / Allegro 专业业务生命周期。
 
@@ -108,7 +108,7 @@ M2.5 目标建议增加可由 AirBridge 管理的持久 MCP 网络传输，优�
 - 每个 Agent 使用独立的 Gateway Worker / 服务实例；
 - 服务默认只监听本机 loopback，不监听 LAN 或公网；
 - 每个实例绑定固定 Agent ID，使用对应 Agent 的独立凭据和服务端 Scope；
-- 首批由 Antigravity 与 OpenCode 分别连接各自的本机 MCP endpoint；其他 MCP Client 只有在相应接入方式通过兼容性与安全验证后才能纳入，通用手动接入是否属于 M2.5 首版仍待决策；
+- 首批由 Antigravity 与 OpenCode 分别连接各自的本机 MCP endpoint；其他 MCP Client 只有在相应接入方式通过兼容性与安全验证后才能纳入，Generic / Manual 手动接入不属于 M2.5 首版；
 - 端口和 endpoint 由 GUI 配置/展示，不在文档中提前固化未经验证的端口号；
 - 现有 stdio 模式在迁移期保留兼容，除非兼容性测试证明无法安全共存。托管 HTTP 模式的 OAuth Authorization Server 与 MCP Resource Server endpoint 均采用 HTTPS；HTTP 仅可用于规范允许的 loopback OAuth redirect URI，不用于携带 Bearer Access Token 的 MCP 请求。
 
@@ -168,7 +168,7 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 ## 6. Agent 身份与权限
 
 - 每个已注册 Agent 实例都拥有独立稳定的 `agent_instance_id`、Credential 和服务端 Scope；`client_type_id` / `adapter_id` 描述客户端与配置适配方式，不代替实例身份。
-- M2.5 首批专用 Adapter 仅为 Antigravity / OpenCode；通用手动接入是否纳入首版仍待产品决策。
+- M2.5 首批专用 Adapter 仅为 Antigravity / OpenCode；Generic / Manual 通用手动接入不纳入首版。
 - 一个 Worker 固定绑定一个 `agent_instance_id`；MCP 请求不能通过参数切换 Agent 身份。
 - Gateway 从 M2.4 Credential Provider 获取对应 Token；Token 不进入 MCP JSON、普通配置文件、命令行参数、GUI 明文日志或模型上下文。
 - 默认只授予 M2.3 / M2.4 规定的只读 Scope：`runtime.read`、`eda.versions.read`、`request.read`。
@@ -182,7 +182,7 @@ Gateway GUI 至少提供以下功能：
 2. **服务管理**：启动、停止、重启；显示启动中、运行中、停止中、已停止、失败、降级等状态；停止过程显示排空/关闭结果。
 3. **Gateway 配置**：总开关、随 AirBridge 启动选项、Agent 实例开关、传输类型、监听地址和端口。
 4. **Agent 管理**：添加/初始化、启用/停用、凭据状态、Scope 查看与授权、凭据轮换、撤销。
-5. **MCP 客户端管理**：首批专用 Adapter 仅检测和配置 Antigravity / OpenCode 当前 Windows 用户级配置；展示发现结果；备份现有配置；合并而不是覆盖其他 MCP Server；写入后验证配置；提供恢复备份入口。通用 MCP Client 手动接入若未获批准，不作为首版交付功能。
+5. **MCP 客户端管理**：首批专用 Adapter 仅检测和配置 Antigravity / OpenCode 当前 Windows 用户级配置；展示发现结果；备份现有配置；合并而不是覆盖其他 MCP Server；写入后验证配置；提供恢复备份入口。Generic / Manual 通用 MCP Client 手动接入不纳入首版交付功能。
 6. **日志与诊断**：按 Agent / Worker 筛选日志；显示端口冲突、认证失败、客户端未连接、MCP initialize / tools/list 失败、健康检查失败等诊断信息。
 
 GUI 显示的“已启用配置”和“当前正在运行”必须是两个独立字段，不能把 enabled=true 错报为 running。
