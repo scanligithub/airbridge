@@ -129,12 +129,17 @@ Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭�
 - 证书 SAN 绑定 hostname（`localhost`），不包含端口；端口变化不改变 SAN，但仍必须进行完整 TLS 校验。
 - 首次安装采用上述默认端口；升级安装保留用户已经配置的端口。
 
-### 5.5 本机 HTTPS 证书与用户信任
+### 5.5 部署阶段的本机 HTTPS CA 与用户信任
 
-- 安装 / 初始配置时，GUI 必须清楚说明本机证书用途、信任范围和影响，并在用户明确同意后才导入。
-- 证书信任只写入当前 Windows 用户（CurrentUser）范围；不要求管理员权限，不修改 LocalMachine 证书存储区或 LocalMachine Root。
-- GUI 显示证书状态、有效期、SAN / hostname 匹配、信任状态及可执行的修复引导；不得将“证书已导入”直接显示为“所有 MCP 客户端均已信任”。
-- 用户拒绝导入、证书失效或用户撤销信任时，托管 Streamable HTTP / OAuth HTTPS Gateway 标记为不可用，说明原因和恢复方式。
+**CA 信任建立属于 AirBridge 部署流程，不属于 Gateway 启动流程。** 每台实际部署 M2.5 AirBridge 的 Windows 主机，在安装 / 部署阶段都应完成本机 CA 准备与用户信任引导；即使该机首次安装后 Gateway 总开关默认 OFF，也不跳过部署阶段的 CA 信任准备。
+
+- 部署程序在目标 Windows 用户上下文中为本机创建并持久化独立 CA 私钥 / CA 公证书，以及 localhost Server Certificate。每台主机独立生成自己的 CA 身份和服务器证书；A / B 不共享 CA 私钥、CA 文件或 Root Thumbprint，不指定固定签发主机。
+- 部署界面必须展示 CA Subject、Thumbprint、有效期、用途、信任范围（仅当前 Windows 用户）和影响。用户明确同意后，部署流程只把 CA **公钥证书**导入该目标用户的 `Cert:\CurrentUser\Root`；CA 私钥留在本机受保护密钥容器，服务器私钥也不得写入普通配置或日志。
+- 证书信任只写入实际运行 AirBridge / MCP Client 的目标 Windows 用户 CurrentUser 范围；不要求管理员权限，不修改 LocalMachine 证书存储区或 LocalMachine Root。若安装器需要提升权限，CurrentUser 信任引导必须切换到目标用户的非提升上下文执行，不能误导入提升后管理员账户的 CurrentUser。
+- **CA 部署与 Gateway enabled 是两个独立状态。** 首次安装仍将 `gateway.enabled=false`，不启动 Broker 或任何 Worker；CA 信任准备成功不代表开启 Gateway。
+- 用户拒绝 CA 信任时，AirBridge 安装及 Core / Runtime / 串口通信可继续，但 Managed HTTPS / OAuth Gateway 标记为不可用；不得静默导入。之后如需补做或修复，应通过明确的安装 / 部署 Repair 流程重新展示 Consent，不得在用户点击 Gateway ON 或普通程序启动时静默导入。
+- GUI 显示证书部署状态、有效期、SAN / hostname 匹配、信任状态和部署 / Repair 引导；不得将“CA 已导入”直接显示为“所有 MCP 客户端均已信任”。
+- 升级部署保留有效 CA、CA 私钥关联、服务器证书和 CurrentUser 信任，不重复导入、不无故轮换。若缺失、失效或需轮换，部署 / Repair 流程明确提示并再次取得用户同意；新旧信任重叠和回滚方案须经验证后执行。
 - 不得提示用户忽略证书错误，不得提供关闭 TLS 校验的选项，不得降级为无认证 HTTP。
 - 证书信任问题不得关闭既有 stdio 兼容路径或 AirBridge Core / Runtime。
 
@@ -142,7 +147,7 @@ Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭�
 
 升级安装时，GUI / Supervisor 必须显示正在执行的配置迁移、备份、验证或恢复状态，不得把升级配置重置成首次安装状态。
 
-必须保留：Gateway 总开关和启动策略；Agent 实例 ID、类型、Adapter、enabled、Scope、端口与 endpoint；M2.4 Credential Manager 凭据；OAuth Broker 客户端注册、Grant / Revocation、issuer / Resource Audience 与所需密钥材料；有效的 AirBridge CurrentUser 证书信任；Adapter 管理的当前用户级 MCP 配置条目。
+必须保留：Gateway 总开关和启动策略；Agent 实例 ID、类型、Adapter、enabled、Scope、端口与 endpoint；M2.4 Credential Manager 凭据；OAuth Broker 客户端注册、Grant / Revocation、issuer / Resource Audience 与所需密钥材料；有效的本机 CA 私钥关联、服务器证书和 AirBridge CurrentUser 证书信任；Adapter 管理的当前用户级 MCP 配置条目。
 
 迁移安全要求：
 - 使用版本化、幂等的 schema migration；只为旧 schema 中确实缺失的字段应用已记录默认值，绝不覆盖已有用户值或未知字段。
