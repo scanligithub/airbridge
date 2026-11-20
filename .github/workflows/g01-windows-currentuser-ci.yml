@@ -76,7 +76,7 @@ jobs:
             throw "ALLOW_CERT / NO_CHANGE_DEST_STORE flags are missing."
           }
           if (-not $interactive.Contains("Invoke-G01CryptUIWizImport -CertificateFile") -or
-              $interactive -match "(?im)Invoke-G01CryptUIWizImport[^\r\n]*-NoUI") {
+              $interactive.Contains("-NoUI")) {
             throw "Production G-01B must call CryptUIWizImport without the NO_UI switch."
           }
           if (-not $interactive.Contains("Open-G01CurrentUserRootStore")) {
