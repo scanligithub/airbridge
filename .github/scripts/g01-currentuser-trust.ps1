@@ -1,6 +1,13 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+# GitHub-hosted Windows Actions cannot complete the interactive Windows
+# confirmation required when adding a certificate to CurrentUser\Root.
+# This CI harness intentionally never writes either Root store. It validates
+# the standard-user profile, read-only store scope, custom-root chain logic,
+# certificate fixtures, and exact cleanup. Actual Root import belongs in the
+# interactive deployment flow after explicit user consent.
+
 $runId = [Guid]::NewGuid().ToString('N')
 $evidenceBase = if ($env:G01_EVIDENCE_ROOT) { $env:G01_EVIDENCE_ROOT } else { $env:RUNNER_TEMP }
 $evidenceDir = Join-Path $evidenceBase "airbridge-g01-$runId"
@@ -11,27 +18,31 @@ $leaf = $null
 $mismatchLeaf = $null
 $untrustedRoot = $null
 $untrustedLeaf = $null
+$rootPublic = $null
 $rootThumb = $null
-$rootCer = Join-Path $evidenceDir 'g01-root-public.cer'
 $localMachineBefore = @()
+$currentUserRootBefore = @()
 $certsToRemove = [System.Collections.Generic.List[string]]::new()
 $phaseFile = Join-Path $evidenceDir 'phase.txt'
 function Set-G01Phase { param([string]$Name) $Name | Set-Content -LiteralPath $phaseFile -Encoding UTF8 }
 Set-G01Phase 'script-start'
 
+$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
 $results = [ordered]@{
     run_id = $runId
     runner = $env:RUNNER_NAME
-    windows_identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    runner_is_elevated_admin = ([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    windows_identity = $identity.Name
+    runner_is_elevated_admin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     powershell = $PSVersionTable.PSVersion.ToString()
-    current_user_root_import = 'NOT_RUN'
+    process_session_id = [Diagnostics.Process]::GetCurrentProcess().SessionId
+    environment_user_interactive = [Environment]::UserInteractive
+    current_user_root_import = 'NOT_RUN_INTERACTIVE_WINDOWS_CONSENT_REQUIRED'
+    current_user_root_unchanged = 'NOT_RUN'
     local_machine_root_unchanged = 'NOT_RUN'
-    trusted_chain_build = 'NOT_RUN'
-    untrusted_ca_rejected_by_chain = 'NOT_RUN'
+    trusted_custom_root_chain_build = 'NOT_RUN'
+    untrusted_custom_root_chain_rejected = 'NOT_RUN'
     wrong_host_san_fixture = 'NOT_RUN'
-    localhost_https_client_handshake = 'NOT_RUN'
-    antigravity_opencode_client_tls = 'NOT_RUN'
     cleanup = 'NOT_RUN'
 }
 
@@ -91,22 +102,25 @@ function New-G01ServerCertificate {
     New-SelfSignedCertificate @parameters
 }
 
-function Test-ChainBuild {
+function Test-CustomRootChain {
     param(
         [Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        [Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$TrustedRoot,
         [Parameter(Mandatory)][bool]$ExpectedSuccess
     )
     $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
     try {
+        $chain.ChainPolicy.TrustMode = [System.Security.Cryptography.X509Certificates.X509ChainTrustMode]::CustomRootTrust
+        $chain.ChainPolicy.CustomTrustStore.Add($TrustedRoot)
         $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
         $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
         $ok = $chain.Build($Certificate)
+        $status = ($chain.ChainStatus | ForEach-Object { "$($_.Status): $($_.StatusInformation.Trim())" }) -join '; '
         if ($ExpectedSuccess -and -not $ok) {
-            $status = ($chain.ChainStatus | ForEach-Object { "$($_.Status): $($_.StatusInformation.Trim())" }) -join '; '
-            throw "Expected trusted chain to build, but it failed: $status"
+            throw "Expected custom-root chain to build, but it failed: $status"
         }
         if (-not $ExpectedSuccess -and $ok) {
-            throw 'An untrusted CA chain unexpectedly built successfully.'
+            throw 'A chain that does not terminate at the configured custom root unexpectedly built successfully.'
         }
         return $ok
     }
@@ -119,11 +133,15 @@ try {
     Set-G01Phase 'before-import-pki-module'
     Import-Module PKI -ErrorAction Stop
     Set-G01Phase 'pki-module-loaded'
-    Write-Host 'G-01 CurrentUser Root import and X509Chain validation'
-    if ($results.runner_is_elevated_admin) { throw 'G-01 trust-store test must run as a standard, non-elevated Windows user.' }
+    Write-Host 'G-01 noninteractive Windows store-scope and custom-chain checks'
+    if ($results.runner_is_elevated_admin) {
+        throw 'G-01 store-scope test must run as a standard, non-elevated Windows user.'
+    }
     Write-Host "Identity: $($results.windows_identity)"
     Write-Host "Elevated admin token: $($results.runner_is_elevated_admin)"
     Write-Host "PowerShell: $($results.powershell)"
+    Write-Host "SessionId: $($results.process_session_id)"
+    Write-Host "Environment.UserInteractive: $($results.environment_user_interactive)"
 
     Set-G01Phase 'before-localmachine-snapshot'
     $localMachineBefore = Get-ThumbprintSnapshot -Path 'Cert:\LocalMachine\Root'
@@ -133,8 +151,13 @@ try {
         throw 'LocalMachine Root snapshot unexpectedly empty; refusing an inconclusive scope test.'
     }
 
+    Set-G01Phase 'before-currentuser-root-snapshot'
+    $currentUserRootBefore = Get-ThumbprintSnapshot -Path 'Cert:\CurrentUser\Root'
+    Set-G01Phase 'currentuser-root-snapshot-complete'
+    $results.current_user_root_before_count = $currentUserRootBefore.Count
+
     Set-G01Phase 'before-create-test-certificates'
-    $root = New-G01RootCertificate -Subject "CN=AirBridge G01 CI Root $runId"
+    $root = New-G01RootCertificate -Subject "CN=AirBridge G01 CI Custom Root $runId"
     $leaf = New-G01ServerCertificate -Signer $root -Subject 'CN=localhost' -DnsName @('localhost')
     $mismatchLeaf = New-G01ServerCertificate -Signer $root -Subject 'CN=wrong-host.invalid' -DnsName @('wrong-host.invalid')
     $untrustedRoot = New-G01RootCertificate -Subject "CN=AirBridge G01 CI Untrusted Root $runId"
@@ -153,156 +176,29 @@ try {
     $results.leaf_thumbprint = $leaf.Thumbprint.ToUpperInvariant()
     $results.root_private_key_present_in_current_user_my = $root.HasPrivateKey
     $results.leaf_private_key_present_in_current_user_my = $leaf.HasPrivateKey
+    if ($currentUserRootBefore -contains $rootThumb) {
+        throw 'Disposable test root unexpectedly already exists in CurrentUser Root.'
+    }
 
     Set-G01Phase 'before-export-root-public-cer'
+    $rootCer = Join-Path $evidenceDir 'g01-root-public.cer'
     Export-Certificate -Cert $root -FilePath $rootCer -Type CERT -Force | Out-Null
     Set-G01Phase 'root-public-cer-exported'
     $rootPublic = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCer)
     if ($rootPublic.HasPrivateKey) {
         throw 'Exported CA CER unexpectedly contains a private key.'
     }
+    $results.root_public_cer_has_private_key = $rootPublic.HasPrivateKey
 
-    # The installer must obtain explicit user consent before this write operation.
-    # This CI-only probe uses the native CryptoAPI store API after simulating consent.
-    # It tests CurrentUser scope without relying on certutil or a certificate UI prompt.
-    Add-Type -TypeDefinition @'
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
+    Set-G01Phase 'before-trusted-custom-root-chain-build'
+    [void](Test-CustomRootChain -Certificate $leaf -TrustedRoot $rootPublic -ExpectedSuccess $true)
+    $results.trusted_custom_root_chain_build = 'PASS'
+    Set-G01Phase 'trusted-custom-root-chain-pass'
 
-namespace AirBridge.G01
-{
-    public static class CurrentUserRootStore
-    {
-        private const uint X509_ASN_ENCODING = 0x00000001;
-        private const uint PKCS_7_ASN_ENCODING = 0x00010000;
-        private const uint CERT_SYSTEM_STORE_CURRENT_USER = 0x00010000;
-        private const uint CERT_STORE_ADD_NEW = 1;
-        private const uint Encoding = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
-
-        [DllImport("crypt32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
-        private static extern IntPtr CertOpenStore(
-            IntPtr storeProvider,
-            uint messageAndCertificateEncodingType,
-            IntPtr cryptographicProvider,
-            uint flags,
-            string storeName);
-
-        [DllImport("crypt32.dll", ExactSpelling = true, SetLastError = true)]
-        private static extern bool CertAddEncodedCertificateToStore(
-            IntPtr certificateStore,
-            uint certificateEncodingType,
-            byte[] encodedCertificate,
-            uint encodedCertificateLength,
-            uint addDisposition,
-            out IntPtr certificateContext);
-
-        [DllImport("crypt32.dll", ExactSpelling = true, SetLastError = true)]
-        private static extern bool CertFreeCertificateContext(IntPtr certificateContext);
-
-        [DllImport("crypt32.dll", ExactSpelling = true, SetLastError = true)]
-        private static extern bool CertCloseStore(IntPtr certificateStore, uint flags);
-
-        public static IntPtr OpenCurrentUserRoot()
-        {
-            // CERT_STORE_PROV_SYSTEM_W is MAKEINTRESOURCEW(10); ROOT is the system store name.
-            IntPtr store = CertOpenStore(
-                new IntPtr(10), Encoding, IntPtr.Zero, CERT_SYSTEM_STORE_CURRENT_USER, "ROOT");
-            if (store == IntPtr.Zero)
-            {
-                int error = Marshal.GetLastWin32Error();
-                throw new Win32Exception(error, "CertOpenStore(CurrentUser\\ROOT) failed.");
-            }
-            return store;
-        }
-
-        public static void AddRoot(IntPtr store, byte[] encodedCertificate)
-        {
-            if (store == IntPtr.Zero)
-                throw new ArgumentException("The CurrentUser ROOT store handle is invalid.", "store");
-            if (encodedCertificate == null || encodedCertificate.Length == 0)
-                throw new ArgumentException("The public CA certificate is empty.", "encodedCertificate");
-
-            IntPtr context = IntPtr.Zero;
-            try
-            {
-                if (!CertAddEncodedCertificateToStore(
-                    store, Encoding, encodedCertificate, (uint)encodedCertificate.Length,
-                    CERT_STORE_ADD_NEW, out context))
-                {
-                    int error = Marshal.GetLastWin32Error();
-                    throw new Win32Exception(error, "CertAddEncodedCertificateToStore failed.");
-                }
-            }
-            finally
-            {
-                if (context != IntPtr.Zero)
-                    CertFreeCertificateContext(context);
-            }
-        }
-
-        public static void CloseStore(IntPtr store)
-        {
-            if (store != IntPtr.Zero && !CertCloseStore(store, 0))
-            {
-                int error = Marshal.GetLastWin32Error();
-                throw new Win32Exception(error, "CertCloseStore failed.");
-            }
-        }
-    }
-}
-'@ -Language CSharp
-
-    $nativeStore = [IntPtr]::Zero
-    try {
-        Set-G01Phase 'before-cryptapi-currentuser-root-open'
-        Write-Host 'Phase: crypt32 CertOpenStore for CurrentUser Root'
-        $nativeStore = [AirBridge.G01.CurrentUserRootStore]::OpenCurrentUserRoot()
-        Set-G01Phase 'cryptapi-currentuser-root-opened'
-        $results.current_user_root_store_open = 'PASS'
-
-        Set-G01Phase 'before-cryptapi-currentuser-root-add'
-        Write-Host 'Phase: crypt32 CertAddEncodedCertificateToStore into CurrentUser Root'
-        [AirBridge.G01.CurrentUserRootStore]::AddRoot($nativeStore, $rootPublic.RawData)
-        Set-G01Phase 'cryptapi-currentuser-root-add-returned'
-        $rootPublic.Dispose()
-    }
-    finally {
-        if ($nativeStore.ToInt64() -ne 0) {
-            [AirBridge.G01.CurrentUserRootStore]::CloseStore($nativeStore)
-        }
-    }
-
-    $trustedRoot = Get-Item -LiteralPath "Cert:\CurrentUser\Root\$rootThumb" -ErrorAction Stop
-    if ($trustedRoot.HasPrivateKey) {
-        throw 'CurrentUser Root unexpectedly contains a private key; only public CA material may be imported.'
-    }
-    $results.current_user_root_import = 'PASS'
-    $results.current_user_root_import_method = 'crypt32.dll CertAddEncodedCertificateToStore (CurrentUser ROOT)'
-
-    $results.current_user_root_readback = 'PASS (exact CurrentUser provider path)'
-
-    Set-G01Phase 'before-localmachine-after-import-snapshot'
-    $localMachineAfterImport = Get-ThumbprintSnapshot -Path 'Cert:\LocalMachine\Root'
-    $importDelta = Compare-Object -ReferenceObject $localMachineBefore -DifferenceObject $localMachineAfterImport
-    if ($importDelta) {
-        $importDelta | Format-Table | Out-String | Write-Host
-        throw 'LocalMachine Root changed during CurrentUser Root import.'
-    }
-    $results.local_machine_root_unchanged = 'PASS'
-    $results.local_machine_root_after_import_count = $localMachineAfterImport.Count
-
-    Set-G01Phase 'before-trusted-chain-build'
-    Write-Host 'Phase: verify a certificate chain trusted by CurrentUser Root'
-    [void](Test-ChainBuild -Certificate $leaf -ExpectedSuccess $true)
-    $results.trusted_chain_build = 'PASS'
-    Set-G01Phase 'trusted-chain-build-pass'
-
-    Set-G01Phase 'before-untrusted-chain-build'
-    Write-Host 'Phase: verify an unrelated CA is not trusted'
-    [void](Test-ChainBuild -Certificate $untrustedLeaf -ExpectedSuccess $false)
-    $results.untrusted_ca_rejected_by_chain = 'PASS'
-    Set-G01Phase 'untrusted-chain-rejected'
+    Set-G01Phase 'before-untrusted-custom-root-chain-build'
+    [void](Test-CustomRootChain -Certificate $untrustedLeaf -TrustedRoot $rootPublic -ExpectedSuccess $false)
+    $results.untrusted_custom_root_chain_rejected = 'PASS'
+    Set-G01Phase 'untrusted-custom-root-chain-rejected'
 
     $leafDnsNames = @($leaf.DnsNameList | ForEach-Object { $_.Unicode })
     $mismatchDnsNames = @($mismatchLeaf.DnsNameList | ForEach-Object { $_.Unicode })
@@ -312,7 +208,21 @@ namespace AirBridge.G01
     $results.wrong_host_san_fixture = 'PASS'
     Set-G01Phase 'san-fixtures-verified'
 
-    Write-Host 'G-01 CurrentUser store and chain tests passed. Live HTTP client handshake and vendor MCP clients remain separate gates.'
+    $currentUserRootAfterTest = Get-ThumbprintSnapshot -Path 'Cert:\CurrentUser\Root'
+    if (Compare-Object -ReferenceObject $currentUserRootBefore -DifferenceObject $currentUserRootAfterTest) {
+        throw 'CurrentUser Root changed during noninteractive CI test; this harness must remain read-only for Root.'
+    }
+    $results.current_user_root_unchanged = 'PASS'
+    $results.current_user_root_after_count = $currentUserRootAfterTest.Count
+
+    $localMachineAfterTest = Get-ThumbprintSnapshot -Path 'Cert:\LocalMachine\Root'
+    if (Compare-Object -ReferenceObject $localMachineBefore -DifferenceObject $localMachineAfterTest) {
+        throw 'LocalMachine Root changed during noninteractive CI test.'
+    }
+    $results.local_machine_root_unchanged = 'PASS'
+    $results.local_machine_root_after_count = $localMachineAfterTest.Count
+
+    Write-Host 'Noninteractive G-01 CI checks passed. CurrentUser Root import was intentionally NOT RUN; deployment import requires an interactive Windows consent session.'
 }
 catch {
     $results.failure = $_.Exception.ToString()
@@ -320,53 +230,63 @@ catch {
 }
 finally {
     Set-G01Phase 'cleanup-start'
-    # Remove only certificates created by this run, by their exact thumbprints.
-    if ($rootThumb) {
-        $rootTrustPath = "Cert:\CurrentUser\Root\$rootThumb"
-        if (Test-Path -LiteralPath $rootTrustPath) {
-            Remove-Item -LiteralPath $rootTrustPath -Force -ErrorAction Stop
-        }
-        $results.current_user_root_cleanup = 'PASS'
-    }
+    if ($rootPublic) { $rootPublic.Dispose() }
 
     foreach ($thumb in $certsToRemove) {
         Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumb" -ErrorAction SilentlyContinue
     }
-    if (Test-Path -LiteralPath $rootCer) {
-        Remove-Item -LiteralPath $rootCer -Force -ErrorAction SilentlyContinue
+    $rootCerPath = Join-Path $evidenceDir 'g01-root-public.cer'
+    if (Test-Path -LiteralPath $rootCerPath) {
+        Remove-Item -LiteralPath $rootCerPath -Force -ErrorAction SilentlyContinue
     }
 
-    if ($localMachineBefore.Count -gt 0) {
+    if ($currentUserRootBefore.Count -gt 0) {
+        $currentUserRootAfterCleanup = Get-ThumbprintSnapshot -Path 'Cert:\CurrentUser\Root'
+        $currentUserDelta = Compare-Object -ReferenceObject $currentUserRootBefore -DifferenceObject $currentUserRootAfterCleanup
+        if ($currentUserDelta) {
+            $results.current_user_root_unchanged = 'FAIL'
+            $results.cleanup = 'FAIL'
+            $results.current_user_root_cleanup_delta = ($currentUserDelta | Out-String)
+        }
+        elseif ($results.current_user_root_unchanged -ne 'FAIL') {
+            $results.current_user_root_unchanged = 'PASS'
+        }
+
         $localMachineAfterCleanup = Get-ThumbprintSnapshot -Path 'Cert:\LocalMachine\Root'
         $cleanupDelta = Compare-Object -ReferenceObject $localMachineBefore -DifferenceObject $localMachineAfterCleanup
         if ($cleanupDelta) {
             $results.local_machine_root_unchanged = 'FAIL'
             $results.cleanup = 'FAIL'
-            $results.cleanup_delta = ($cleanupDelta | Out-String)
+            $results.local_machine_root_cleanup_delta = ($cleanupDelta | Out-String)
         }
-        else {
-            if ($results.local_machine_root_unchanged -ne 'FAIL') {
-                $results.local_machine_root_unchanged = 'PASS'
-            }
+        elseif ($results.local_machine_root_unchanged -ne 'FAIL') {
+            $results.local_machine_root_unchanged = 'PASS'
+        }
+
+        $remainingMy = @($certsToRemove | Where-Object { Test-Path -LiteralPath "Cert:\CurrentUser\My\$_" })
+        $results.certificate_cleanup_verified = ($remainingMy.Count -eq 0)
+        if (-not $results.certificate_cleanup_verified) {
+            $results.cleanup = 'FAIL'
+            $results.remaining_current_user_my_thumbprints = $remainingMy
+        }
+        elseif ($results.cleanup -ne 'FAIL') {
             $results.cleanup = 'PASS'
         }
 
-        if ($rootThumb) {
-            $stillTrusted = Test-Path -LiteralPath "Cert:\CurrentUser\Root\$rootThumb"
-            $stillInMy = Test-Path -LiteralPath "Cert:\CurrentUser\My\$rootThumb"
-            $results.certificate_cleanup_verified = (-not $stillTrusted -and -not $stillInMy)
-            if (-not $results.certificate_cleanup_verified) {
-                $results.cleanup = 'FAIL'
-            }
-        }
+        $results.current_user_root_after_cleanup_count = $currentUserRootAfterCleanup.Count
         $results.local_machine_root_after_cleanup_count = $localMachineAfterCleanup.Count
+    }
+    else {
+        $results.cleanup = 'FAIL'
+        if (-not $results.failure) { $results.failure = 'Store baseline was not captured; cleanup scope could not be verified.' }
     }
 
     Set-G01Phase ('cleanup-complete-' + $results.cleanup)
-    $results | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $evidenceDir 'g01-result.json') -Encoding UTF8
-    Get-Content -LiteralPath (Join-Path $evidenceDir 'g01-result.json') | Write-Host
+    $resultPath = Join-Path $evidenceDir 'g01-result.json'
+    $results | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $resultPath -Encoding UTF8
+    Get-Content -LiteralPath $resultPath | Write-Host
 
-    if ($results.cleanup -ne 'PASS' -or $results.local_machine_root_unchanged -ne 'PASS') {
-        throw 'G-01 cleanup / LocalMachine integrity check failed.'
+    if ($results.cleanup -ne 'PASS' -or $results.local_machine_root_unchanged -ne 'PASS' -or $results.current_user_root_unchanged -ne 'PASS') {
+        throw 'G-01 cleanup / CurrentUser Root / LocalMachine Root integrity check failed.'
     }
 }
