@@ -47,6 +47,7 @@
 - 主机 A、B 使用同一个 AirBridge.exe、同一个安装包和完整相同功能。
 - Gateway ON/OFF 只由各自 GUI 配置决定，不按环境自动推断主机角色。
 - Gateway GUI 是完整管理控制台，不是启动按钮；必须显示配置态与实际运行态。
+- 首次安装 Gateway 总开关默认 OFF；用户在 GUI 中明确启用后才启动 Worker。升级安装应保留已有用户配置。
 - Gateway OFF 不关闭 AirBridge Runtime、串口通信或 HTTP API。
 - 每个 Agent 身份、OAuth Grant、M2.4 Service Credential 和 Resource Audience 相互隔离。
 - OAuth Access Token 与 M2.4 Agent Service Token 不得混用；Service Token 不进入 MCP Host 配置。
