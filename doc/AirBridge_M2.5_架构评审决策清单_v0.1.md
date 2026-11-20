@@ -96,8 +96,8 @@
 - 三个服务使用不同端口；AirBridge 现有 HTTP API `127.0.0.1:8888` 保持不变，不与 Gateway 共用端口。
 - 仅监听本机 loopback（IPv4 `127.0.0.1` / IPv6 `::1`，按平台支持情况绑定）；面向 MCP Client 的稳定 hostname 为 `localhost`。禁止绑定 `0.0.0.0`、`::` 等通配地址，不自动开放 LAN / 公网访问。
 - 每个 Agent 实例必须有独立、固定、持久化的 TCP 端口；同类型客户端的多个实例也不得共用 Worker 监听端口。新增实例由配置管理器从 M2.5 默认候选端口池中选择未占用端口并持久化。
-- M2.5 默认候选端口池为 `38801–38864`。IANA 当前登记快照将该段列为 Unassigned；这不代表为 AirBridge 保留，也不保证目标主机端口空闲。发布时应复核 IANA 登记状态，实际启动仍必须在本机检查。
-- Windows 默认动态客户端端口范围通常为 `49152–65535`，但系统配置可能被修改；启动前仍须检查目标主机的实际动态 / excluded port range 和监听占用，不得仅凭默认值判断。
+- M2.5 默认候选端口池为 `38801–38864`。IANA 当前登记快照将该段列为 Unassigned；这些端口仍属于 IANA User Ports 范围，不代表为 AirBridge 保留，也不保证目标主机端口空闲。发布时应复核 IANA 登记状态，实际启动仍必须在本机检查。
+- Windows 默认动态客户端端口范围通常为 `49152–65535`，但系统配置可能被修改；启动前仍须检查目标主机的实际动态 / excluded port range 和监听占用，不得仅凭默认值判断。可用 Microsoft `netsh` 命令核查（见下列参考）。
 - 端口冲突时显示端口及可获得的进程名称 / PID；冲突服务不得启动。Broker 冲突会阻断依赖它的 Managed HTTPS OAuth 服务；单个 Worker 冲突只使对应 Agent 实例失败，其它独立 Worker 可继续运行。
 - 禁止静默切换到随机端口。用户可在 GUI 主动选择候选池内的空闲端口；保存前重新校验并持久化。
 
@@ -106,6 +106,11 @@
 - Broker 端口变化会改变 OAuth issuer / Discovery Metadata。必须更新 issuer 和 Worker 元数据引用，使客户端重新发现授权服务器并重新授权；旧 issuer 下的 Grant 不得被新 issuer 复用。
 - 端口变更前先验证新端口可绑定；任一配置写入失败必须回滚配置，不得留下 listener、metadata 与 MCP Client 配置不一致的半迁移状态。证书 SAN 只绑定 hostname，不包含 TCP 端口；hostname 仍须为 `localhost` 并通过正常 TLS 校验。
 - 首次安装初始化上述默认值；升级必须保留用户已保存端口，不得重置为默认值。
+
+参考：
+- IANA Service Name and Transport Protocol Port Number Registry（含 `38801–38864` 当前 Unassigned 记录）：https://www.iana.org/assignments/service-names-port-numbers/
+- Microsoft：TCP/IP 默认动态端口范围与 `netsh` 检查命令：https://learn.microsoft.com/en-us/troubleshoot/windows-client/networking/tcp-ip-port-exhaustion-troubleshooting
+- Microsoft：`netsh interface` 动态 / excluded port range 命令：https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/netsh-interface
 
 ### D-07：OAuth 客户端注册策略
 
@@ -174,7 +179,7 @@
 ## 6. 评审通过后的冻结范围
 
 文档评审完成后：
-1. 将已确认 P-01 至 P-14 标记为 Frozen Product Requirements；
+1. 将已确认 P-01 至 P-15 标记为 Frozen Product Requirements；
 2. 对 D-01 至 D-09 记录用户选择或明确延期；
 3. 关闭 G-01 至 G-10 的技术可行性门禁，或者明确标记 No-Go / 暂缓；
 4. 更新 M2.5 架构文档和 ADR 状态；
