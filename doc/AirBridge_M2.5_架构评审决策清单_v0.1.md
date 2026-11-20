@@ -24,7 +24,7 @@
 | P-11 | M2.5 首批专用 MCP Client Adapter 仅支持 Antigravity 与 OpenCode；其他专用 Adapter 不属于首批范围 | 用户已确认 |
 | P-12 | M2.5 首版不提供 Generic / Manual 通用 MCP Client 手动接入；该能力留待后续版本评估 | 用户已确认 |
 | P-13 | 首次安装时 Gateway 总开关默认 OFF | 用户已确认 |
-| P-14 | 本机 HTTPS 证书仅在当前 Windows 用户范围建立信任；安装时须明确征求用户同意，不要求管理员权限，不修改 LocalMachine Root；拒绝信任时托管 HTTPS Gateway 不可用，禁止不安全降级 | 用户已确认 |
+| P-14 | 每台部署 M2.5 的 Windows 主机在部署阶段准备本机 CA / localhost 服务器证书，并仅在目标 Windows 用户 CurrentUser Root 经明确同意后导入 CA 公钥；不要求管理员权限、不修改 LocalMachine Root；CA 部署不改变 Gateway 默认 OFF；拒绝信任时 Managed HTTPS Gateway 不可用，禁止不安全降级 | 用户已确认 |
 | P-15 | M2.5 固定默认 TCP 端口：OAuth Broker 38861、首个 Antigravity Worker 38862、首个 OpenCode Worker 38863；仅监听 loopback，每个 Agent 实例端口独立持久化；冲突必须显式处理，不随机切换 | 用户已确认 |
 | P-16 | 双机 Gateway 配置冲突按连接代次 / 冲突状态去重弹窗；提示可稍后处理或打开设置；GUI 保留非模态冲突提示直至恢复；首版不提供会话忽略按钮 | 用户已确认 |
 | P-17 | 升级安装保留所有有效用户 Gateway / Agent / 端口 / 证书 / OAuth Broker Grant / 当前用户 MCP 配置状态；版本化迁移须备份、原子提交、可回滚；异常配置不得静默重置为首次安装默认值 | 用户已确认 |
@@ -86,16 +86,19 @@
 
 **用户已确认：** GUI 退出时，先对在途请求进行有界排空，然后停止所有受管 Gateway Worker；不保留后台 Worker，不允许 Worker 脱离 Supervisor 孤立运行。OAuth Broker 等共享依赖的关闭顺序由 Supervisor 管理，未单独作为用户确认项。
 
-### D-04：本机 HTTPS 证书信任
+### D-04：部署阶段本机 HTTPS CA 信任
 
 **用户已确认并冻结：**
-- 本机证书信任只在当前 Windows 用户（CurrentUser）范围建立，不修改 LocalMachine 证书存储区，尤其不得写入 LocalMachine Root。
-- 首次安装 / 初始配置证书时，必须向用户清楚说明证书用途和信任范围，并取得明确同意；不得静默导入。
-- 不要求管理员权限。
-- 用户拒绝导入或撤销信任后，托管 Streamable HTTP / OAuth HTTPS Gateway 保持不可用；不得关闭 TLS 证书校验、忽略证书错误或降级成无认证 HTTP。
-- 现有 stdio 兼容路径及 AirBridge Core / Runtime 不因用户拒绝本机 HTTPS 证书而被关闭。
+- CA / localhost Server Certificate 的准备和信任导入属于每台 Windows 主机的 AirBridge 部署流程，不等待用户在 GUI 打开 Gateway 或第一次连接 MCP Client 时才导入。
+- 每台部署 M2.5 AirBridge 的主机独立创建 / 管理自己的 CA 私钥与服务器证书；不指定固定 Host A / Host B 签发端，不跨机器复制 CA 私钥，也不要求各机 Root Thumbprint 相同。
+- 部署时向目标 Windows 用户明确展示 CA Subject、Thumbprint、有效期、用途与信任范围；取得明确同意后，只把 CA 公钥导入该用户的 `Cert:\CurrentUser\Root`。CurrentUser 是每台机器、每个用户各自的证书库。
+- 不要求管理员权限，不修改 LocalMachine 证书存储区或 LocalMachine Root。若部署程序提升权限，证书信任导入必须在实际目标用户的非提升上下文完成，不能误写入安装管理员账户的 CurrentUser。
+- CA 部署与 Gateway 运行开关独立：首次安装 Gateway 总开关仍默认 OFF，部署完成不启动 Broker 或 Worker。
+- 用户拒绝 CA Consent 时，AirBridge 安装和 Core / Runtime 继续可用，但 Managed HTTPS / OAuth Gateway 不可用；不得静默导入或在普通 Gateway ON 操作时补导入。以后补做 / 修复必须走显式部署 Repair 并重新 Consent。
+- 升级保留有效 CA、私钥关联、服务器证书和 CurrentUser 信任；缺失或需要轮换时只允许在部署 / Repair 流程明示原因并再次取得 Consent。禁止 TLS bypass 或不安全 HTTP 降级。
+- 证书信任拒绝 / 失效不影响既有 stdio 兼容路径与 AirBridge Core / Runtime。
 
-**仍需技术 PoC：** CurrentUser 信任证书对目标 Windows 环境、Antigravity App / IDE、OpenCode 和系统浏览器是否均生效；并验证证书 SAN、私钥保护、轮换、撤销、升级和卸载。PoC 不得擅自改变上述信任范围和用户同意要求；若无法满足，Managed HTTPS Mode 判定 No-Go，需重新评审替代方案。
+**仍需技术 PoC：** CurrentUser Root 对目标 Windows 环境、Antigravity App / IDE、OpenCode 和系统浏览器的识别；部署进程 / 用户上下文正确性；证书 SAN、私钥保护、升级、Repair、轮换、撤销和卸载。任何 PoC 不得扩大上述信任范围。
 
 ### D-05：MCP Client 配置安装范围
 
