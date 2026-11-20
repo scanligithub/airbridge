@@ -3501,8 +3501,13 @@ class AirBridgeMainWindow(QMainWindow):
     )
 
 
-if __name__ == "__main__":
+def run_gui() -> int:
+  """Start the existing AirBridge desktop UI."""
   app = QApplication(sys.argv)
   window = AirBridgeMainWindow()
   window.show()
-  sys.exit(app.exec())
+  return app.exec()
+
+
+if __name__ == "__main__":
+  sys.exit(run_gui())
