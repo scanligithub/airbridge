@@ -11,7 +11,7 @@
 1. [统一运行时与 Gateway GUI 管理架构设计 v0.3](AirBridge_M2.5_统一运行时与Gateway_GUI管理架构设计_v0.3.md)
    - 统一 AirBridge.exe、Python 3.11+、Gateway Worker、M2.4.1 真实合并基线、双 HTTPS OAuth、双 Agent 授权、Runtime Session Gateway 状态兼容。
 2. [Gateway GUI 管理与配置交互规范 v0.3](AirBridge_M2.5_GUI管理与配置交互规范_v0.3.md)
-   - Gateway 总览、启停、配置、Agent 管理、MCP 客户端配置、Antigravity / OpenCode 授权引导、证书状态和真实运行状态显示。
+   - Gateway 总览、启停、配置、Agent 管理、MCP 客户端配置、首批 Antigravity / OpenCode 授权引导、可扩展 Agent 类型、证书状态和真实运行状态显示。
 3. [实施路线图与验收计划 v0.3](AirBridge_M2.5_实施路线图与验收计划_v0.3.md)
    - Python 3.11+ 统一构建、OAuth/TLS Go-No-Go、PyInstaller Worker、Host OAuth UX、Runtime Session 兼容和 A/B 双机验收。
 
@@ -27,7 +27,9 @@
    - Opaque Token、Grant 撤销、双 HTTPS、Agent / Resource Audience 绑定和证书管理。
 5. [ADR-011：Runtime Session Gateway 状态扩展与旧版兼容](ADR-011_RuntimeSession_Gateway_State_Extension.md)
    - 复用 0x15 / 0x16，新增可选 `gateway.state.v1`，兼容旧版并验证四种开关组合。
-6. [M2.5 架构评审决策清单 v0.1](AirBridge_M2.5_架构评审决策清单_v0.1.md)
+6. [ADR-012：Agent 扩展与 MCP Client Adapter 注册机制](ADR-012_M2.5_Agent扩展与MCP_Client_Adapter注册机制.md)
+   - 区分客户端类型与 Agent 实例；采用专用 Adapter + 通用手动接入；明确扩展边界和安全约束。
+7. [M2.5 架构评审决策清单 v0.1](AirBridge_M2.5_架构评审决策清单_v0.1.md)
    - 区分用户已确认原则、技术提案、尚需产品决策的默认行为和实施前必须完成的 PoC Gate。
 
 ## 三、历史草稿
