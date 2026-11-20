@@ -40,3 +40,8 @@
 - “设计基线 / 待实现”不得描述为已实现功能。
 - 代码、协议和文档发生变化时，应同步更新本目录。
 - 正式实现应提供自动化测试和主机 A/B 实机验收记录。
+
+
+## M2.5 技术 PoC 操作手册
+
+- [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)：Windows CurrentUser HTTPS 信任 PoC 的测试证书准备、用户同意导入、信任范围核验、客户端 TLS / OAuth / MCP 验证、负向测试与清理。当前为操作草案，尚未在 Host A 执行；G-01 不得标记为 PASS。
