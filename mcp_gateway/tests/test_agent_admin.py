@@ -17,7 +17,7 @@ class _FakeSecurityStore:
         self.revoked = []
         self.fail_revoke = fail_revoke
 
-    def list_tokens(self, _agent_id):
+    def list_tokens(self, _agent_id=None):
         return self.existing
 
     def issue_token(self, agent_id, scopes, **kwargs):

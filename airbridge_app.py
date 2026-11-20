@@ -1841,14 +1841,17 @@ class AntigravityIPCServer:
             request_id = getattr(self, "_audit_request_id", None)
             failure = {
                 "success": False,
-                "state": "unknown" if request_id else "unavailable",
+                "state": "unknown",
                 "error": {
                     "code": "AGENT_AUDIT_FINALIZATION_FAILED",
                     "message": (
-                        "The request may already have been admitted. Query this request_id; "
-                        "do not submit the operation again."
-                        if request_id else
-                        "The final audit record could not be persisted; no success result is returned."
+                        (
+                            "The request may already have been admitted. Query this request_id; "
+                            "do not submit the operation again."
+                            if request_id else
+                            "The operation outcome is unknown because its final audit record "
+                            "could not be persisted. Do not repeat a non-idempotent operation blindly."
+                        )
                     ),
                 },
             }
