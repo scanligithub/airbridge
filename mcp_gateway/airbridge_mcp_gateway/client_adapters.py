@@ -694,8 +694,16 @@ class OpenCodeAdapter(_BaseAdapter):
     server_name = "airbridge-opencode"
 
     @staticmethod
-    def global_config(home: str | os.PathLike[str] | None = None) -> Path:
-        directory = Path(home or Path.home()) / ".config" / "opencode"
+    def global_config(
+        home: str | os.PathLike[str] | None = None,
+        environ: Mapping[str, str] | None = None,
+    ) -> Path:
+        env = os.environ if environ is None else environ
+        xdg_config_home = env.get("XDG_CONFIG_HOME", "").strip()
+        if xdg_config_home:
+            directory = Path(xdg_config_home).expanduser() / "opencode"
+        else:
+            directory = Path(home or Path.home()) / ".config" / "opencode"
         jsonc_path = directory / "opencode.jsonc"
         json_path = directory / "opencode.json"
         if jsonc_path.exists():
