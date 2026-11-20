@@ -47,7 +47,7 @@
 - 主机 A、B 使用同一个 AirBridge.exe、同一个安装包和完整相同功能。
 - Gateway ON/OFF 只由各自 GUI 配置决定，不按环境自动推断主机角色。
 - Gateway GUI 是完整管理控制台，不是启动按钮；必须显示配置态与实际运行态。
-- 首次安装 Gateway 总开关默认 OFF；用户在 GUI 中明确启用后才启动 Worker。升级安装应保留已有用户配置。
+- 首次安装 Gateway 总开关默认 OFF；用户在 GUI 中明确启用后才启动 Worker。升级安装保留 Gateway / Agent / OAuth Grant / CurrentUser 证书 / MCP 用户配置；版本化迁移、备份和回滚，不重置用户状态。
 - `gateway.start_with_airbridge` 默认 ON，但受 Gateway 总开关和 Agent 实例开关约束；M2.5 首版不配置 Windows 登录自动启动 AirBridge GUI。
 - Gateway OFF 不关闭 AirBridge Runtime、串口通信或 HTTP API。
 - 每个 Agent 身份、OAuth Grant、M2.4 Service Credential 和 Resource Audience 相互隔离。
@@ -62,6 +62,7 @@
 
 ## 五、实施前置 Gate
 
+- 首次安装默认 OFF 与升级配置 / 授权状态保留、配置损坏恢复和迁移回滚验证；
 - 本机 OAuth Broker + 两个 Worker endpoint 的 HTTPS 证书真实客户端验证；
 - 默认 TCP 端口、loopback-only 监听、实际 bind 冲突检测、Worker / Broker 端口迁移与 OAuth 重新授权验证；
 - Antigravity Authenticate 与 OpenCode `/mcps` / CLI auth 验证；
