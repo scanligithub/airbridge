@@ -75,6 +75,7 @@ class GatewayConfig:
     max_request_body_bytes: int = 60_000
     agent_id: str = ""
     agent_token: str = field(default="", repr=False)
+    enforce_gateway_policy: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_url", _validate_loopback_http_url(self.base_url))
@@ -85,6 +86,8 @@ class GatewayConfig:
             )
         if has_agent_id:
             object.__setattr__(self, "agent_id", _validate_agent_id(self.agent_id))
+        if not isinstance(self.enforce_gateway_policy, bool):
+            raise GatewayConfigurationError("enforce_gateway_policy must be a Boolean")
         if not 1.0 <= self.http_timeout_seconds <= 60.0:
             raise GatewayConfigurationError(
                 "AIRBRIDGE_HTTP_TIMEOUT_SECONDS must be between 1 and 60"
@@ -129,4 +132,8 @@ class GatewayConfig:
             ),
             agent_id=agent_id,
             agent_token=agent_token,
+            # The unified AirBridge.exe STDIO entrypoint sets this internal
+            # process flag. The legacy standalone M2.1/M2.2 package stays
+            # backward compatible until migrated to the unified EXE.
+            enforce_gateway_policy=(env.get("AIRBRIDGE_M2_5_GATEWAY_POLICY") == "1"),
         )
