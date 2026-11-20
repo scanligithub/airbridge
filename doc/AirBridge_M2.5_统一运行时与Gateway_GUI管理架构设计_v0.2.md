@@ -334,3 +334,10 @@ PyInstaller onefile 独立子进程如果需要独立于父 GUI 运行，应按 
 - 未验证 PyInstaller frozen 单文件 Worker 的进程隔离和恢复；
 - 未定义最终端口范围、证书部署/更新方式和 OAuth Server 具体实现；
 - 本文仍为设计评审稿，不代表 M2.5 任何功能已实现。
+
+
+### 14.7 本机授权拓扑提议（ADR-010）
+
+进一步建议由 AirBridge GUI / Gateway Supervisor 托管一个统一的本机 OAuth Broker（HTTPS Authorization Server），各 Agent Gateway Worker 则作为独立 MCP Resource Server。OAuth Broker 为各 Worker endpoint 签发不同 audience / Agent ID / Scope 的 Access Token；各 Worker 只验证发给自身的 Token。M2.4 Agent Service Token 仍由 Worker 从 Credential Provider 读取，用于 Worker → AirBridge HTTP API。
+
+该拓扑可复用一个本机 HTTPS issuer 和证书生命周期，同时保持各 Agent Worker 的 Resource Audience 与凭据隔离。具体授权记录、Token 存储方案（Opaque Token / JWT）、证书安装和撤销流程见《ADR-010：M2.5 本机 OAuth Broker 与多 Agent Worker 授权拓扑》。此处仍是提议，必须先通过真实 Antigravity / OpenCode HTTPS OAuth 原型。
