@@ -344,16 +344,16 @@ G-01 未通过时保留现有 stdio 兼容路径；Managed HTTPS 不上线。不
 
 ### 13.5 G-01A2：GitHub Actions 的无 UI API 验证
 
-Hosted Actions 无法由操作员完成 Windows 原生证书导入向导，因此 CI 不运行 G-01B。CI 会创建一次性普通用户及独立 Profile，在该隔离 Profile 中调用同一个 CryptUIWizImport API，但仅在 CI 模式设置 CRYPTUI_WIZ_NO_UI。验证项目包括：
+Hosted Actions 无法由操作员完成 Windows 原生证书导入向导，因此 CI 不运行 G-01B。CI 会创建一次性普通用户及独立 Profile，在该隔离 Profile 中调用同一个 CryptUIWizImport API，但仅在 CI 模式设置 CRYPTUI_WIZ_NO_UI，并把目的 Store 改为 CurrentUser\\My 做 API control test。该路径不尝试修改 CurrentUser\\Root。验证项目包括：
 
 - P/Invoke 对 crypt32.dll / cryptui.dll 的声明能加载；
 - CRYPTUI_WIZ_IMPORT_SRC_INFO 结构体可正确构造；
 - CertOpenStore 打开 CERT_SYSTEM_STORE_CURRENT_USER 下的 Root Store；
-- ALLOW_CERT + NO_CHANGE_DEST_STORE + NO_UI 调用成功；
+- ALLOW_CERT + NO_CHANGE_DEST_STORE + NO_UI 调用成功并回读测试证书 Thumbprint；
 - CryptUIWizImport 返回成功，CurrentUser Root 按 Thumbprint 回读；
 - Windows 默认 X509Chain 对 localhost Leaf 正向验证成功；
 - LocalMachine Root 前后 Thumbprint 集合不变；
-- 清理后 CurrentUser Root 恢复原集合、CurrentUser My 精确临时证书已删除；
+- CurrentUser Root 与 LocalMachine Root 前后不变；清理后 CurrentUser My 精确临时测试证书已删除；
 - 最后按 SID 删除整个 disposable Profile。
 
-该 CI 只验证 API / 结构体 / 句柄 / flags / 导入与清理路径。NO_UI 模式不显示 Windows 向导，不证明用户授权，也不能代替 G-01B。
+该 CI 只验证 API / 结构体 / 句柄 / flags 在 CurrentUser My 控制场景下的导入与清理路径。此前将同一 NO_UI API 指向 CurrentUser Root 的 hosted Actions 测试在 native call 内 120 秒超时，阶段标记证明未返回；这不能说明目标机交互向导失败，但也不能算 Root 导入成功。NO_UI 模式不显示 Windows 向导，不证明用户授权，也不能代替 G-01B。
