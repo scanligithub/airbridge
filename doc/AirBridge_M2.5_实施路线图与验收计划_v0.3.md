@@ -241,7 +241,7 @@ M2.5 不得破坏以下既有能力：
 
 在生产 Gateway HTTP 授权实现前，必须先完成一个可丢弃的 Windows 技术原型；该原型不进入正式 AirBridge 产品包，除非通过评审后合并。
 
-G-01 的 Windows 基础证书库测试优先由独立 GitHub Actions workflow 在 `windows-2025` Runner 执行（`.github/workflows/g01-windows-currentuser-ci.yml`）。它覆盖 CurrentUser Root 写入 / 回读、Windows X509Chain 正反向构建、LocalMachine Root 不变和精确清理；不需要 Host A / B 参与。Hosted Runner 父进程是 elevated `runneradmin`；当前 harness 会另外创建一次性普通本地用户并在该身份下执行 store / chain 检查。该标准用户子进程尚未在 Actions 中成功完成，G-01A 仍 PENDING；必须取得非管理员身份、CurrentUser Root 导入 / 回读、X509Chain 正反向结果、LocalMachine 不变和清理证据后才能 PASS。该 CI 仍不替代 Antigravity / OpenCode 实际 TLS / OAuth / MCP 客户端验收。
+G-01 的非交互 Windows CI 使用独立 GitHub Actions workflow（`.github/workflows/g01-windows-currentuser-ci.yml`），在 `windows-2025` Runner 创建一次性普通用户，检查当前用户 / LocalMachine Root 范围不变、证书夹具及 `X509ChainPolicy.CustomTrustStore` 正反向链逻辑，并验证精确清理。它**不写入 CurrentUser Root**：Windows Root store 写入会要求交互式信任确认，hosted Runner 无法完成系统确认。此前 `Import-Certificate` 返回 `UI is not allowed in this operation`，而 `.NET X509Store.Add()` / `certutil` 在无交互子进程挂起；这不是交互式部署失败证据。当前 CI 的 CurrentUser Root 导入状态明确是 `NOT_RUN_INTERACTIVE_WINDOWS_CONSENT_REQUIRED`，G-01A 仅覆盖非交互 Store-scope / custom-chain 子 Gate，不能记为 Root 导入 PASS。真正 Root 导入须在部署时目标用户的交互式会话中，先完成应用层 Consent，再完成 Windows 信任确认。CI 也不替代 Antigravity / OpenCode 的真实 TLS / OAuth / MCP 客户端验收。
 
 研究范围：
 - MCP Authorization 规范要求的 HTTPS Authorization Server endpoints；
