@@ -1,5 +1,9 @@
 # AirBridge MCP Gateway (M2.1 / M2.2)
 
+> **M2.5 integration note (2026-11-20):** This README documents the currently deployed M2.1 / M2.2 standalone Python-package and virtual-environment setup. M2.5 retains the existing STDIO server, Agent ID → Windows Credential Manager lookup, and domain-neutral Tool layer, but the target is to integrate them into the unified AirBridge.exe / Python 3.11+ runtime. New M2.5 Antigravity / OpenCode adapters must not create a separate virtual environment or write AIRBRIDGE_AGENT_TOKEN; see [ADR-013](../doc/ADR-013_M2.5_Stdio本机MCP接入与客户端托管生命周期.md).
+
+
+
 A standalone MCP stdio server for the existing AirBridge HTTP API on Host A.
 It is intentionally separate from the AirBridge desktop application's Python
 environment and does not import AirBridge internal modules.

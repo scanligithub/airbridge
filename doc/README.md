@@ -2,6 +2,14 @@
 
 本文档目录存放 AirBridge Core 架构、通用协议、Skill 集成和迁移设计。专业 API / 对象模型及专业软件生命周期属于对应 Agent Skill；未来职责边界以 [ADR-006](ADR-006_Skill自主掌握专业软件生命周期.md) 为准，旧规范作为历史基线保留。
 
+## M2.5 当前架构决策（2026-11-20）
+
+M2.5 首版已明确改为本机 **STDIO-only** MCP 接入：Antigravity / OpenCode 启动统一 AirBridge.exe 子进程；不使用证书、TLS、HTTP / HTTPS MCP endpoint 或 OAuth Broker。MCP Host 管理子进程生命周期，AirBridge GUI 管理 Adapter 配置、Agent、M2.4 Credential / Scope 和审计。
+
+当前 main 已有 M2.1 / M2.2 的 STDIO MCP Gateway 和 Windows Credential Manager Agent Token 读取实现；M2.5 复用这条路径并整合到统一 AirBridge.exe / Python 3.11+，而不是从零重写。
+
+权威规范：[ADR-013：M2.5 STDIO 本机 MCP 接入与客户端托管生命周期](ADR-013_M2.5_Stdio本机MCP接入与客户端托管生命周期.md)。此前 M2.5 v0.3 的 HTTP / OAuth / CA 设计文档为历史评审资料，冲突内容以 ADR-013 为准。Host A ↔ Host B 仍使用原有 ABFP / 串口通信。
+
 ## 当前设计基线
 
 | [ADR-006：专业软件生命周期由 Agent Skill 自主掌握](ADR-006_Skill自主掌握专业软件生命周期.md) | 修订旧 Runtime Adapter / EDA Engine 的专业软件生命周期所有权；明确双端同一 AirBridge.exe、Skill 使用通用 Shell / RFS / 文件传输 | 2026-11-18 已采纳；M3 迁移按阶段实施 |
@@ -22,8 +30,9 @@
 | [AirBridge MCP Gateway：M2.1 / M2.2 实施设计](AirBridge_MCP_Gateway_M2_实施设计_v1.0.md) | 主机 A 独立 MCP stdio Gateway、四个通用 Tools、HTTP 转发、安全默认值和验收边界 | 2026-11-13：11 项单测、Python 3.11/3.12 CI、Antigravity / OpenCode 双 Host 只读和执行关闭验收 PASS；真实 EDA 脚本执行未开放 |
 | [AirBridge MCP Gateway：M2.1 / M2.2 双 Host 验收记录 v1.0](AirBridge_MCP_Gateway_M2.1_M2.2_双Host验收记录_v1.0.md) | 11 项单测、CI 双 Python 版本、Host A HTTP API、Antigravity / OpenCode 四工具发现与只读调用、执行关闭保护 | 2026-11-13 双 Host PASS；未执行 Tcl / SKILL |
 | [AirBridge M2.3：Agent 身份认证、权限控制与审计设计 v1.0](AirBridge_MCP_Gateway_M2.3_Agent_Identity_Authorization_Design_v1.0.md) | 每 Agent 独立 Bearer Token、服务端 scopes、请求所有权、审计、配额和明确的非目标 | M2.3.1 / 2.3.2 代码 PASS；Agent Security Windows CI（Python 3.10–3.12）及 Gateway CI（Python 3.11–3.12）PASS；2026-11-17 Host-A 双 Agent 只读实机验收 PASS；PR #5 已于 2026-11-18 合并到 main |
-| [AirBridge M2.4：Zero-Touch Agent Authentication 设计 v1.0](AirBridge_M2.4_Zero_Touch_Agent_Authentication_Design_v1.0.md) | Agent Registry、Windows Credential Manager、受信任本机注册、Gateway 凭据透明读取、轮换/撤销和旧 Agent 迁移 | 2026-11-20：M2.4.1 tokenless provision、Gateway 透明读取、SQLite 生命周期硬化、撤销清理状态、原子单活动凭据签发已提交 Draft PR #14；Windows Credential Manager / Gateway / Agent Security / Runtime Session / Capture Inventory CI 通过；Host A 实机尚未验收 |
-| [AirBridge M2.3 Host-A 双 Agent 只读验收记录 2026-11-17](AirBridge_M2.3_HostA_Acceptance_Record_20261117.md) | M2.3 EXE 构建、Antigravity / OpenCode 独立 Token、401/200/404、MCP 连接、撤销与审计、CI 证据和未覆盖边界 | 2026-11-17 Host-A 只读验收 PASS；未执行 EDA / Shell |
+| [AirBridge M2.4：Zero-Touch Agent Authentication 设计 v1.0](AirBridge_M2.4_Zero_Touch_Agent_Authentication_Design_v1.0.md) | Agent Registry、Windows Credential Manager、受信任本机注册、Gateway 凭据透明读取、轮换/撤销和旧 Agent 迁移 | 2026-11-20：PR #14 已合并（merge commit `454e1dc1e43009cb0eb5f23e85327a6135c9418a`）；M2.4.1 tokenless provision、Gateway 透明读取、Credential Manager、生命周期 / Audit / revoke 硬化代码进入 main。现有 Host A Runbook 仍记录早期 EXE source commit `35dd48d` 和旧 PR 状态；最新 merge HEAD 的 EXE 需重新构建并完成 Host A 回归后才能标记为最新实机验收 |
+| [AirBridge M2.5：统一 Gateway 架构与 GUI 管理设计 v0.3](AirBridge_M2.5_文档索引.md) | 同一 AirBridge.exe / Python 3.11+、Gateway GUI 管理、Streamable HTTP + HTTPS OAuth、本机 OAuth Broker；首批专用 Adapter 仅 Antigravity / OpenCode；官方 CIMD 白名单优先、DCR 兼容回退、每 Agent 独立 Consent；Generic / Manual 通用手动接入不纳入首版；首次安装 Gateway 默认 OFF；每台主机在部署阶段建立本机 CA / CurrentUser 信任（与 Gateway ON/OFF 独立）；升级保留 Gateway / Agent / OAuth Grant / 本机 CA / 证书 / MCP 用户配置状态，版本化备份迁移与回滚；Runtime Session Gateway State 扩展及双机验收 | 2026-11-20：Draft PR #16；产品决策 D-01 至 D-09 已确认，技术 PoC 评审继续；G-01 CurrentUser TLS 信任研究为 Partial Research / NOT PASS；CA trust bootstrap 属于每台主机部署阶段；仅文档变更，未修改产品代码 / CI / EXE；HTTPS / OAuth、frozen Worker、升级迁移 PoC 尚未完成 |
+| [AirBridge M2.5 架构评审决策清单 v0.1](AirBridge_M2.5_架构评审决策清单_v0.1.md) | 汇总已确认产品约束、建议技术方案、待产品决定项和实施前必须通过的 PoC Gate | 2026-11-20：随 M2.5 Draft PR #16 评审 |\n| [AirBridge M2.3 Host-A 双 Agent 只读验收记录 2026-11-17](AirBridge_M2.3_HostA_Acceptance_Record_20261117.md) | M2.3 EXE 构建、Antigravity / OpenCode 独立 Token、401/200/404、MCP 连接、撤销与审计、CI 证据和未覆盖边界 | 2026-11-17 Host-A 只读验收 PASS；未执行 EDA / Shell |
 | [AirBridge M2.3 Host A 只读安全验收操作手册 v1.0](AirBridge_M2.3_HostA_ReadOnly_Acceptance_Runbook_v1.0.md) | Host A 分别签发 Antigravity / OpenCode 只读 Token，检查 401、capabilities、request.read、撤销和审计；不发送 EDA / Shell 请求 | 操作手册；对应实机验收已 PASS，详见验收记录 |
 | [GitHub Actions Runtime Session CI 验收配置](GitHub_Actions_Runtime_Session_AB验收配置.md) | GitHub 托管 Windows Runner、协议单测、生产 SerialWorker 双端模拟和验收边界 | 云端 CI 配置；物理串口实测不在该 CI 范围 |
 | [Capture Dbo API Tcl 示例索引 v1.0（临时归档）](Capture_Dbo_API_Tcl_示例索引_v1.0.md) | Capture Skill 的 DboSession / Design / Schematic / Page / 属性读取研究资料；仅为迁移前历史归档，不属于 AirBridge API 契约 | 后续归入 Capture Skill；不得作为 AirBridge Core / Adapter 的专业 API 契约 |
@@ -39,3 +48,10 @@
 - “设计基线 / 待实现”不得描述为已实现功能。
 - 代码、协议和文档发生变化时，应同步更新本目录。
 - 正式实现应提供自动化测试和主机 A/B 实机验收记录。
+
+
+## M2.5 技术 PoC 操作手册
+
+- [G-01 Windows CurrentUser CI workflow](../.github/workflows/g01-windows-currentuser-ci.yml) 与 [测试脚本](../.github/scripts/g01-currentuser-trust.ps1)：自动验证 Windows CurrentUser Root、证书链和 LocalMachine 隔离；Hosted Runner 父进程为 elevated runneradmin，harness 会创建临时标准用户子进程；该子进程测试尚未成功完成，G-01A 暂为 PENDING，且不能替代真实 Antigravity / OpenCode 客户端验收。
+
+- [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)：Windows CurrentUser HTTPS 信任 PoC 的测试证书准备、用户同意导入、信任范围核验、客户端 TLS / OAuth / MCP 验证、负向测试与清理。当前为操作草案，尚未在任何目标主机执行；按每台启用 Managed HTTPS 的主机独立验证，本机 CurrentUser Root 不跨机器共享，G-01 不得标记为 PASS。

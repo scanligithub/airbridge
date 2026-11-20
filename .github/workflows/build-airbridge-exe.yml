@@ -7,6 +7,8 @@ on:
       - feature/m3-2-6-capture-authorized-exit
     paths:
       - "AirBridge.spec"
+      - "airbridge_entry.py"
+      - "stdio_io.py"
       - "airbridge_app.py"
       - "protocol.py"
       - "eda_engine.py"
@@ -19,6 +21,37 @@ on:
       - "request_broker.py"
       - "process_supervisor.py"
       - "agent_security.py"
+      - "tools/**"
+      - "mcp_gateway/**"
+      - "test/test_airbridge_entry.py"
+      - "test/test_mcp_stdio_frozen_smoke.py"
+      - "test/test_m2_5_gateway_gui_smoke.py"
+      - "test/test_m2_5_gateway_gui_smoke.py"
+      - ".github/workflows/build-airbridge-exe.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "AirBridge.spec"
+      - "airbridge_entry.py"
+      - "stdio_io.py"
+      - "airbridge_app.py"
+      - "protocol.py"
+      - "eda_engine.py"
+      - "fs_engine.py"
+      - "shell_engine.py"
+      - "capture_tcl_bridge.py"
+      - "runtime_adapter.py"
+      - "runtime_session_protocol.py"
+      - "request_tracker.py"
+      - "request_broker.py"
+      - "process_supervisor.py"
+      - "agent_security.py"
+      - "tools/**"
+      - "mcp_gateway/**"
+      - "test/test_airbridge_entry.py"
+      - "test/test_mcp_stdio_frozen_smoke.py"
+      - "test/test_m2_5_gateway_gui_smoke.py"
       - ".github/workflows/build-airbridge-exe.yml"
   workflow_dispatch:
 
@@ -38,29 +71,52 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10.11"
+          python-version: "3.11"
 
       - name: Install EXE build dependencies
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
-          python -m pip install pyserial PySide6 pyinstaller
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install pyserial PySide6 "pyinstaller==6.22.3"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install ./mcp_gateway
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python --version
-          python -m pip show pyserial PySide6 pyinstaller
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip show pyserial PySide6 pyinstaller mcp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Compile AirBridge modules
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python -m py_compile airbridge_app.py protocol.py eda_engine.py fs_engine.py shell_engine.py capture_tcl_bridge.py runtime_adapter.py runtime_session_protocol.py request_tracker.py request_broker.py process_supervisor.py agent_security.py
+          python -m py_compile airbridge_entry.py stdio_io.py airbridge_app.py protocol.py eda_engine.py fs_engine.py shell_engine.py capture_tcl_bridge.py runtime_adapter.py runtime_session_protocol.py request_tracker.py request_broker.py process_supervisor.py agent_security.py tools/__init__.py tools/airbridge_agent_admin.py test/test_airbridge_entry.py test/test_mcp_stdio_frozen_smoke.py test/test_m2_5_gateway_gui_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m compileall -q mcp_gateway/airbridge_mcp_gateway
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run unified entrypoint and existing MCP Gateway unit tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          python -m unittest discover -s test -p "test_airbridge_entry.py" -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s test -p "test_m2_5_gateway_gui_smoke.py" -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s mcp_gateway/tests -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build single-file AirBridge.exe
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           python -m PyInstaller --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m PyInstaller --clean --noconfirm AirBridge.spec
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $exe = "dist/AirBridge.exe"
           if (-not (Test-Path $exe -PathType Leaf)) {
             throw "PyInstaller did not produce dist/AirBridge.exe"
@@ -80,6 +136,13 @@ jobs:
             "platform=Windows x64"
           ) | Set-Content -Path "dist/BUILD_INFO.txt" -Encoding utf8
           Get-Content "dist/BUILD_INFO.txt"
+
+      - name: Verify frozen AirBridge.exe MCP STDIO over real pipes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python test/test_mcp_stdio_frozen_smoke.py --exe dist/AirBridge.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload AirBridge.exe artifact
         uses: actions/upload-artifact@v4

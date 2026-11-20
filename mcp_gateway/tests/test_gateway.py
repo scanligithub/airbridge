@@ -216,6 +216,57 @@ class GatewayTests(unittest.TestCase):
         with self.assertRaises(GatewayConfigurationError):
             GatewayConfig.from_env({})
 
+    def test_m25_stdio_rejects_legacy_agent_token_environment(self):
+        with self.assertRaisesRegex(
+            GatewayConfigurationError,
+            "AIRBRIDGE_AGENT_TOKEN is forbidden in M2.5 STDIO",
+        ):
+            GatewayConfig.from_env({
+                "AIRBRIDGE_M2_5_GATEWAY_POLICY": "1",
+                "AIRBRIDGE_AGENT_ID": "opencode",
+                "AIRBRIDGE_AGENT_TOKEN": "must-not-be-accepted",
+            })
+
+    def test_m25_stdio_requires_agent_id(self):
+        with self.assertRaisesRegex(
+            GatewayConfigurationError,
+            "AIRBRIDGE_AGENT_ID is required in M2.5 STDIO",
+        ):
+            GatewayConfig.from_env({
+                "AIRBRIDGE_M2_5_GATEWAY_POLICY": "1",
+                "AIRBRIDGE_AGENT_TOKEN": "",
+            })
+
+    def test_m25_stdio_uses_agent_id_credential_manager_path(self):
+        class FakeCredentialStore:
+            def __init__(self):
+                self.requested_agent_ids = []
+
+            def load(self, agent_id):
+                self.requested_agent_ids.append(agent_id)
+                return "vault-only-m25-secret"
+
+            def store(self, _agent_id, _token):
+                raise AssertionError("not used by gateway configuration")
+
+            def delete(self, _agent_id):
+                raise AssertionError("not used by gateway configuration")
+
+        store = FakeCredentialStore()
+        config = GatewayConfig.from_env(
+            {
+                "AIRBRIDGE_M2_5_GATEWAY_POLICY": "1",
+                "AIRBRIDGE_AGENT_ID": "OpenCode",
+            },
+            credential_store=store,
+        )
+
+        self.assertTrue(config.enforce_gateway_policy)
+        self.assertEqual(config.agent_id, "opencode")
+        self.assertEqual(config.agent_token, "vault-only-m25-secret")
+        self.assertEqual(store.requested_agent_ids, ["opencode"])
+        self.assertNotIn("vault-only-m25-secret", repr(config))
+
     def test_agent_id_loads_token_from_injected_credential_store(self):
         class FakeCredentialStore:
             def __init__(self):

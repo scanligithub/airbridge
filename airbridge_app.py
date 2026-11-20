@@ -10,6 +10,7 @@ import hashlib
 import math
 import ntpath
 import os
+from pathlib import Path
 import queue
 import sys
 import threading
@@ -61,6 +62,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QComboBox,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -2728,12 +2730,57 @@ class AirBridgeMainWindow(QMainWindow):
     self.current_hint = "auto.tcl"
     self.current_remote_dir = "e:\\RK3588智能盒子"
 
+    # Load the M2.5 support only when the GUI is instantiated. Some existing
+    # protocol tests import this module without installing the optional MCP
+    # package; the unified EXE bundles it, while source runs can use mcp_gateway/.
+    try:
+      from airbridge_mcp_gateway.gateway_policy import GatewayPolicyStore
+      from airbridge_mcp_gateway.credential_store import default_credential_store
+      from airbridge_mcp_gateway.client_adapters import AntigravityAdapter, OpenCodeAdapter
+      from tools import airbridge_agent_admin
+    except ModuleNotFoundError:
+      gateway_package_dir = os.path.join(os.path.dirname(__file__), "mcp_gateway")
+      if gateway_package_dir not in sys.path:
+        sys.path.insert(0, gateway_package_dir)
+      from airbridge_mcp_gateway.gateway_policy import GatewayPolicyStore
+      from airbridge_mcp_gateway.credential_store import default_credential_store
+      from airbridge_mcp_gateway.client_adapters import AntigravityAdapter, OpenCodeAdapter
+      from tools import airbridge_agent_admin
+
+    self.gateway_agent_admin = airbridge_agent_admin
+    self.gateway_policy_store = GatewayPolicyStore.for_current_user()
+    self._gateway_policy_agents: Dict[str, bool] = {}
+    self._gateway_policy_invalid = False
+
+    # Adapter edits are enabled only in the installed/frozen AirBridge.exe.
+    # Source-run development sessions must never write "python.exe mcp stdio".
+    self.gateway_adapter_executable = None
+    if getattr(sys, "frozen", False):
+      candidate = Path(sys.executable).resolve()
+      if candidate.is_file() and candidate.name.lower() == "airbridge.exe":
+        self.gateway_adapter_executable = candidate
+    adapter_executable = self.gateway_adapter_executable or Path(sys.executable)
+    self.gateway_antigravity_adapter = AntigravityAdapter(adapter_executable)
+    self.gateway_opencode_adapter = OpenCodeAdapter(adapter_executable)
+    self.gateway_antigravity_config_path = AntigravityAdapter.global_config()
+    self.gateway_opencode_config_path = OpenCodeAdapter.global_config()
+    self.gateway_adapter_actions_enabled = self.gateway_adapter_executable is not None
+    try:
+      self.gateway_credential_store = default_credential_store()
+      self._gateway_credential_store_error = ""
+    except Exception as exc:
+      self.gateway_credential_store = None
+      self._gateway_credential_store_error = str(exc)
+
     self.signals = SerialWorkerSignals()
     self.worker = SerialWorker(self.signals)
     self.worker.start()
 
     self.ipc = AntigravityIPCServer(self.worker, port=8888)
     self.ipc.start()
+    # The existing M2.4 registry remains the authority for server-side Agent
+    # credentials; the GUI reuses it rather than creating another SQLite DB.
+    self.gateway_security_store = getattr(self.ipc, "security_store", None)
 
     self.init_ui()
     self.bind_events()
@@ -2988,6 +3035,107 @@ class AirBridgeMainWindow(QMainWindow):
     chat_layout.addLayout(c_input)
     self.tabs.addTab(chat_tab, "💬 双机即时消息")
 
+    # Tab 5: 本机 MCP STDIO Gateway settings
+    gateway_tab = QWidget()
+    gateway_layout = QVBoxLayout(gateway_tab)
+    gateway_intro = QLabel(
+        "本设置只控制当前 Windows 用户的本机 MCP STDIO 接入。"
+        "Antigravity / OpenCode 负责启动和关闭 AirBridge.exe 子进程；"
+        "这里不创建网络监听器，也不影响 A/B 串口通信。"
+    )
+    gateway_intro.setWordWrap(True)
+    gateway_layout.addWidget(gateway_intro)
+
+    self.chk_gateway_enabled = QCheckBox("启用本机 Gateway（新安装默认关闭）")
+    self.chk_gateway_enabled.setStyleSheet("font-weight: bold;")
+    gateway_layout.addWidget(self.chk_gateway_enabled)
+
+    gateway_agents = QGroupBox("首批 MCP Client / Agent")
+    gateway_agents_layout = QVBoxLayout(gateway_agents)
+    self.chk_gateway_antigravity = QCheckBox("Antigravity")
+    self.chk_gateway_opencode = QCheckBox("OpenCode")
+    gateway_agents_layout.addWidget(self.chk_gateway_antigravity)
+    gateway_agents_layout.addWidget(self.chk_gateway_opencode)
+
+    self.lbl_gateway_antigravity_credential = QLabel("Antigravity 凭据：检查中")
+    self.btn_gateway_antigravity_provision = QPushButton("Provision（只读）")
+    self.btn_gateway_antigravity_revoke = QPushButton("Revoke 凭据")
+    antigravity_credential_row = QHBoxLayout()
+    antigravity_credential_row.addWidget(self.lbl_gateway_antigravity_credential, stretch=1)
+    antigravity_credential_row.addWidget(self.btn_gateway_antigravity_provision)
+    antigravity_credential_row.addWidget(self.btn_gateway_antigravity_revoke)
+    gateway_agents_layout.addLayout(antigravity_credential_row)
+
+    self.lbl_gateway_opencode_credential = QLabel("OpenCode 凭据：检查中")
+    self.btn_gateway_opencode_provision = QPushButton("Provision（只读）")
+    self.btn_gateway_opencode_revoke = QPushButton("Revoke 凭据")
+    opencode_credential_row = QHBoxLayout()
+    opencode_credential_row.addWidget(self.lbl_gateway_opencode_credential, stretch=1)
+    opencode_credential_row.addWidget(self.btn_gateway_opencode_provision)
+    opencode_credential_row.addWidget(self.btn_gateway_opencode_revoke)
+    gateway_agents_layout.addLayout(opencode_credential_row)
+    gateway_credential_note = QLabel(
+        "Provision 使用只读 Scope（runtime.read、eda.versions.read、request.read），默认 90 天；"
+        "Token 只写入当前用户 Credential Manager，不显示、不进入 MCP 配置。Revoke 会撤销该 Agent 的全部有效凭据。"
+    )
+    gateway_credential_note.setWordWrap(True)
+    gateway_agents_layout.addWidget(gateway_credential_note)
+    gateway_layout.addWidget(gateway_agents)
+
+    antigravity_adapter_group = QGroupBox("Antigravity App / IDE")
+    antigravity_adapter_layout = QVBoxLayout(antigravity_adapter_group)
+    self.lbl_gateway_antigravity_adapter_path = QLabel("")
+    self.lbl_gateway_antigravity_adapter_path.setWordWrap(True)
+    self.lbl_gateway_antigravity_adapter_status = QLabel("配置状态：检查中")
+    self.btn_gateway_antigravity_install = QPushButton("安装 / 更新本机 STDIO Adapter")
+    self.btn_gateway_antigravity_remove = QPushButton("移除 AirBridge Adapter")
+    antigravity_adapter_buttons = QHBoxLayout()
+    antigravity_adapter_buttons.addWidget(self.btn_gateway_antigravity_install)
+    antigravity_adapter_buttons.addWidget(self.btn_gateway_antigravity_remove)
+    antigravity_adapter_layout.addWidget(self.lbl_gateway_antigravity_adapter_path)
+    antigravity_adapter_layout.addWidget(self.lbl_gateway_antigravity_adapter_status)
+    antigravity_adapter_layout.addLayout(antigravity_adapter_buttons)
+    gateway_layout.addWidget(antigravity_adapter_group)
+
+    opencode_adapter_group = QGroupBox("OpenCode Desktop / CLI")
+    opencode_adapter_layout = QVBoxLayout(opencode_adapter_group)
+    self.lbl_gateway_opencode_adapter_path = QLabel("")
+    self.lbl_gateway_opencode_adapter_path.setWordWrap(True)
+    self.lbl_gateway_opencode_adapter_status = QLabel("配置状态：检查中")
+    self.btn_gateway_opencode_install = QPushButton("安装 / 更新本机 STDIO Adapter")
+    self.btn_gateway_opencode_remove = QPushButton("移除 AirBridge Adapter")
+    opencode_adapter_buttons = QHBoxLayout()
+    opencode_adapter_buttons.addWidget(self.btn_gateway_opencode_install)
+    opencode_adapter_buttons.addWidget(self.btn_gateway_opencode_remove)
+    opencode_adapter_layout.addWidget(self.lbl_gateway_opencode_adapter_path)
+    opencode_adapter_layout.addWidget(self.lbl_gateway_opencode_adapter_status)
+    opencode_adapter_layout.addLayout(opencode_adapter_buttons)
+    gateway_layout.addWidget(opencode_adapter_group)
+
+    if not self.gateway_adapter_actions_enabled:
+      adapter_note = QLabel(
+          "配置写入仅在正式安装的 AirBridge.exe 中启用；源码运行模式只显示状态，不修改 MCP 客户端配置。"
+      )
+      adapter_note.setWordWrap(True)
+      gateway_layout.addWidget(adapter_note)
+
+    gateway_actions = QHBoxLayout()
+    self.btn_gateway_refresh = QPushButton("刷新状态")
+    self.btn_gateway_save = QPushButton("保存 Gateway 设置")
+    self.btn_gateway_save.setStyleSheet("background-color: #0E639C; font-weight: bold;")
+    gateway_actions.addWidget(self.btn_gateway_refresh)
+    gateway_actions.addWidget(self.btn_gateway_save)
+    gateway_actions.addStretch()
+    gateway_layout.addLayout(gateway_actions)
+
+    self.lbl_gateway_policy_status = QLabel("")
+    self.lbl_gateway_policy_status.setWordWrap(True)
+    gateway_layout.addWidget(self.lbl_gateway_policy_status)
+    gateway_layout.addStretch()
+    self.tabs.addTab(gateway_tab, "MCP Gateway")
+
+    self.refresh_gateway_settings()
+
     main_layout.addWidget(self.tabs, stretch=2)
 
     # 3. 底部控制台
@@ -3014,6 +3162,32 @@ class AirBridgeMainWindow(QMainWindow):
     self.btn_send_chat.clicked.connect(self.send_chat_msg)
     self.ipt_chat.returnPressed.connect(self.send_chat_msg)
     self.btn_clear_console.clicked.connect(self.txt_console.clear)
+    self.btn_gateway_refresh.clicked.connect(self.refresh_gateway_settings)
+    self.btn_gateway_save.clicked.connect(self.save_gateway_settings)
+    self.btn_gateway_antigravity_provision.clicked.connect(
+        lambda: self.provision_gateway_agent("antigravity")
+    )
+    self.btn_gateway_antigravity_revoke.clicked.connect(
+        lambda: self.revoke_gateway_agent("antigravity")
+    )
+    self.btn_gateway_opencode_provision.clicked.connect(
+        lambda: self.provision_gateway_agent("opencode")
+    )
+    self.btn_gateway_opencode_revoke.clicked.connect(
+        lambda: self.revoke_gateway_agent("opencode")
+    )
+    self.btn_gateway_antigravity_install.clicked.connect(
+        lambda: self.install_gateway_adapter("antigravity")
+    )
+    self.btn_gateway_antigravity_remove.clicked.connect(
+        lambda: self.remove_gateway_adapter("antigravity")
+    )
+    self.btn_gateway_opencode_install.clicked.connect(
+        lambda: self.install_gateway_adapter("opencode")
+    )
+    self.btn_gateway_opencode_remove.clicked.connect(
+        lambda: self.remove_gateway_adapter("opencode")
+    )
 
     self.btn_detect_eda_vers.clicked.connect(self.detect_remote_eda_versions)
     self.btn_test_orcad.clicked.connect(self.trigger_builtin_orcad_test)
@@ -3052,6 +3226,515 @@ class AirBridgeMainWindow(QMainWindow):
     self.signals.sig_file_done.connect(self.on_file_complete)
     self.signals.sig_file_aborted.connect(self.on_file_aborted)
     self.signals.sig_fs_response.connect(self.on_rfs_response_arrived)
+
+  def _gateway_agent_credential_present(self, agent_id: str) -> bool:
+    if self.gateway_credential_store is None:
+      return False
+    try:
+      # CredReadW presence check frees the native structure without decoding
+      # the credential blob into a Python string in the GUI process.
+      return bool(self.gateway_credential_store.exists(agent_id))
+    except Exception:
+      # Missing credentials and Credential Manager lookup errors both mean
+      # that this Agent cannot be enabled from the GUI yet.
+      return False
+
+  def refresh_gateway_settings(self):
+    """Load the non-secret per-user Gateway policy and credential presence."""
+    try:
+      enabled, agents = self.gateway_policy_store.read_snapshot()
+      self._gateway_policy_agents = dict(agents)
+      self._gateway_policy_invalid = False
+      self.chk_gateway_enabled.setChecked(enabled)
+      self.chk_gateway_antigravity.setChecked(bool(agents.get("antigravity", False)))
+      self.chk_gateway_opencode.setChecked(bool(agents.get("opencode", False)))
+      if self.gateway_policy_store.path is None:
+        self.lbl_gateway_policy_status.setText(
+            "策略状态不可用：当前用户 LOCALAPPDATA 未设置。Gateway 保持 fail-closed。"
+        )
+      elif not enabled:
+        self.lbl_gateway_policy_status.setText(
+            "Gateway 当前为 OFF。首次安装或策略文件缺失时默认 OFF；"
+            "已有 MCP 子进程的后续 Tool 调用也会被拒绝。"
+        )
+      else:
+        self.lbl_gateway_policy_status.setText(
+            "Gateway 策略已加载。保存开关后，现存 STDIO 子进程会在下一次 Tool 调用时读取新状态。"
+        )
+    except (OSError, ValueError) as exc:
+      self._gateway_policy_agents = {}
+      self._gateway_policy_invalid = True
+      self.chk_gateway_enabled.setChecked(False)
+      self.chk_gateway_antigravity.setChecked(False)
+      self.chk_gateway_opencode.setChecked(False)
+      self.lbl_gateway_policy_status.setText(
+          f"Gateway 策略文件不可用或已损坏：{exc}。为安全起见当前视为 OFF；"
+          "保存新设置前会要求确认修复。"
+      )
+
+    self._refresh_gateway_credential_status("antigravity")
+    self._refresh_gateway_credential_status("opencode")
+    if self.gateway_credential_store is None:
+      self.lbl_gateway_policy_status.setText(
+          self.lbl_gateway_policy_status.text()
+          + " Windows Credential Manager 不可用，不能启用 Agent。"
+      )
+    if self.gateway_security_store is None:
+      self.lbl_gateway_policy_status.setText(
+          self.lbl_gateway_policy_status.text()
+          + " Agent Security Registry 不可用；Provision / Revoke 已禁用。"
+      )
+    self.refresh_gateway_adapter_statuses()
+
+  def _refresh_gateway_credential_status(self, agent_id: str):
+    label = (
+        self.lbl_gateway_antigravity_credential
+        if agent_id == "antigravity"
+        else self.lbl_gateway_opencode_credential
+    )
+    provision_button = (
+        self.btn_gateway_antigravity_provision
+        if agent_id == "antigravity"
+        else self.btn_gateway_opencode_provision
+    )
+    revoke_button = (
+        self.btn_gateway_antigravity_revoke
+        if agent_id == "antigravity"
+        else self.btn_gateway_opencode_revoke
+    )
+    local_present = self._gateway_agent_credential_present(agent_id)
+    active_tokens = []
+    registry_available = self.gateway_security_store is not None
+    if registry_available:
+      try:
+        active_tokens = [
+            item for item in self.gateway_security_store.list_tokens(agent_id)
+            if item.get("enabled")
+        ]
+      except Exception:
+        registry_available = False
+
+    if registry_available:
+      server_text = f"服务端有效凭据：{len(active_tokens)}"
+    else:
+      server_text = "服务端凭据状态：不可读取"
+
+    local_text = "本机 Credential Manager：已存在" if local_present else "本机 Credential Manager：未配置"
+    label.setText(f"{agent_id} — {local_text}；{server_text}")
+
+    can_manage = (
+        os.name == "nt"
+        and registry_available
+        and self.gateway_credential_store is not None
+        and self.gateway_agent_admin is not None
+    )
+    provision_button.setEnabled(can_manage and not active_tokens)
+    revoke_button.setEnabled(can_manage and (bool(active_tokens) or local_present))
+
+  def provision_gateway_agent(self, agent_id: str):
+    """Reuse the tested M2.4 zero-token provisioning transaction."""
+    if self.gateway_security_store is None or not self.gateway_agent_admin:
+      QMessageBox.warning(self, "Agent Provision 不可用", "M2.4 Agent Security Registry 不可用。")
+      return
+    display = "Antigravity" if agent_id == "antigravity" else "OpenCode"
+    answer = QMessageBox.question(
+        self,
+        f"Provision {display}",
+        "将创建该 Agent 的 M2.4 Service Credential，并原子写入当前 Windows 用户 Credential Manager。"
+        "默认只读 Scope：runtime.read、eda.versions.read、request.read；有效期 90 天。"
+        "Token 不会显示，也不会写入 MCP 配置。是否继续？",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    if answer != QMessageBox.StandardButton.Yes:
+      return
+    try:
+      from types import SimpleNamespace
+
+      args = SimpleNamespace(
+          agent_id=agent_id,
+          scope=None,
+          label=f"{display} local MCP",
+          expires_days=90,
+      )
+      result = self.gateway_agent_admin._provision_agent(self.gateway_security_store, args)
+    except Exception as exc:
+      QMessageBox.warning(self, f"{display} Provision 失败", str(exc))
+      self.refresh_gateway_settings()
+      return
+
+    scopes = ", ".join(result.get("scopes", []))
+    expires = result.get("expires_at") or "Never"
+    QMessageBox.information(
+        self,
+        f"{display} Provision 成功",
+        f"Agent：{result.get('agent_id')}\n"
+        f"Token ID：{result.get('token_id')}\n"
+        f"Scopes：{scopes}\n"
+        f"到期时间：{expires}\n\n"
+        "Token 已写入 Windows Credential Manager；明文未显示。",
+    )
+    self.refresh_gateway_settings()
+
+  def revoke_gateway_agent(self, agent_id: str):
+    """Switch the Agent OFF before revoking all server and local credentials."""
+    if self.gateway_security_store is None or not self.gateway_agent_admin:
+      QMessageBox.warning(self, "Agent Revoke 不可用", "M2.4 Agent Security Registry 不可用。")
+      return
+    display = "Antigravity" if agent_id == "antigravity" else "OpenCode"
+    answer = QMessageBox.question(
+        self,
+        f"Revoke {display}",
+        "将先把该 Agent 的本机策略设为 OFF，阻止存量 STDIO 子进程继续请求；"
+        "然后撤销服务端该 Agent 的全部有效 M2.4 凭据，并删除当前用户 Credential Manager 中对应条目。"
+        "此操作不能撤销。是否继续？",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    if answer != QMessageBox.StandardButton.Yes:
+      return
+
+    # Disable this Agent first; if persistence fails, do not revoke or clean up.
+    try:
+      try:
+        gateway_enabled, agents = self.gateway_policy_store.read_snapshot()
+      except (OSError, ValueError):
+        gateway_enabled, agents = False, {}
+      agents[agent_id] = False
+      self.gateway_policy_store.write(enabled=gateway_enabled, agents=agents)
+    except (OSError, ValueError) as exc:
+      QMessageBox.critical(
+          self,
+          "无法安全撤销 Agent",
+          f"Agent OFF 策略写入失败，未执行服务端撤销或 Credential 删除。\n{exc}",
+      )
+      return
+
+    self._gateway_policy_agents = dict(agents)
+    self._gateway_policy_invalid = False
+    if agent_id == "antigravity":
+      self.chk_gateway_antigravity.setChecked(False)
+    else:
+      self.chk_gateway_opencode.setChecked(False)
+    adapter_outcomes = self._sync_installed_gateway_adapters(gateway_enabled, agents)
+
+    try:
+      result, exit_code = self.gateway_agent_admin._revoke_agent(
+          self.gateway_security_store, agent_id
+      )
+    except Exception as exc:
+      QMessageBox.critical(
+          self,
+          f"{display} Revoke 失败",
+          f"Agent 已被本机策略设为 OFF，存量 MCP Tool 调用应被阻止；"
+          f"但服务端撤销未确认：{exc}。请检查 Agent Security 状态。",
+      )
+      self.refresh_gateway_settings()
+      return
+
+    cleanup = result.get("credential_cleanup", "unknown")
+    revoked = result.get("revoked", False)
+    detail = (
+        f"服务端凭据撤销：{'已完成' if revoked else '没有活动凭据'}\n"
+        f"本机 Credential Manager 清理：{cleanup}"
+    )
+    if adapter_outcomes:
+      detail += "\nAdapter 状态：" + "; ".join(adapter_outcomes)
+    if exit_code != 0 or cleanup == "failed":
+      QMessageBox.warning(
+          self,
+          f"{display} Revoke 部分完成",
+          detail + "\nAgent 保持 OFF；请检查本机 Credential Manager 并重试清理。",
+      )
+    else:
+      QMessageBox.information(self, f"{display} Revoke 完成", detail)
+    self.refresh_gateway_settings()
+
+  def _gateway_adapter_details(self, agent_id: str):
+    if agent_id == "antigravity":
+      return (
+          self.gateway_antigravity_adapter,
+          self.gateway_antigravity_config_path,
+          self.lbl_gateway_antigravity_adapter_path,
+          self.lbl_gateway_antigravity_adapter_status,
+          self.btn_gateway_antigravity_install,
+          self.btn_gateway_antigravity_remove,
+      )
+    if agent_id == "opencode":
+      return (
+          self.gateway_opencode_adapter,
+          self.gateway_opencode_config_path,
+          self.lbl_gateway_opencode_adapter_path,
+          self.lbl_gateway_opencode_adapter_status,
+          self.btn_gateway_opencode_install,
+          self.btn_gateway_opencode_remove,
+      )
+    raise ValueError(f"Unsupported M2.5 Agent ID: {agent_id}")
+
+  def refresh_gateway_adapter_statuses(self):
+    """Observe only the two supported global config files; never scan projects."""
+    for agent_id in ("antigravity", "opencode"):
+      adapter, path, path_label, status_label, install_button, remove_button = (
+          self._gateway_adapter_details(agent_id)
+      )
+      path_label.setText(f"当前用户全局配置：{path}")
+      try:
+        status = adapter.inspect(path, agent_id)
+        if not status.present:
+          text = "未安装"
+        elif not status.owned:
+          text = "名称冲突：该条目不是此 Agent 的 AirBridge STDIO 配置，未触碰"
+        elif status.enabled is None:
+          text = "AirBridge 条目存在，但 disabled 字段类型无效"
+        elif status.enabled:
+          text = "AirBridge Adapter 已安装且已启用"
+        else:
+          text = "AirBridge Adapter 已安装但已禁用"
+        status_label.setText(f"配置状态：{text}")
+        remove_button.setEnabled(
+            self.gateway_adapter_actions_enabled and status.present and status.owned
+        )
+        install_button.setEnabled(
+            self.gateway_adapter_actions_enabled and (not status.present or status.owned)
+        )
+      except Exception as exc:
+        status_label.setText(f"配置状态：读取失败 / 配置无效（未修改）：{exc}")
+        install_button.setEnabled(False)
+        remove_button.setEnabled(False)
+
+  def _gateway_adapter_enabled_target(self, agent_id: str) -> bool:
+    # Client-side enablement follows only the durable runtime policy, never
+    # unsaved checkbox edits. The STDIO process independently rechecks this
+    # same policy before each Tool call.
+    try:
+      gateway_enabled, agents = self.gateway_policy_store.read_snapshot()
+    except (OSError, ValueError):
+      return False
+    return (
+        gateway_enabled
+        and bool(agents.get(agent_id, False))
+        and self._gateway_agent_credential_present(agent_id)
+    )
+
+  def install_gateway_adapter(self, agent_id: str):
+    """Explicitly add/update only the selected current-user global MCP entry."""
+    if not self.gateway_adapter_actions_enabled:
+      QMessageBox.information(
+          self, "需要正式安装版本",
+          "请在正式安装的 AirBridge.exe 中管理客户端配置；源码运行模式不写入客户端配置。",
+      )
+      return
+    adapter, path, _path_label, _status_label, _install, _remove = (
+        self._gateway_adapter_details(agent_id)
+    )
+    desired_enabled = self._gateway_adapter_enabled_target(agent_id)
+    try:
+      persisted_gateway_enabled, persisted_agents = (
+          self.gateway_policy_store.read_snapshot()
+      )
+    except (OSError, ValueError):
+      persisted_gateway_enabled, persisted_agents = False, {}
+
+    if (
+        persisted_gateway_enabled
+        and bool(persisted_agents.get(agent_id, False))
+        and not self._gateway_agent_credential_present(agent_id)
+    ):
+      QMessageBox.warning(
+          self, "Agent 凭据不可用",
+          f"{agent_id} 的已保存策略为 ON，但当前 Windows 用户 Credential Manager 中没有可读取的凭据。"
+          "请先完成 M2.4 Agent Provision，再启用 Adapter。",
+      )
+      return
+
+    answer = QMessageBox.question(
+        self,
+        "更新本机 MCP 配置",
+        f"将只修改当前用户全局配置中的 {agent_id} AirBridge 专用条目：\n"
+        f"{path}\n\n"
+        f"本次写入状态：{'启用' if desired_enabled else '禁用'}。"
+        "如文件已存在会先备份；其它 MCP 条目和注释将保留。是否继续？",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    if answer != QMessageBox.StandardButton.Yes:
+      return
+    try:
+      result = adapter.install_or_update(path, agent_id, enabled=desired_enabled)
+    except Exception as exc:
+      QMessageBox.warning(
+          self, "MCP Adapter 更新失败",
+          f"未修改客户端配置。{exc}",
+      )
+      self.refresh_gateway_adapter_statuses()
+      return
+    detail = f"配置文件：{result.config_path}"
+    if result.backup_path:
+      detail += f"\n原文件备份：{result.backup_path}"
+    unsaved_enable_intent = (
+        self.chk_gateway_enabled.isChecked()
+        and (
+            self.chk_gateway_antigravity.isChecked()
+            if agent_id == "antigravity"
+            else self.chk_gateway_opencode.isChecked()
+        )
+        and not desired_enabled
+    )
+    policy_note = (
+        "页面中有尚未保存的 ON 设置；本次保持 Adapter Disabled，请先保存 Gateway 设置。"
+        if unsaved_enable_intent else ""
+    )
+    self.lbl_gateway_policy_status.setText(
+        f"{agent_id} Adapter 已{'更新' if result.changed else '检查，无需修改'}。"
+        f"{policy_note}{detail}"
+    )
+    self.refresh_gateway_adapter_statuses()
+
+  def remove_gateway_adapter(self, agent_id: str):
+    """Remove only the exact adapter entry whose AirBridge ownership marker matches."""
+    if not self.gateway_adapter_actions_enabled:
+      return
+    adapter, path, _path_label, _status_label, _install, _remove = (
+        self._gateway_adapter_details(agent_id)
+    )
+    answer = QMessageBox.question(
+        self,
+        "移除 AirBridge MCP 配置",
+        f"将先把 {agent_id} 的本机 Agent 策略设为 OFF，阻止仍在运行的 STDIO 子进程继续调用；"
+        f"然后只移除该配置文件中的 AirBridge 专用条目，不删除其它 MCP Server，也不撤销 M2.4 Credential：\n"
+        f"{path}\n\n是否继续？",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    if answer != QMessageBox.StandardButton.Yes:
+      return
+
+    # Disable the Agent policy before editing the MCP host config. A running
+    # STDIO child checks this policy before every Tool call and must stop now.
+    try:
+      try:
+        gateway_enabled, agents = self.gateway_policy_store.read_snapshot()
+      except (OSError, ValueError):
+        # A malformed/unreadable prior snapshot is already fail-closed. Replace
+        # it with a valid global-OFF snapshot before proceeding with removal.
+        gateway_enabled, agents = False, {}
+      agents[agent_id] = False
+      self.gateway_policy_store.write(enabled=gateway_enabled, agents=agents)
+    except (OSError, ValueError) as exc:
+      QMessageBox.critical(
+          self,
+          "无法安全移除 Adapter",
+          f"未修改客户端配置，因为无法先持久化 Agent OFF 策略。\n{exc}",
+      )
+      return
+
+    self._gateway_policy_agents = dict(agents)
+    self._gateway_policy_invalid = False
+    if agent_id == "antigravity":
+      self.chk_gateway_antigravity.setChecked(False)
+    else:
+      self.chk_gateway_opencode.setChecked(False)
+
+    try:
+      result = adapter.remove_owned(path, agent_id)
+    except Exception as exc:
+      QMessageBox.warning(
+          self, "移除 Adapter 失败",
+          f"Agent 策略已安全设为 OFF，但客户端配置未能移除。{exc}",
+      )
+      self.refresh_gateway_settings()
+      return
+    detail = f"配置文件：{result.config_path}"
+    if result.backup_path:
+      detail += f"\n原文件备份：{result.backup_path}"
+    self.lbl_gateway_policy_status.setText(
+        f"{agent_id} 的 Agent 策略已设为 OFF；"
+        f"AirBridge MCP 条目已{'移除' if result.changed else '不存在'}。{detail}"
+        "M2.4 Credential 保留，未执行 revoke。"
+    )
+    self.append_log("INFO", f"{agent_id} Agent policy switched OFF before Adapter removal; M2.4 credential retained")
+    self.refresh_gateway_settings()
+
+  def _sync_installed_gateway_adapters(self, gateway_enabled: bool, agents: Dict[str, bool]):
+    """Apply the policy state to already-owned entries; never create missing entries."""
+    outcomes = []
+    for agent_id in ("antigravity", "opencode"):
+      adapter, path, _path_label, _status_label, _install, _remove = (
+          self._gateway_adapter_details(agent_id)
+      )
+      try:
+        status = adapter.inspect(path, agent_id)
+        if not status.present or not status.owned:
+          continue
+        credential_ok = self._gateway_agent_credential_present(agent_id)
+        desired_enabled = gateway_enabled and bool(agents.get(agent_id, False)) and credential_ok
+        result = adapter.install_or_update(path, agent_id, enabled=desired_enabled)
+        if result.changed:
+          outcomes.append(f"{agent_id}: {'enabled' if desired_enabled else 'disabled'}")
+      except Exception as exc:
+        outcomes.append(f"{agent_id}: not modified ({exc})")
+    return outcomes
+
+  def save_gateway_settings(self):
+    """Persist Gateway / Agent ON-OFF state without touching M2.4 credentials."""
+    if self._gateway_policy_invalid:
+      answer = QMessageBox.question(
+          self,
+          "修复 Gateway 策略",
+          "现有 gateway.json 缺失以外的读取 / 格式错误。"
+          "是否用当前页面的设置替换该策略文件？",
+          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+          QMessageBox.StandardButton.No,
+      )
+      if answer != QMessageBox.StandardButton.Yes:
+        return
+
+    enabled = self.chk_gateway_enabled.isChecked()
+    agents = dict(self._gateway_policy_agents)
+    agents["antigravity"] = self.chk_gateway_antigravity.isChecked()
+    agents["opencode"] = self.chk_gateway_opencode.isChecked()
+
+    if enabled:
+      missing = [
+          agent_id
+          for agent_id in ("antigravity", "opencode")
+          if agents.get(agent_id, False)
+          and not self._gateway_agent_credential_present(agent_id)
+      ]
+      if missing:
+        QMessageBox.warning(
+            self,
+            "Agent 凭据不可用",
+            "以下已启用 Agent 在当前 Windows 用户 Credential Manager 中没有可读取的凭据："
+            + ", ".join(missing)
+            + "。请先完成 M2.4 Agent Provision，再保存 Gateway 设置。",
+        )
+        return
+
+    try:
+      self.gateway_policy_store.write(enabled=enabled, agents=agents)
+    except (OSError, ValueError) as exc:
+      QMessageBox.critical(self, "保存 Gateway 设置失败", str(exc))
+      return
+
+    self._gateway_policy_agents = agents
+    self._gateway_policy_invalid = False
+    adapter_outcomes = self._sync_installed_gateway_adapters(enabled, agents)
+    self.lbl_gateway_policy_status.setText(
+        "Gateway 设置已原子保存。全局状态："
+        + ("ON" if enabled else "OFF")
+        + "。每个已运行的 STDIO 子进程会在下一次 Tool 调用时检查新策略；"
+        "M2.4 Credential 不会因关闭 Gateway 而删除或撤销。"
+    )
+    self.append_log(
+        "INFO",
+        "已保存本机 Gateway 策略："
+        + ("ON" if enabled else "OFF")
+        + f", Antigravity={agents['antigravity']}, OpenCode={agents['opencode']}",
+    )
+    if adapter_outcomes:
+      self.append_log("INFO", "已同步已安装的 MCP Adapter：" + "; ".join(adapter_outcomes))
+    self.refresh_gateway_adapter_statuses()
 
   def scan_ports(self):
     self.combo_ports.clear()
@@ -3501,8 +4184,13 @@ class AirBridgeMainWindow(QMainWindow):
     )
 
 
-if __name__ == "__main__":
+def run_gui() -> int:
+  """Start the existing AirBridge desktop UI."""
   app = QApplication(sys.argv)
   window = AirBridgeMainWindow()
   window.show()
-  sys.exit(app.exec())
+  return app.exec()
+
+
+if __name__ == "__main__":
+  sys.exit(run_gui())

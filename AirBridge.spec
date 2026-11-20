@@ -1,12 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 # AirBridge.spec
-# 完整集成 protocol, eda_engine, fs_engine, shell_engine 单文件打包清单
+# Unified AirBridge.exe: GUI default + MCP STDIO subprocess mode.
+
+from PyInstaller.utils.hooks import collect_submodules
+
+# Collect only MCP server modules; the optional mcp.cli package requires typer.
+mcp_server_hiddenimports = collect_submodules('mcp.server')
 
 block_cipher = None
 
 a = Analysis(
-    ['airbridge_app.py'],
-    pathex=[],
+    ['airbridge_entry.py'],
+    pathex=['mcp_gateway'],
     binaries=[],
     datas=[
         ('protocol.py', '.'),
@@ -20,7 +25,9 @@ a = Analysis(
         'PySide6.QtCore',
         'PySide6.QtWidgets',
         'PySide6.QtGui',
-    ],
+        'airbridge_mcp_gateway.server',
+        'tools.airbridge_agent_admin',
+    ] + mcp_server_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -44,6 +51,8 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
+    # Keep the desktop application windowed. The MCP entrypoint restores
+    # inherited STARTF_USESTDHANDLES pipes before starting the STDIO SDK.
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,

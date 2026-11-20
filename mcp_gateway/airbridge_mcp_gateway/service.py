@@ -8,6 +8,7 @@ from typing import Any
 
 from .config import GatewayConfig
 from .http_client import AirBridgeHttpClient, AirBridgeTransportError
+from .gateway_policy import GatewayPolicyStore
 
 
 class AirBridgeGateway:
@@ -17,17 +18,35 @@ class AirBridgeGateway:
         self,
         config: GatewayConfig | None = None,
         client: AirBridgeHttpClient | None = None,
+        policy_store: GatewayPolicyStore | None = None,
     ):
         self.config = config or GatewayConfig.from_env()
         self.client = client or AirBridgeHttpClient(self.config)
+        self.policy_store = policy_store
+        if self.policy_store is None and self.config.enforce_gateway_policy:
+            self.policy_store = GatewayPolicyStore.for_current_user()
+
+    def _policy_denial(self) -> dict[str, Any] | None:
+        if self.policy_store is None:
+            return None
+        decision = self.policy_store.check(self.config.agent_id)
+        if decision.allowed:
+            return None
+        return decision.as_tool_result()
 
     def get_capabilities(self) -> dict[str, Any]:
+        denied = self._policy_denial()
+        if denied is not None:
+            return denied
         try:
             return self.client.get_capabilities()
         except AirBridgeTransportError as exc:
             return self._unavailable(exc)
 
     def get_eda_versions(self) -> dict[str, Any]:
+        denied = self._policy_denial()
+        if denied is not None:
+            return denied
         try:
             return self.client.get_eda_versions()
         except AirBridgeTransportError as exc:
@@ -44,6 +63,9 @@ class AirBridgeGateway:
         wait_timeout_ms: int = 60_000,
     ) -> dict[str, Any]:
         """Submit opaque script text; this layer never parses or rewrites it."""
+        denied = self._policy_denial()
+        if denied is not None:
+            return denied
         if not self.config.enable_eda_execute:
             return {
                 "success": False,
@@ -125,6 +147,9 @@ class AirBridgeGateway:
             }
 
     def get_request_status(self, request_id: str) -> dict[str, Any]:
+        denied = self._policy_denial()
+        if denied is not None:
+            return denied
         try:
             parsed = uuid.UUID(request_id)
         except (AttributeError, TypeError, ValueError):
