@@ -269,6 +269,9 @@ M2.5.4 不只是启用 Streamable HTTP Server，还必须完成：
 - HTTP Worker 的 TokenVerifier 与 Agent / scope 映射；
 - M2.4 Service Token 由 Credential Provider 独立读取，绝不透传客户端 OAuth Token；
 - HTTPS issuer / certificate trust 原型先通过 M2.5.0-A Gate。
+- Broker 默认 TCP 38861、首个 Antigravity Worker 38862、首个 OpenCode Worker 38863；新增 Agent Worker 使用唯一持久端口。
+- 端口仅绑定 loopback，启动前完成真实 bind / 占用与系统 excluded / dynamic range 检查；Broker 冲突阻断 Managed HTTPS OAuth，单 Worker 冲突只阻断该实例。
+- Worker / Broker 端口变更后同步 Resource / issuer metadata 与当前用户级 MCP Host 配置，并按 Resource Audience / issuer 变化要求重新授权；更新失败回滚。
 
 ### 8.5 M2.5.6 Host Adapter 补充
 
@@ -364,10 +367,18 @@ Go / No-Go：
 - 不读取客户端 OAuth Token 存储文件。
 
 **OpenCode：**
-- GUI 写入 V2 `mcp.servers.<name>` 的 remote `url`；
+- GUI 写入 V2 `mcp.servers.<name>` 的 remote `url`，首个实例默认 `https://localhost:38863/mcp`；
 - 用户在 `/mcps` 中授权，或通过 `opencode mcp auth <name>` 启动授权；
 - 通过 Worker 的成功认证请求确认实际连通；
 - 不读取 OpenCode 私有 OAuth credential store。
+
+**端口验收：**
+- 默认安装配置为 Broker 38861、首个 Antigravity Worker 38862、首个 OpenCode Worker 38863，且不与 AirBridge HTTP API 8888 冲突；
+- 所有 Agent 实例端口唯一、持久化；多个同类型实例不能共用端口；
+- 使用真实 TCP bind 检查端口占用；注入 Broker 端口冲突与单 Worker 端口冲突，验证故障隔离和 GUI 诊断；
+- 修改 Worker / Broker 端口后，验证 metadata、客户端配置备份 / 原子更新、OAuth 重新授权和失败回滚；
+- 验证服务只绑定 IPv4 / IPv6 loopback，不创建 LAN / 公网监听或自动防火墙入站规则；
+- 验证升级保留用户配置端口，首次安装才使用默认值。
 
 ### 8.5 Runtime Session Gateway State Gate
 
