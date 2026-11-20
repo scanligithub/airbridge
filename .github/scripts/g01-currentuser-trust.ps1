@@ -163,31 +163,23 @@ try {
     }
 
     # The installer must obtain explicit user consent before this write operation.
-    # X509Store.Add writes directly to this process identity's CurrentUser Root store;
-    # no certificate import wizard UI is invoked by this CI operation.
-    Set-G01Phase 'before-currentuser-root-store-open'
-    Write-Host 'Phase: add the CA public certificate to CurrentUser Root'
-    $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-        [System.Security.Cryptography.X509Certificates.StoreName]::Root,
-        [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
-    )
-    try {
-        $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-        Set-G01Phase 'currentuser-root-store-opened'
-        $rootStore.Add($rootPublic)
-        Set-G01Phase 'currentuser-root-store-add-returned'
+    # Test the non-interactive Windows certutil -user path after consent is already given.
+    Set-G01Phase 'before-certutil-currentuser-root-addstore'
+    Write-Host 'Phase: certutil add public CA certificate to CurrentUser Root'
+    $addOutput = & certutil.exe -f -user -addstore Root $rootCer 2>&1
+    $addExitCode = $LASTEXITCODE
+    $addOutput | Set-Content -LiteralPath (Join-Path $evidenceDir 'certutil-addstore-output.txt') -Encoding UTF8
+    if ($addExitCode -ne 0) {
+        throw "certutil -f -user -addstore Root failed (exit $addExitCode): $($addOutput -join [Environment]::NewLine)"
     }
-    finally {
-        $rootStore.Close()
-    }
+    Set-G01Phase 'certutil-currentuser-root-addstore-returned'
 
-    Set-G01Phase 'currentuser-root-store-closed'
     $trustedRoot = Get-Item -LiteralPath "Cert:\CurrentUser\Root\$rootThumb" -ErrorAction Stop
     if ($trustedRoot.HasPrivateKey) {
         throw 'CurrentUser Root unexpectedly contains a private key; only public CA material may be imported.'
     }
     $results.current_user_root_import = 'PASS'
-    $results.current_user_root_import_method = '.NET X509Store(StoreName.Root, StoreLocation.CurrentUser).Add'
+    $results.current_user_root_import_method = 'certutil.exe -f -user -addstore Root'
 
     Set-G01Phase 'before-certutil-currentuser-readback'
     $verifyOutput = & certutil.exe -user -store Root $rootThumb 2>&1
