@@ -2759,7 +2759,7 @@ class AirBridgeMainWindow(QMainWindow):
     adapter_executable = self.gateway_adapter_executable or Path(sys.executable)
     self.gateway_antigravity_adapter = AntigravityAdapter(adapter_executable)
     self.gateway_opencode_adapter = OpenCodeAdapter(adapter_executable)
-    self.gateway_antigravity_config_path = AntigravityAdapter.cli_global_config()
+    self.gateway_antigravity_config_path = AntigravityAdapter.global_config()
     self.gateway_opencode_config_path = OpenCodeAdapter.global_config()
     self.gateway_adapter_actions_enabled = self.gateway_adapter_executable is not None
     try:
