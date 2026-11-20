@@ -627,13 +627,18 @@ def _validate_agent_id(agent_id: str) -> str:
 
 
 class AntigravityAdapter(_BaseAdapter):
-    """Antigravity App/IDE uses a path discovered through its Copy Config File Path UI."""
+    """Manage Antigravity App/IDE/CLI's current-user global MCP configuration."""
 
     server_name = "airbridge-antigravity"
 
     @staticmethod
-    def cli_global_config(home: str | os.PathLike[str] | None = None) -> Path:
+    def global_config(home: str | os.PathLike[str] | None = None) -> Path:
         return Path(home or Path.home()) / ".gemini" / "config" / "mcp_config.json"
+
+    @staticmethod
+    def cli_global_config(home: str | os.PathLike[str] | None = None) -> Path:
+        """Backward-compatible alias for the global Antigravity config path."""
+        return AntigravityAdapter.global_config(home)
 
     def _root_server_container(self, source: str, root: _Node) -> tuple[str, _Node]:
         return self._existing_or_new_object(source, root, "mcpServers", "mcpServers")
