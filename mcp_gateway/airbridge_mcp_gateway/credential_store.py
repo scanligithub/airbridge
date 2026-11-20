@@ -144,6 +144,7 @@ class WindowsCredentialStore:
                 )
             raise CredentialStoreError(
                 f"Windows Credential Manager read failed (error {code})"
+            )
         try:
             credential = pointer.contents
             size = int(credential.CredentialBlobSize)
