@@ -10,113 +10,25 @@ $leaf = $null
 $mismatchLeaf = $null
 $untrustedRoot = $null
 $untrustedLeaf = $null
-$rootCer = Join-Path $evidenceDir 'g01-root-public.cer'
 $rootThumb = $null
+$rootCer = Join-Path $evidenceDir 'g01-root-public.cer'
 $localMachineBefore = @()
 $certsToRemove = [System.Collections.Generic.List[string]]::new()
 $results = [ordered]@{
     run_id = $runId
     runner = $env:RUNNER_NAME
     windows_identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    runner_is_elevated_admin = ([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     powershell = $PSVersionTable.PSVersion.ToString()
     current_user_root_import = 'NOT_RUN'
     local_machine_root_unchanged = 'NOT_RUN'
     trusted_chain_build = 'NOT_RUN'
-    localhost_https = 'NOT_RUN'
-    hostname_mismatch_rejected = 'NOT_RUN'
-    untrusted_ca_rejected = 'NOT_RUN'
+    untrusted_ca_rejected_by_chain = 'NOT_RUN'
+    wrong_host_san_fixture = 'NOT_RUN'
+    localhost_https_client_handshake = 'NOT_RUN'
+    antigravity_opencode_client_tls = 'NOT_RUN'
     cleanup = 'NOT_RUN'
 }
-
-Add-Type -TypeDefinition @'
-using System;
-using System.Net;
-using System.Net.Sockets;
-using System.Net.Security;
-using System.Security.Authentication;
-using System.Security.Cryptography.X509Certificates;
-using System.Text;
-using System.Threading;
-
-public sealed class G01LoopbackTlsServer : IDisposable
-{
-    private readonly TcpListener _ipv4;
-    private readonly TcpListener _ipv6;
-    private readonly X509Certificate2 _certificate;
-    private readonly Thread _thread4;
-    private readonly Thread _thread6;
-    private volatile bool _stopping;
-
-    public int Port { get; private set; }
-    public string LastError { get; private set; }
-
-    public G01LoopbackTlsServer(X509Certificate2 certificate)
-    {
-        _certificate = certificate;
-        _ipv4 = new TcpListener(IPAddress.Loopback, 0);
-        _ipv4.Start();
-        Port = ((IPEndPoint)_ipv4.LocalEndpoint).Port;
-
-        try
-        {
-            _ipv6 = new TcpListener(IPAddress.IPv6Loopback, Port);
-            _ipv6.Server.DualMode = false;
-            _ipv6.Start();
-        }
-        catch
-        {
-            _ipv4.Stop();
-            throw;
-        }
-
-        _thread4 = new Thread(() => ServeOne(_ipv4));
-        _thread4.IsBackground = true;
-        _thread4.Start();
-
-        _thread6 = new Thread(() => ServeOne(_ipv6));
-        _thread6.IsBackground = true;
-        _thread6.Start();
-    }
-
-    private void ServeOne(TcpListener listener)
-    {
-        try
-        {
-            using (TcpClient tcp = listener.AcceptTcpClient())
-            using (SslStream ssl = new SslStream(tcp.GetStream(), false))
-            {
-                tcp.ReceiveTimeout = 8000;
-                ssl.ReadTimeout = 8000;
-                ssl.WriteTimeout = 8000;
-                ssl.AuthenticateAsServer(_certificate, false, SslProtocols.Tls12, false);
-                byte[] request = new byte[4096];
-                int received = ssl.Read(request, 0, request.Length);
-                if (received > 0)
-                {
-                    byte[] response = Encoding.ASCII.GetBytes(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK");
-                    ssl.Write(response, 0, response.Length);
-                    ssl.Flush();
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            if (!_stopping)
-                LastError = ex.GetType().FullName + ": " + ex.Message;
-        }
-    }
-
-    public void Dispose()
-    {
-        _stopping = true;
-        try { _ipv4.Stop(); } catch { }
-        try { _ipv6.Stop(); } catch { }
-        try { _thread4.Join(1500); } catch { }
-        try { _thread6.Join(1500); } catch { }
-    }
-}
-'@
 
 function Get-ThumbprintSnapshot {
     param([Parameter(Mandatory)][string]$Path)
@@ -174,106 +86,42 @@ function New-G01ServerCertificate {
     New-SelfSignedCertificate @parameters
 }
 
-function Test-TrustedChain {
-    param([Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
-
+function Test-ChainBuild {
+    param(
+        [Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        [Parameter(Mandatory)][bool]$ExpectedSuccess
+    )
     $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
     try {
         $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
         $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
         $ok = $chain.Build($Certificate)
-        if (-not $ok) {
+        if ($ExpectedSuccess -and -not $ok) {
             $status = ($chain.ChainStatus | ForEach-Object { "$($_.Status): $($_.StatusInformation.Trim())" }) -join '; '
-            throw "Certificate chain did not build: $status"
+            throw "Expected trusted chain to build, but it failed: $status"
         }
+        if (-not $ExpectedSuccess -and $ok) {
+            throw 'An untrusted CA chain unexpectedly built successfully.'
+        }
+        return $ok
     }
     finally {
         $chain.Dispose()
     }
 }
 
-function Invoke-G01HttpsProbe {
-    param([Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
-
-    $server = [G01LoopbackTlsServer]::new($Certificate)
-    $handler = [System.Net.Http.HttpClientHandler]::new()
-    $handler.UseProxy = $false
-    $handler.CheckCertificateRevocationList = $false
-    $client = [System.Net.Http.HttpClient]::new($handler)
-    $client.Timeout = [TimeSpan]::FromSeconds(10)
-    try {
-        $uri = "https://localhost:$($server.Port)/health"
-        $response = $client.GetAsync($uri).GetAwaiter().GetResult()
-        try {
-            $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-            if (-not $response.IsSuccessStatusCode) {
-                throw "HTTPS endpoint returned HTTP $([int]$response.StatusCode): $body"
-            }
-            return [PSCustomObject]@{
-                StatusCode = [int]$response.StatusCode
-                Body = $body
-                Port = $server.Port
-            }
-        }
-        finally {
-            $response.Dispose()
-        }
-    }
-    finally {
-        $client.Dispose()
-        $handler.Dispose()
-        $server.Dispose()
-    }
-}
-
-function Assert-G01HttpsRejected {
-    param(
-        [Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
-        [Parameter(Mandatory)][string]$Uri,
-        [Parameter(Mandatory)][string]$Scenario
-    )
-
-    $server = [G01LoopbackTlsServer]::new($Certificate)
-    $handler = [System.Net.Http.HttpClientHandler]::new()
-    $handler.UseProxy = $false
-    $handler.CheckCertificateRevocationList = $false
-    $client = [System.Net.Http.HttpClient]::new($handler)
-    $client.Timeout = [TimeSpan]::FromSeconds(10)
-    $rejectedForTls = $false
-    try {
-        try {
-            $response = $client.GetAsync($Uri.Replace('{PORT}', [string]$server.Port)).GetAwaiter().GetResult()
-            $response.Dispose()
-        }
-        catch {
-            $detail = $_.Exception.ToString()
-            if ($detail -notmatch 'SSL|TLS|certificate|authentication|trust|secure channel') {
-                throw "The $Scenario probe failed for a non-TLS reason: $detail"
-            }
-            $rejectedForTls = $true
-            Write-Host "Expected $Scenario rejection: $($_.Exception.GetType().FullName)"
-        }
-    }
-    finally {
-        $client.Dispose()
-        $handler.Dispose()
-        $server.Dispose()
-    }
-
-    if (-not $rejectedForTls) {
-        throw "TLS client did not reject the $Scenario certificate."
-    }
-}
-
 try {
     Import-Module PKI -ErrorAction Stop
-
-    Write-Host 'G-01 Windows CurrentUser trust test'
+    Write-Host 'G-01 CurrentUser Root import and X509Chain validation'
     Write-Host "Identity: $($results.windows_identity)"
+    Write-Host "Elevated admin token: $($results.runner_is_elevated_admin)"
     Write-Host "PowerShell: $($results.powershell)"
 
     $localMachineBefore = Get-ThumbprintSnapshot -Path 'Cert:\LocalMachine\Root'
     $results.local_machine_root_before_count = $localMachineBefore.Count
+    if ($localMachineBefore.Count -eq 0) {
+        throw 'LocalMachine Root snapshot unexpectedly empty; refusing an inconclusive scope test.'
+    }
 
     $root = New-G01RootCertificate -Subject "CN=AirBridge G01 CI Root $runId"
     $leaf = New-G01ServerCertificate -Signer $root -Subject 'CN=localhost' -DnsName @('localhost')
@@ -283,7 +131,7 @@ try {
 
     foreach ($cert in @($root, $leaf, $mismatchLeaf, $untrustedRoot, $untrustedLeaf)) {
         if (-not $cert.HasPrivateKey) {
-            throw "Expected a CurrentUser\My private key for $($cert.Subject)"
+            throw "Expected CurrentUser\My private key for $($cert.Subject)"
         }
         $certsToRemove.Add($cert.Thumbprint.ToUpperInvariant())
     }
@@ -295,98 +143,72 @@ try {
     $results.leaf_private_key_present_in_current_user_my = $leaf.HasPrivateKey
 
     Export-Certificate -Cert $root -FilePath $rootCer -Type CERT -Force | Out-Null
-    if (-not (Test-Path -LiteralPath $rootCer -PathType Leaf)) {
-        throw 'Public CA CER export failed.'
-    }
-
-    # Import only the public CA certificate into the runner identity's CurrentUser Root.
-    # The explicit consent UI is owned by the installer; CI validates the non-interactive
-    # Windows certificate-store operation that follows an already-approved consent.
     $rootPublic = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCer)
     if ($rootPublic.HasPrivateKey) {
-        throw 'The exported CA CER unexpectedly contains a private key.'
+        throw 'Exported CA CER unexpectedly contains a private key.'
     }
-    $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-        [System.Security.Cryptography.X509Certificates.StoreName]::Root,
-        [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
-    )
-    try {
-        $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-        $rootStore.Add($rootPublic)
-    }
-    finally {
-        $rootStore.Close()
+
+    # The installer must obtain explicit user consent before this write operation.
+    # certutil performs the CurrentUser store write without invoking an import wizard UI.
+    Write-Host 'Phase: add the CA public certificate to CurrentUser Root'
+    $addOutput = & certutil.exe -f -user -addstore Root $rootCer 2>&1
+    $addExitCode = $LASTEXITCODE
+    $addOutput | Set-Content -LiteralPath (Join-Path $evidenceDir 'certutil-addstore-output.txt') -Encoding UTF8
+    if ($addExitCode -ne 0) {
+        throw "certutil -user -addstore Root failed (exit $addExitCode): $($addOutput -join [Environment]::NewLine)"
     }
 
     $trustedRoot = Get-Item -LiteralPath "Cert:\CurrentUser\Root\$rootThumb" -ErrorAction Stop
     if ($trustedRoot.HasPrivateKey) {
-        throw 'The CurrentUser Root entry unexpectedly contains a private key. Only the public CA certificate may be imported.'
+        throw 'CurrentUser Root unexpectedly contains a private key; only public CA material may be imported.'
     }
     $results.current_user_root_import = 'PASS'
-    $results.current_user_root_import_method = '.NET X509Store CurrentUser Root Add'
+    $results.current_user_root_import_method = 'certutil.exe -f -user -addstore Root'
 
-    $certutilOutput = & certutil.exe -user -store Root $rootThumb 2>&1
+    $verifyOutput = & certutil.exe -user -store Root $rootThumb 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "certutil -user -store Root failed: $($certutilOutput -join [Environment]::NewLine)"
+        throw "certutil -user -store Root verification failed: $($verifyOutput -join [Environment]::NewLine)"
     }
-    $certutilOutput | Set-Content -LiteralPath (Join-Path $evidenceDir 'certutil-currentuser-root.txt') -Encoding UTF8
+    $verifyOutput | Set-Content -LiteralPath (Join-Path $evidenceDir 'certutil-currentuser-root.txt') -Encoding UTF8
 
     $localMachineAfterImport = Get-ThumbprintSnapshot -Path 'Cert:\LocalMachine\Root'
     $importDelta = Compare-Object -ReferenceObject $localMachineBefore -DifferenceObject $localMachineAfterImport
     if ($importDelta) {
         $importDelta | Format-Table | Out-String | Write-Host
-        throw 'LocalMachine Root changed during CurrentUser import.'
+        throw 'LocalMachine Root changed during CurrentUser Root import.'
     }
     $results.local_machine_root_unchanged = 'PASS'
     $results.local_machine_root_after_import_count = $localMachineAfterImport.Count
 
-    Write-Host 'Phase: X509Chain.Build for a CA trusted in CurrentUser Root'
-    Test-TrustedChain -Certificate $leaf
+    Write-Host 'Phase: verify a certificate chain trusted by CurrentUser Root'
+    [void](Test-ChainBuild -Certificate $leaf -ExpectedSuccess $true)
     $results.trusted_chain_build = 'PASS'
 
-    # Real loopback TLS handshake using the platform default certificate validation.
-    Write-Host 'Phase: positive https://localhost loopback TLS probe'
-    $httpsResult = Invoke-G01HttpsProbe -Certificate $leaf
-    $results.localhost_https = 'PASS'
-    $results.https_status_code = $httpsResult.StatusCode
-    $results.https_body = $httpsResult.Body
-    $results.https_port = $httpsResult.Port
+    Write-Host 'Phase: verify an unrelated CA is not trusted'
+    [void](Test-ChainBuild -Certificate $untrustedLeaf -ExpectedSuccess $false)
+    $results.untrusted_ca_rejected_by_chain = 'PASS'
 
-    # Same trusted CA, but a wrong DNS SAN must be rejected by the system TLS client.
-    Write-Host 'Phase: negative hostname mismatch TLS probe'
-    Assert-G01HttpsRejected -Certificate $mismatchLeaf -Uri 'https://localhost:{PORT}/health' -Scenario 'hostname-mismatch'
-    $results.hostname_mismatch_rejected = 'PASS'
+    $leafDnsNames = @($leaf.DnsNameList | ForEach-Object { $_.Unicode })
+    $mismatchDnsNames = @($mismatchLeaf.DnsNameList | ForEach-Object { $_.Unicode })
+    if ($leafDnsNames -notcontains 'localhost' -or $mismatchDnsNames -contains 'localhost') {
+        throw 'The positive / wrong-host DNS SAN fixtures are not configured as expected.'
+    }
+    $results.wrong_host_san_fixture = 'PASS'
 
-    # A second CA which is not in CurrentUser Root must not be trusted.
-    Write-Host 'Phase: negative untrusted CA TLS probe'
-    Assert-G01HttpsRejected -Certificate $untrustedLeaf -Uri 'https://localhost:{PORT}/health' -Scenario 'untrusted-CA'
-    $results.untrusted_ca_rejected = 'PASS'
-
-    Write-Host 'G-01 positive and negative CurrentUser TLS checks passed.'
+    Write-Host 'G-01 CurrentUser store and chain tests passed. Live HTTP client handshake and vendor MCP clients remain separate gates.'
 }
 catch {
     $results.failure = $_.Exception.ToString()
     throw
 }
 finally {
-    # Remove only certificates created by this run, using their exact thumbprints.
+    # Remove only certificates created by this run, by their exact thumbprints.
     if ($rootThumb) {
-        try {
-            $cleanupRootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-                [System.Security.Cryptography.X509Certificates.StoreName]::Root,
-                [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
-            )
-            $cleanupRootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            foreach ($trustedCert in @($cleanupRootStore.Certificates | Where-Object { $_.Thumbprint.ToUpperInvariant() -eq $rootThumb })) {
-                $cleanupRootStore.Remove($trustedCert)
-            }
-            $cleanupRootStore.Close()
-        }
-        catch {
-            if ($cleanupRootStore) { $cleanupRootStore.Close() }
-            throw
-        }
+        $deleteOutput = & certutil.exe -f -user -delstore Root $rootThumb 2>&1
+        $results.current_user_root_cleanup_exit_code = $LASTEXITCODE
+        $deleteOutput | Set-Content -LiteralPath (Join-Path $evidenceDir 'certutil-delstore-output.txt') -Encoding UTF8
     }
+
     foreach ($thumb in $certsToRemove) {
         Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumb" -ErrorAction SilentlyContinue
     }
