@@ -218,7 +218,10 @@ M2.5 不得破坏以下既有能力：
 - 只构建和发布一个 AirBridge Windows 安装包 / EXE；
 - 主机 A 和主机 B 安装同一个版本；
 - 两端配置分别保存在各自本机；
-- **用户已确认：新安装 Gateway 总开关默认 OFF**，安装完成后不得自动启动任何 Gateway Worker；升级安装保留已有用户配置，不重置 ON / OFF 状态；
+- **用户已确认：新安装 Gateway 总开关默认 OFF**，安装完成后不得自动启动任何 Gateway Worker；
+- **用户已确认：升级安装保留所有有效用户配置与授权状态**，包括 Gateway / Agent 开关、Agent identity / Scope、端口 / endpoint、M2.4 Credential Manager 条目、Broker Grant / Revocation / issuer 数据、有效 CurrentUser 证书和 Adapter 管理的当前用户 MCP 配置；不得套用首次安装默认值重置；
+- 升级迁移必须版本化、幂等、先备份再原子提交；失败必须回滚。配置损坏或未知 schema 不得误判为首次安装、不得重建空白配置或 Grant Store；迁移未解决前 Gateway Worker 保持停止；
+- AirBridge 不读取 / 备份 / 迁移 Antigravity / OpenCode 私有 OAuth Token Vault，也不复制 / 导出 M2.4 Credential Manager Secret；保持 issuer / Resource Audience 稳定，避免正常升级无故要求重新授权；
 - **用户已确认：`gateway.start_with_airbridge` 默认 ON**，但只有 Gateway 总开关与对应 Agent 实例均启用时，GUI 启动才拉起 Worker；
 - **M2.5 首版不实现 Windows 登录自动启动 AirBridge GUI**；不创建注册表 Run 项、Startup 快捷方式或计划任务；
 - 主机 A 可由用户在 GUI 启用 Gateway 并配置 Agent；
@@ -426,5 +429,10 @@ AirBridge 不读取 Antigravity / OpenCode 的客户端 Token Vault。Broker 有
 - [ ] 两个 Agent Worker 不可互换 Access Token。
 - [ ] OAuth revoke 后旧 Access / Refresh Token 按定义失效。
 - [ ] M2.4 Agent Service Token 不进入 MCP Host 配置。
+- [ ] 首次安装与升级安装通过独立路径识别；升级不能因配置缺失 / 损坏误判为首次安装。
+- [ ] 升级保留 gateway.enabled、start_with_airbridge、Agent instance IDs / enabled / Scope、Broker / Worker ports 和 endpoints。
+- [ ] 现存 Agent Service Credential、Broker Client Registration、Grant / Revocation、签发所需密钥材料、有效 CurrentUser 证书身份保持不变；已撤销 Grant 不得复活。
+- [ ] Adapter 只变更其管理的用户级 MCP 条目；其它 MCP Server / JSONC 数据保留；不访问客户端 OAuth Token Vault。
+- [ ] 模拟成功迁移、中途崩溃、配置损坏、未知 schema、备份失败和回滚失败；验证原始数据保留、Worker fail-closed 和 GUI 恢复说明。
 - [ ] Runtime Session 新/旧版本互操作与四种冲突组合通过。
 - [ ] A/B 使用相同最终 AirBridge.exe 完成双机实测。
