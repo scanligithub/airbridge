@@ -28,6 +28,20 @@ class _CredentialStoreProbe:
         raise AssertionError("GUI status inspection must not load credential secrets")
 
 
+class _NoopAntigravityIPCServer:
+    """Avoid creating API/Runtime SQLite stores in a GUI-only offscreen test."""
+
+    def __init__(self, worker, port: int = 8888):
+        self.worker = worker
+        self.port = port
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+
 class GatewayGuiSmokeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -43,7 +57,11 @@ class GatewayGuiSmokeTests(unittest.TestCase):
                     return_value=_CredentialStoreProbe(),
                 ),
                 patch.object(airbridge_app.SerialWorker, "start", lambda _self: None),
-                patch.object(airbridge_app.AntigravityIPCServer, "start", lambda _self: None),
+                patch.object(
+                    airbridge_app,
+                    "AntigravityIPCServer",
+                    _NoopAntigravityIPCServer,
+                ),
             ):
                 window = airbridge_app.AirBridgeMainWindow()
                 try:
