@@ -385,3 +385,14 @@ Hosted Actions 无法由操作员完成 Windows 原生证书导入向导，因�
 微软 API 文档说明 CERT_STORE_SET_LOCALIZED_NAME_FLAG 会使支持该标志的 Store Provider 设置本地化名称属性；CERT_STORE_PROV_SYSTEM 支持该标志。CertGetStoreProperty 返回的本地化名称是 Unicode 字符串：[CertOpenStore](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-certopenstore)、[CertGetStoreProperty](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-certgetstoreproperty)。
 
 **结论边界：** G-01A3 证明了在当前 Windows hosted runner / 标准用户上下文中，程序可打开 CurrentUser Root 句柄并读取预期的本地化目标名称；这是对交互式向导传入目标句柄的前置 API 验证，不证明 CryptUIWizImport 会在 Windows GUI 中正确显示 / 锁定该 Store，也不证明用户确认后的 Root 写入成功。Root NO_UI 导入仍保留既有超时失败记录；真实可见交互向导 G-01B 仍 NOT RUN。
+
+
+**只读句柄强化复测（2026-11-20）：** 第一轮 #44747579281 验证了 Root 句柄和本地化名称，但仅约束测试代码不写入；随后代码增加 `CERT_STORE_READONLY_FLAG (0x00008000)`，以系统层只读方式重新打开 Root 句柄。复测 [run #44748006943](https://github.com/scanligithub/airbridge/actions/runs/44748006943)，head `604d8316202e5ad55d10014c6ffe853d4a8684fa)，SUCCESS。结果 JSON 显示：
+
+- `current_user_root_handle_open=PASS`
+- `current_user_root_store_readonly=PASS_FLAG_0x00008000`
+- `current_user_root_localized_name="Trusted Root Certification Authorities"`
+- `current_user_root_unchanged=PASS`；`local_machine_root_unchanged=PASS`
+- CurrentUser My CryptUIWizImport control、Thumbprint readback、临时证书 cleanup 均 PASS；`interactive_wizard_tested=false`
+
+最终 CI 只读 Root 句柄组合为 `CERT_SYSTEM_STORE_CURRENT_USER (0x00010000) | CERT_STORE_SET_LOCALIZED_NAME_FLAG (0x00000002) | CERT_STORE_READONLY_FLAG (0x00008000)`。G-01B 的实际交互式导入句柄仍不带 READONLY 标志，因为用户确认后需要写入 CurrentUser Root；它仅使用 CurrentUser + SET_LOCALIZED_NAME，并继续由 NO_CHANGE_DEST_STORE 锁定目标。只读复测没有执行写入尝试，以避免测试代码触碰 Root store；READONLY 行为依据 Windows API 的只读标志契约。
