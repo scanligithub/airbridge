@@ -3423,9 +3423,9 @@ class AirBridgeMainWindow(QMainWindow):
     except Exception as exc:
       QMessageBox.warning(
           self, "移除 Adapter 失败",
-          f"未修改客户端配置。{exc}",
+          f"Agent 策略已安全设为 OFF，但客户端配置未能移除。{exc}",
       )
-      self.refresh_gateway_adapter_statuses()
+      self.refresh_gateway_settings()
       return
     detail = f"配置文件：{result.config_path}"
     if result.backup_path:
