@@ -2,6 +2,12 @@
 
 本文档目录存放 AirBridge Core 架构、通用协议、Skill 集成和迁移设计。专业 API / 对象模型及专业软件生命周期属于对应 Agent Skill；未来职责边界以 [ADR-006](ADR-006_Skill自主掌握专业软件生命周期.md) 为准，旧规范作为历史基线保留。
 
+## M2.5 当前架构决策（2026-11-20）
+
+M2.5 首版已明确改为本机 **STDIO-only** MCP 接入：Antigravity / OpenCode 启动统一 AirBridge.exe 子进程；不使用证书、TLS、HTTP / HTTPS MCP endpoint 或 OAuth Broker。MCP Host 管理子进程生命周期，AirBridge GUI 管理 Adapter 配置、Agent、M2.4 Credential / Scope 和审计。
+
+权威规范：[ADR-013：M2.5 STDIO 本机 MCP 接入与客户端托管生命周期](ADR-013_M2.5_Stdio本机MCP接入与客户端托管生命周期.md)。此前 M2.5 v0.3 的 HTTP / OAuth / CA 设计文档为历史评审资料，冲突内容以 ADR-013 为准。Host A ↔ Host B 仍使用原有 ABFP / 串口通信。
+
 ## 当前设计基线
 
 | [ADR-006：专业软件生命周期由 Agent Skill 自主掌握](ADR-006_Skill自主掌握专业软件生命周期.md) | 修订旧 Runtime Adapter / EDA Engine 的专业软件生命周期所有权；明确双端同一 AirBridge.exe、Skill 使用通用 Shell / RFS / 文件传输 | 2026-11-18 已采纳；M3 迁移按阶段实施 |
