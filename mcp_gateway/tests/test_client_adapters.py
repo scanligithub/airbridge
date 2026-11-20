@@ -75,6 +75,62 @@ class ClientAdapterTests(unittest.TestCase):
         self.assertIsNone(status.enabled)
         self.assertEqual(path.read_text(encoding="utf-8"), original)
 
+    def test_antigravity_other_airbridge_binary_path_is_not_owned(self):
+        path = self.root / "mcp_config.json"
+        other_exe = self.root / "other-install" / "AirBridge.exe"
+        other_exe.parent.mkdir(parents=True)
+        other_exe.write_bytes(b"other build")
+        original = json.dumps({
+            "mcpServers": {
+                "airbridge-antigravity": {
+                    "command": str(other_exe.resolve()),
+                    "args": ["mcp", "stdio"],
+                    "env": {"AIRBRIDGE_AGENT_ID": "antigravity"},
+                    "disabled": True,
+                }
+            }
+        })
+        path.write_text(original, encoding="utf-8")
+
+        status = self.antigravity.inspect(path, "antigravity")
+
+        self.assertTrue(status.present)
+        self.assertFalse(status.owned)
+        with self.assertRaises(AdapterConflictError):
+            self.antigravity.remove_owned(path, "antigravity")
+        with self.assertRaises(AdapterConflictError):
+            self.antigravity.install_or_update(path, "antigravity", enabled=True)
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_opencode_other_airbridge_binary_path_is_not_owned(self):
+        path = self.root / "opencode.json"
+        other_exe = self.root / "other-install" / "AirBridge.exe"
+        other_exe.parent.mkdir(parents=True)
+        other_exe.write_bytes(b"other build")
+        original = json.dumps({
+            "mcp": {
+                "servers": {
+                    "airbridge-opencode": {
+                        "type": "local",
+                        "command": [str(other_exe.resolve()), "mcp", "stdio"],
+                        "environment": {"AIRBRIDGE_AGENT_ID": "opencode"},
+                        "disabled": True,
+                    }
+                }
+            }
+        })
+        path.write_text(original, encoding="utf-8")
+
+        status = self.opencode.inspect(path, "opencode")
+
+        self.assertTrue(status.present)
+        self.assertFalse(status.owned)
+        with self.assertRaises(AdapterConflictError):
+            self.opencode.remove_owned(path, "opencode")
+        with self.assertRaises(AdapterConflictError):
+            self.opencode.install_or_update(path, "opencode", enabled=True)
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+
     def test_inspect_reports_opencode_owned_entry_and_does_not_create_missing_config(self):
         path = self.root / "opencode.json"
         missing_status = self.opencode.inspect(path, "opencode")
