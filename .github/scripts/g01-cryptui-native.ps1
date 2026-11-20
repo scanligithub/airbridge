@@ -43,7 +43,7 @@ namespace AirBridge.G01
             IntPtr hDestCertStore);
     }
 }
-'@ -ErrorAction Stop
+'@
 }
 
 function Open-G01CurrentUserRootStore {
