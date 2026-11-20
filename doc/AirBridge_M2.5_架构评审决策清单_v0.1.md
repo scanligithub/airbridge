@@ -238,19 +238,23 @@
 
 该 workflow 不运行 Antigravity / OpenCode 桌面客户端，也不证明真实客户端的 TLS / OAuth / MCP 兼容。G-01 总体仍为 Partial Research / NOT PASS；不得扩大到 LocalMachine Root、注册表直写、隐藏或自动点击 Windows 确认、TLS bypass 或无认证 HTTP fallback。
 
-### 4.1.2 G-01B：交互式 CurrentUser Root 导入子 Gate
+### 4.1.2 G-01A2：CryptUIWizImport Native API CI 子 Gate
 
-新增操作脚本：`.github/scripts/g01-interactive-currentuser-import.ps1`；执行说明见 G-01 操作手册第 13 节。
+Hosted Actions 在一次性标准用户 Profile 中通过 .github/scripts/g01-cryptui-import-ci.ps1 调用 CryptUIWizImport 的 NO_UI 模式，验证 P/Invoke、CRYPTUI_WIZ_IMPORT_SRC_INFO、CertOpenStore 的 CurrentUser Root 目标句柄、ALLOW_CERT / NO_CHANGE_DEST_STORE 标志、API 返回、Thumbprint 回读、Windows 默认链、LocalMachine Root 不变和精确清理。临时用户 Profile 在测试后按 SID 删除。
+
+G-01A2 不显示交互向导、不代表用户批准，也不构成 G-01B 交互式导入 PASS。它只验证 API 导入链路。
+
+### 4.1.3 G-01B：交互式 CurrentUser Root 导入子 Gate
+
+生产 PoC 使用 CertOpenStore(CERT_STORE_PROV_SYSTEM_W, CERT_SYSTEM_STORE_CURRENT_USER, Root) 打开目标句柄，再调用 CryptUIWizImport。生产调用设置 CRYPTUI_WIZ_IMPORT_ALLOW_CERT (0x00020000) 与 CRYPTUI_WIZ_IMPORT_NO_CHANGE_DEST_STORE (0x00010000)，不设置 CRYPTUI_WIZ_NO_UI，由 Windows 显示原生导入向导；目标 Store 固定为预先打开的 CurrentUser Root。
 
 - 必须由实际目标 Windows 用户在可见、非提升的交互式桌面 PowerShell 中运行；不能在 hosted Actions、服务、计划任务或 Session 0 执行。
-- 脚本只创建 disposable CA / localhost Leaf，取得针对完整 Root Thumbprint 的应用层明确 Consent 后，才调用 `Import-Certificate` 写入 `Cert:\CurrentUser\Root`。
-- 需要确认 Windows Root 系统信任提示由操作者亲自批准；随后按精确 Thumbprint 回读，并以 Windows 默认 X509Chain 构建器验证 localhost Leaf。
+- 用户先核对完整 Root Thumbprint 并完成应用层 Consent，再由 Windows 原生向导完成导入；成功返回后按 Thumbprint 回读，并以 Windows 默认 X509Chain 验证 localhost Leaf。
 - 完成后精确清理本次 Root / Leaf / Root 私钥关联；CurrentUser Root 必须恢复原 Thumbprint 集合，LocalMachine Root 必须完全不变。
-- 用户拒绝、系统确认未批准 / 未出现、导入回读失败、默认链失败或清理不完整，均为 FAIL / NOT RUN，不能把已有 G-01A CI PASS 推断为 G-01B PASS。
+- 用户拒绝、向导取消、导入回读失败、默认链失败或清理不完整，均为 FAIL / NOT RUN。
 - 该 PoC 只验证 Windows 交互式信任导入能力；不代表正式产品 CA provisioning、Antigravity / OpenCode TLS、OAuth 或 MCP 验收通过。
 
-**状态：NOT RUN。** hosted CI 仅做脚本语法和目标存储路径静态检查，不执行交互导入。
-
+**状态：NOT RUN。** G-01A2 可由 GitHub Actions 验证 API 调用路径，但交互向导必须由实际目标 Windows 用户验证。
 ### 4.2 G-01 必须执行的 Windows PoC 矩阵
 
 **主机范围澄清：** G-01 不绑定 Host A / Host B 角色。Managed HTTPS endpoints 只监听 loopback，`localhost` 指向 MCP Client 所在的本机，因此 Gateway 与 MCP Client 必须位于同一台 Windows 主机。每台实际部署 M2.5 的主机都在部署阶段导入适用于该机 localhost 的 CA 公钥；CurrentUser Root 是该机当前 Windows 用户的信任库，不跨机器共享。不得依赖固定 Host A / Host B 作为 CA 来源。正式 CA 签发 / 供应模型尚未冻结；若 A、B 都部署 M2.5，必须分别执行部署导入和信任检查；Gateway OFF 不跳过部署阶段的 CA 导入。
