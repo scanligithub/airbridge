@@ -39,7 +39,7 @@ def main(
     if args[:2] == ["mcp", "stdio"]:
         if len(args) != 2:
             error_stream.write(
-                "AirBridge MCP STDIO usage: AirBridge.exe mcp stdio\\n"
+                "AirBridge MCP STDIO usage: AirBridge.exe mcp stdio\n"
             )
             return 2
         runner = stdio_runner or _run_stdio
@@ -49,7 +49,7 @@ def main(
     if args and args[0] == "mcp":
         error_stream.write(
             "Unsupported MCP mode. The only supported mode is: "
-            "AirBridge.exe mcp stdio\\n"
+            "AirBridge.exe mcp stdio\n"
         )
         return 2
 
