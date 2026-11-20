@@ -3305,14 +3305,16 @@ class AirBridgeMainWindow(QMainWindow):
         remove_button.setEnabled(False)
 
   def _gateway_adapter_enabled_target(self, agent_id: str) -> bool:
-    gateway_enabled = self.chk_gateway_enabled.isChecked()
-    agent_checkbox = (
-        self.chk_gateway_antigravity if agent_id == "antigravity"
-        else self.chk_gateway_opencode
-    )
+    # Client-side enablement follows only the durable runtime policy, never
+    # unsaved checkbox edits. The STDIO process independently rechecks this
+    # same policy before each Tool call.
+    try:
+      gateway_enabled, agents = self.gateway_policy_store.read_snapshot()
+    except (OSError, ValueError):
+      return False
     return (
         gateway_enabled
-        and agent_checkbox.isChecked()
+        and bool(agents.get(agent_id, False))
         and self._gateway_agent_credential_present(agent_id)
     )
 
@@ -3328,19 +3330,22 @@ class AirBridgeMainWindow(QMainWindow):
         self._gateway_adapter_details(agent_id)
     )
     desired_enabled = self._gateway_adapter_enabled_target(agent_id)
+    try:
+      persisted_gateway_enabled, persisted_agents = (
+          self.gateway_policy_store.read_snapshot()
+      )
+    except (OSError, ValueError):
+      persisted_gateway_enabled, persisted_agents = False, {}
+
     if (
-        self.chk_gateway_enabled.isChecked()
-        and (
-            self.chk_gateway_antigravity.isChecked()
-            if agent_id == "antigravity"
-            else self.chk_gateway_opencode.isChecked()
-        )
+        persisted_gateway_enabled
+        and bool(persisted_agents.get(agent_id, False))
         and not self._gateway_agent_credential_present(agent_id)
     ):
       QMessageBox.warning(
           self, "Agent 凭据不可用",
-          f"{agent_id} 已被勾选启用，但当前 Windows 用户 Credential Manager 中没有可读取的凭据。"
-          "请先完成 M2.4 Agent Provision。",
+          f"{agent_id} 的已保存策略为 ON，但当前 Windows 用户 Credential Manager 中没有可读取的凭据。"
+          "请先完成 M2.4 Agent Provision，再启用 Adapter。",
       )
       return
 
@@ -3368,8 +3373,22 @@ class AirBridgeMainWindow(QMainWindow):
     detail = f"配置文件：{result.config_path}"
     if result.backup_path:
       detail += f"\n原文件备份：{result.backup_path}"
+    unsaved_enable_intent = (
+        self.chk_gateway_enabled.isChecked()
+        and (
+            self.chk_gateway_antigravity.isChecked()
+            if agent_id == "antigravity"
+            else self.chk_gateway_opencode.isChecked()
+        )
+        and not desired_enabled
+    )
+    policy_note = (
+        "页面中有尚未保存的 ON 设置；本次保持 Adapter Disabled，请先保存 Gateway 设置。"
+        if unsaved_enable_intent else ""
+    )
     self.lbl_gateway_policy_status.setText(
-        f"{agent_id} Adapter 已{'更新' if result.changed else '检查，无需修改'}。{detail}"
+        f"{agent_id} Adapter 已{'更新' if result.changed else '检查，无需修改'}。"
+        f"{policy_note}{detail}"
     )
     self.refresh_gateway_adapter_statuses()
 
