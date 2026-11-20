@@ -437,7 +437,7 @@ MCP Authorization 规范要求 Authorization Server endpoints 使用 HTTPS；OAu
 
 **技术边界：** CurrentUser 根证书信任能否被目标客户端及其所用 TLS 栈共同识别，仍须用 Antigravity App / IDE、OpenCode 和系统浏览器进行 Windows 实测。
 
-**本机证书归属补充：** Broker / Worker 仅监听 loopback，MCP Client 使用 `localhost`，因此客户端和 Gateway 必须位于同一台 Windows 主机。每台计划启用 Managed HTTPS 的主机独立维护本机 CA 私钥与 localhost Server Certificate；只将 CA 公钥在该机运行 MCP Client 的 Windows 用户 CurrentUser Root 中经明确同意后建立信任。A / B 不共享 CA 私钥或信任状态，也没有固定 CA 主机；如两机都启用 Managed HTTPS，则分别建立、分别验收。Gateway OFF 且无本机 MCP Client 需求的主机不必导入 CA。CurrentUser 是每台机器、每个用户独立的存储，不是跨主机共享信任库。不得把“写入 CurrentUser 证书存储成功”误判为所有客户端均已信任。若真实客户端无法正常验证证书，Managed HTTPS Mode 判定 No-Go，并提交新的架构决策；不得自行扩大到 LocalMachine Root 或要求管理员权限。
+**本机证书归属补充：** Broker / Worker 仅监听 loopback，MCP Client 使用 `localhost`，因此客户端和 Gateway 必须位于同一台 Windows 主机。每台实际部署 M2.5 AirBridge 的主机在部署阶段独立维护本机 CA 私钥与 localhost Server Certificate；只将 CA 公钥在该机运行 MCP Client 的 Windows 用户 CurrentUser Root 中经明确同意后建立信任。A / B 不共享 CA 私钥或信任状态，也没有固定 CA 主机；如两机都启用 Managed HTTPS，则分别建立、分别验收。即使 Gateway OFF 或暂时没有本机 MCP Client 请求，也在部署阶段完成 CA 信任准备；Gateway OFF 仍不启动 Broker / Worker。CurrentUser 是每台机器、每个用户独立的存储，不是跨主机共享信任库。不得把“写入 CurrentUser 证书存储成功”误判为所有客户端均已信任。若真实客户端无法正常验证证书，Managed HTTPS Mode 判定 No-Go，并提交新的架构决策；不得自行扩大到 LocalMachine Root 或要求管理员权限。
 
 参考：
 - [MCP Authorization Specification — Communication Security](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
