@@ -15,6 +15,10 @@ $rootThumb = $null
 $rootCer = Join-Path $evidenceDir 'g01-root-public.cer'
 $localMachineBefore = @()
 $certsToRemove = [System.Collections.Generic.List[string]]::new()
+$phaseFile = Join-Path $evidenceDir 'phase.txt'
+function Set-G01Phase { param([string]$Name) $Name | Set-Content -LiteralPath $phaseFile -Encoding UTF8 }
+Set-G01Phase 'script-start'
+
 $results = [ordered]@{
     run_id = $runId
     runner = $env:RUNNER_NAME
@@ -112,25 +116,31 @@ function Test-ChainBuild {
 }
 
 try {
+    Set-G01Phase 'before-import-pki-module'
     Import-Module PKI -ErrorAction Stop
+    Set-G01Phase 'pki-module-loaded'
     Write-Host 'G-01 CurrentUser Root import and X509Chain validation'
     if ($results.runner_is_elevated_admin) { throw 'G-01 trust-store test must run as a standard, non-elevated Windows user.' }
     Write-Host "Identity: $($results.windows_identity)"
     Write-Host "Elevated admin token: $($results.runner_is_elevated_admin)"
     Write-Host "PowerShell: $($results.powershell)"
 
+    Set-G01Phase 'before-localmachine-snapshot'
     $localMachineBefore = Get-ThumbprintSnapshot -Path 'Cert:\LocalMachine\Root'
+    Set-G01Phase 'localmachine-snapshot-complete'
     $results.local_machine_root_before_count = $localMachineBefore.Count
     if ($localMachineBefore.Count -eq 0) {
         throw 'LocalMachine Root snapshot unexpectedly empty; refusing an inconclusive scope test.'
     }
 
+    Set-G01Phase 'before-create-test-certificates'
     $root = New-G01RootCertificate -Subject "CN=AirBridge G01 CI Root $runId"
     $leaf = New-G01ServerCertificate -Signer $root -Subject 'CN=localhost' -DnsName @('localhost')
     $mismatchLeaf = New-G01ServerCertificate -Signer $root -Subject 'CN=wrong-host.invalid' -DnsName @('wrong-host.invalid')
     $untrustedRoot = New-G01RootCertificate -Subject "CN=AirBridge G01 CI Untrusted Root $runId"
     $untrustedLeaf = New-G01ServerCertificate -Signer $untrustedRoot -Subject 'CN=localhost Untrusted' -DnsName @('localhost')
 
+    Set-G01Phase 'test-certificates-created'
     foreach ($cert in @($root, $leaf, $mismatchLeaf, $untrustedRoot, $untrustedLeaf)) {
         if (-not $cert.HasPrivateKey) {
             throw "Expected CurrentUser\My private key for $($cert.Subject)"
@@ -144,7 +154,9 @@ try {
     $results.root_private_key_present_in_current_user_my = $root.HasPrivateKey
     $results.leaf_private_key_present_in_current_user_my = $leaf.HasPrivateKey
 
+    Set-G01Phase 'before-export-root-public-cer'
     Export-Certificate -Cert $root -FilePath $rootCer -Type CERT -Force | Out-Null
+    Set-G01Phase 'root-public-cer-exported'
     $rootPublic = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCer)
     if ($rootPublic.HasPrivateKey) {
         throw 'Exported CA CER unexpectedly contains a private key.'
@@ -153,6 +165,7 @@ try {
     # The installer must obtain explicit user consent before this write operation.
     # X509Store.Add writes directly to this process identity's CurrentUser Root store;
     # no certificate import wizard UI is invoked by this CI operation.
+    Set-G01Phase 'before-currentuser-root-store-open'
     Write-Host 'Phase: add the CA public certificate to CurrentUser Root'
     $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
         [System.Security.Cryptography.X509Certificates.StoreName]::Root,
@@ -160,12 +173,15 @@ try {
     )
     try {
         $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        Set-G01Phase 'currentuser-root-store-opened'
         $rootStore.Add($rootPublic)
+        Set-G01Phase 'currentuser-root-store-add-returned'
     }
     finally {
         $rootStore.Close()
     }
 
+    Set-G01Phase 'currentuser-root-store-closed'
     $trustedRoot = Get-Item -LiteralPath "Cert:\CurrentUser\Root\$rootThumb" -ErrorAction Stop
     if ($trustedRoot.HasPrivateKey) {
         throw 'CurrentUser Root unexpectedly contains a private key; only public CA material may be imported.'
@@ -173,12 +189,15 @@ try {
     $results.current_user_root_import = 'PASS'
     $results.current_user_root_import_method = '.NET X509Store(StoreName.Root, StoreLocation.CurrentUser).Add'
 
+    Set-G01Phase 'before-certutil-currentuser-readback'
     $verifyOutput = & certutil.exe -user -store Root $rootThumb 2>&1
+    Set-G01Phase 'certutil-currentuser-readback-returned'
     if ($LASTEXITCODE -ne 0) {
         throw "certutil -user -store Root verification failed: $($verifyOutput -join [Environment]::NewLine)"
     }
     $verifyOutput | Set-Content -LiteralPath (Join-Path $evidenceDir 'certutil-currentuser-root.txt') -Encoding UTF8
 
+    Set-G01Phase 'before-localmachine-after-import-snapshot'
     $localMachineAfterImport = Get-ThumbprintSnapshot -Path 'Cert:\LocalMachine\Root'
     $importDelta = Compare-Object -ReferenceObject $localMachineBefore -DifferenceObject $localMachineAfterImport
     if ($importDelta) {
@@ -188,13 +207,17 @@ try {
     $results.local_machine_root_unchanged = 'PASS'
     $results.local_machine_root_after_import_count = $localMachineAfterImport.Count
 
+    Set-G01Phase 'before-trusted-chain-build'
     Write-Host 'Phase: verify a certificate chain trusted by CurrentUser Root'
     [void](Test-ChainBuild -Certificate $leaf -ExpectedSuccess $true)
     $results.trusted_chain_build = 'PASS'
+    Set-G01Phase 'trusted-chain-build-pass'
 
+    Set-G01Phase 'before-untrusted-chain-build'
     Write-Host 'Phase: verify an unrelated CA is not trusted'
     [void](Test-ChainBuild -Certificate $untrustedLeaf -ExpectedSuccess $false)
     $results.untrusted_ca_rejected_by_chain = 'PASS'
+    Set-G01Phase 'untrusted-chain-rejected'
 
     $leafDnsNames = @($leaf.DnsNameList | ForEach-Object { $_.Unicode })
     $mismatchDnsNames = @($mismatchLeaf.DnsNameList | ForEach-Object { $_.Unicode })
@@ -202,6 +225,7 @@ try {
         throw 'The positive / wrong-host DNS SAN fixtures are not configured as expected.'
     }
     $results.wrong_host_san_fixture = 'PASS'
+    Set-G01Phase 'san-fixtures-verified'
 
     Write-Host 'G-01 CurrentUser store and chain tests passed. Live HTTP client handshake and vendor MCP clients remain separate gates.'
 }
@@ -210,6 +234,7 @@ catch {
     throw
 }
 finally {
+    Set-G01Phase 'cleanup-start'
     # Remove only certificates created by this run, by their exact thumbprints.
     if ($rootThumb) {
         $deleteOutput = & certutil.exe -f -user -delstore Root $rootThumb 2>&1
@@ -250,6 +275,7 @@ finally {
         $results.local_machine_root_after_cleanup_count = $localMachineAfterCleanup.Count
     }
 
+    Set-G01Phase ('cleanup-complete-' + $results.cleanup)
     $results | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $evidenceDir 'g01-result.json') -Encoding UTF8
     Get-Content -LiteralPath (Join-Path $evidenceDir 'g01-result.json') | Write-Host
 
