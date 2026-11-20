@@ -229,9 +229,9 @@ class AdapterResult:
 
 
 def _line_indent(source: str, offset: int) -> str:
-    line_start = source.rfind("\n", 0, offset) + 1
+    line_start = source.rfind("\\n", 0, offset) + 1
     prefix = source[line_start:offset]
-    return prefix if not prefix.strip() else ""
+    return prefix[: len(prefix) - len(prefix.lstrip(" \\t"))]
 
 
 def _newline(source: str) -> str:
@@ -262,14 +262,14 @@ def _insert_property(source: str, node: _Node, key: str, value: Any) -> str:
         insertion = (
             comma + newline
             + child_indent + json.dumps(key, ensure_ascii=False) + ": "
-            + _render_value(value, child_indent + "  ")
+            + _render_value(value, child_indent)
             + newline + parent_indent
         )
     else:
         child_indent = parent_indent + "  "
         insertion = (
             newline + child_indent + json.dumps(key, ensure_ascii=False) + ": "
-            + _render_value(value, child_indent + "  ")
+            + _render_value(value, child_indent)
             + newline + parent_indent
         )
     return source[:close_pos] + insertion + source[close_pos:]
@@ -286,8 +286,7 @@ def _property_value_indent(source: str, obj: _Node, key: str) -> str:
     return _line_indent(source, key_span[0]) + "  "
 
 
-def _backup_and_replace(path: Path, source_bytes: bytes, updated_text: str) -> str | None:
-    updated_bytes = updated_text.encode("utf-8")
+def _backup_and_replace(path: Path, source_bytes: bytes, updated_bytes: bytes) -> str | None:
     if updated_bytes == source_bytes:
         return None
 
@@ -328,6 +327,29 @@ def _backup_and_replace(path: Path, source_bytes: bytes, updated_text: str) -> s
             except OSError:
                 pass
     return str(backup_path) if backup_path else None
+
+
+def _patch_jsonc_property(source: str, property_path: tuple[str, ...], value: Any) -> str:
+    """Patch one object property or insert it while preserving all other source text."""
+    root = _JsoncParser(source).parse()
+    if root.kind != "object":
+        raise AdapterConfigurationError("MCP configuration root must be an object")
+    parent = root
+    for segment in property_path[:-1]:
+        child = parent.properties.get(segment)
+        if child is None or child.kind != "object":
+            raise AdapterConfigurationError(
+                f"Expected object at configuration path {'.'.join(property_path[:-1])!r}"
+            )
+        parent = child
+    key = property_path[-1]
+    existing = parent.properties.get(key)
+    if existing is not None:
+        if existing.value == value:
+            return source
+        base_indent = _property_value_indent(source, parent, key)
+        return _replace_node(source, existing, value, base_indent=base_indent)
+    return _insert_property(source, parent, key, value)
 
 
 class _BaseAdapter:
@@ -379,6 +401,9 @@ class _BaseAdapter:
         node = reparsed.properties[key]
         return updated, node
 
+    def _managed_updates(self, agent_id: str, enabled: bool) -> list[tuple[tuple[str, ...], Any]]:
+        raise NotImplementedError
+
     def _server_config(self, agent_id: str, enabled: bool) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -410,29 +435,19 @@ class _BaseAdapter:
                 raise AdapterConflictError(
                     f"MCP server name {self.server_name!r} already exists and is not an AirBridge entry for Agent {normalized_id!r}"
                 )
-            # Patch the managed value only. Surrounding JSONC comments, unrelated
-            # MCP servers, unknown managed-entry fields and formatting survive.
+            # Patch only the fields this Adapter owns. Comments, unknown fields,
+            # and the formatting of the surrounding JSONC remain untouched.
             updated = source
-            updated_root = _JsoncParser(updated).parse()
-            target_container = self._find_container(updated_root)
-            target_node = target_container.properties[self.server_name]
-            value = dict(target_node.value)
-            # Update only fields controlled by this Adapter; keep user metadata.
-            for field_name, field_value in desired.items():
-                if field_name == "disabled":
-                    continue
-                if field_name in value and field_name not in {"command", "args", "env", "environment", "type"}:
-                    continue
-                value[field_name] = field_value
-            # Preserve unknown fields and patch the node in-place.
-            base_indent = _property_value_indent(updated, target_container, self.server_name)
-            updated = _replace_node(updated, target_node, value, base_indent=base_indent)
+            for property_path, property_value in self._managed_updates(normalized_id, enabled):
+                updated = _patch_jsonc_property(updated, property_path, property_value)
 
         # Reparse our result before committing; never write an invalid document.
         _JsoncParser(updated).parse()
-        backup = _backup_and_replace(config_path, original_bytes, updated)
+        has_bom = original_bytes.startswith(b"\\xef\\xbb\\xbf")
+        updated_bytes = (b"\\xef\\xbb\\xbf" if has_bom else b"") + updated.encode("utf-8")
+        backup = _backup_and_replace(config_path, original_bytes, updated_bytes)
         return AdapterResult(
-            changed=(updated.encode("utf-8") != original_bytes),
+            changed=(updated_bytes != original_bytes),
             config_path=str(config_path),
             backup_path=backup,
             server_name=self.server_name,
@@ -492,6 +507,15 @@ class AntigravityAdapter(_BaseAdapter):
             and env.get("AIRBRIDGE_AGENT_ID") == agent_id
         )
 
+    def _managed_updates(self, agent_id: str, enabled: bool) -> list[tuple[tuple[str, ...], Any]]:
+        prefix = ("mcpServers", self.server_name)
+        return [
+            (prefix + ("command",), self.executable),
+            (prefix + ("args",), ["mcp", "stdio"]),
+            (prefix + ("env", "AIRBRIDGE_AGENT_ID"), agent_id),
+            (prefix + ("disabled",), not enabled),
+        ]
+
 
 class OpenCodeAdapter(_BaseAdapter):
     """OpenCode V2 uses local command arrays in the current user's global config."""
@@ -545,3 +569,12 @@ class OpenCodeAdapter(_BaseAdapter):
             and isinstance(environment, dict)
             and environment.get("AIRBRIDGE_AGENT_ID") == agent_id
         )
+
+    def _managed_updates(self, agent_id: str, enabled: bool) -> list[tuple[tuple[str, ...], Any]]:
+        prefix = ("mcp", "servers", self.server_name)
+        return [
+            (prefix + ("command",), [self.executable, "mcp", "stdio"]),
+            (prefix + ("type",), "local"),
+            (prefix + ("environment", "AIRBRIDGE_AGENT_ID"), agent_id),
+            (prefix + ("disabled",), not enabled),
+        ]
