@@ -216,6 +216,8 @@ M2.5 不得破坏以下既有能力：
 - 主机 A 和主机 B 安装同一个版本；
 - 两端配置分别保存在各自本机；
 - **用户已确认：新安装 Gateway 总开关默认 OFF**，安装完成后不得自动启动任何 Gateway Worker；升级安装保留已有用户配置，不重置 ON / OFF 状态；
+- **用户已确认：`gateway.start_with_airbridge` 默认 ON**，但只有 Gateway 总开关与对应 Agent 实例均启用时，GUI 启动才拉起 Worker；
+- **M2.5 首版不实现 Windows 登录自动启动 AirBridge GUI**；不创建注册表 Run 项、Startup 快捷方式或计划任务；
 - 主机 A 可由用户在 GUI 启用 Gateway 并配置 Agent；
 - 主机 B 可保持 OFF，仍具有完整 Gateway 管理能力；
 - 不要求在 B 上安装不同软件或移除 Gateway 模块。
