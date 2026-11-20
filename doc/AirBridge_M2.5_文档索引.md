@@ -33,6 +33,11 @@
 7. [M2.5 架构评审决策清单 v0.1](AirBridge_M2.5_架构评审决策清单_v0.1.md)
    - 区分用户已确认原则、技术提案、尚需产品决策的默认行为和实施前必须完成的 PoC Gate。
 
+## G-01 技术 PoC 操作手册
+
+- [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)
+  - Windows CurrentUser CA / localhost Leaf 测试证书、用户同意导入、LocalMachine Root 不变检查、Chrome / Antigravity / OpenCode TLS + OAuth + MCP 矩阵、负向测试与清理。当前未在 Host A 执行，G-01 仍为 Partial Research / NOT PASS。
+
 ## 三、历史草稿
 
 以下版本保留为历史评审稿；当前以 v0.3 为准：
