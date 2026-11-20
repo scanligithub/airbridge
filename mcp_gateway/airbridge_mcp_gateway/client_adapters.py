@@ -615,6 +615,18 @@ class _BaseAdapter:
         raise NotImplementedError
 
 
+def _same_executable_path(command: Any, expected: str) -> bool:
+    """Match the exact AirBridge binary, not merely another file named AirBridge.exe."""
+    if not isinstance(command, str) or not command.strip():
+        return False
+    try:
+        actual_path = Path(command).expanduser().resolve()
+        expected_path = Path(expected).expanduser().resolve()
+        return os.path.normcase(str(actual_path)) == os.path.normcase(str(expected_path))
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def _validate_agent_id(agent_id: str) -> str:
     if not isinstance(agent_id, str):
         raise ValueError("Agent ID must be a string")
@@ -670,8 +682,7 @@ class AntigravityAdapter(_BaseAdapter):
         args = config.get("args")
         env = config.get("env")
         return (
-            isinstance(command, str)
-            and Path(command).name.lower() == "airbridge.exe"
+            _same_executable_path(command, self.executable)
             and isinstance(args, list)
             and args == ["mcp", "stdio"]
             and isinstance(env, dict)
@@ -762,7 +773,7 @@ class OpenCodeAdapter(_BaseAdapter):
             config.get("type") == "local"
             and isinstance(command, list)
             and len(command) == 3
-            and Path(str(command[0])).name.lower() == "airbridge.exe"
+            and _same_executable_path(command[0], self.executable)
             and command[1:] == ["mcp", "stdio"]
             and isinstance(environment, dict)
             and environment.get("AIRBRIDGE_AGENT_ID") == agent_id
