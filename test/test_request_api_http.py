@@ -2,12 +2,17 @@
 # -*- coding: utf-8 -*-
 """HTTP contract tests for the A-side correlated EDA and Shell endpoints."""
 import json
+import os
+import sqlite3
 import tempfile
+import threading
+import time
 import urllib.error
 import urllib.request
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_security import AgentSecurityStore
 from airbridge_app import AntigravityIPCServer
@@ -591,6 +596,22 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(body["error"]["code"], "INVALID_AGENT_TOKEN")
         self.assertEqual(self.worker.frames, [])
 
+
+    def test_stop_does_not_close_injected_security_store(self):
+        self.server.stop()
+        issued = self.security.issue_token("store-owner-check", ["runtime.read"])
+        self.assertTrue(issued["token_id"])
+
+    def test_stop_closes_server_owned_security_store(self):
+        db_path = str(Path(self.temp.name) / "server-owned.sqlite3")
+        with patch.dict(os.environ, {"AIRBRIDGE_AGENT_SECURITY_DB": db_path}):
+            server = AntigravityIPCServer(FakeWorker(), port=0)
+            owned_store = server.security_store
+            server.start()
+            server.stop()
+        with self.assertRaises(sqlite3.ProgrammingError):
+            owned_store.list_tokens()
+
     def test_read_only_agent_cannot_submit_eda_execution(self):
         read_only = self.security.issue_token(
             "readonly-agent",
@@ -753,6 +774,102 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             self.assertEqual(self.worker.frames, [])
         finally:
             self.security.audit_request = original
+
+    def test_audit_finalization_failure_never_returns_success_after_dispatch(self):
+        original = self.security.audit_request
+        request_id = str(uuid.uuid4())
+
+        def fail_finalization(**kwargs):
+            if kwargs.get("decision") == "admitted":
+                return original(**kwargs)
+            raise OSError("simulated final audit write failure")
+
+        self.security.audit_request = fail_finalization
+        try:
+            status, body = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"request_id": request_id, "script": "puts audit-finalization"},
+            )
+        finally:
+            self.security.audit_request = original
+
+        self.assertEqual(status, 503, body)
+        self.assertEqual(body["error"]["code"], "AGENT_AUDIT_FINALIZATION_FAILED")
+        self.assertEqual(body["state"], "unknown")
+        self.assertEqual(body["request_id"], request_id)
+        self.assertEqual(len(self.worker.frames), 1)
+
+        poll_status, poll = self._request_json(
+            "GET", f"/api/v1/requests/{request_id}"
+        )
+        self.assertEqual(poll_status, 200, poll)
+        self.assertEqual(poll["state"], "completed")
+
+    def test_stop_bounds_inflight_handlers_and_preserves_owned_store_until_drain(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingWorker(FakeWorker):
+            def get_session_peer_status(self):
+                entered.set()
+                release.wait(timeout=5.0)
+                return super().get_session_peer_status()
+
+        db_path = str(Path(self.temp.name) / "owned-shutdown.sqlite3")
+        with patch.dict(os.environ, {"AIRBRIDGE_AGENT_SECURITY_DB": db_path}):
+            server = AntigravityIPCServer(BlockingWorker(), port=0)
+        owned_store = server.security_store
+        issued = owned_store.issue_token("shutdown-agent", ["runtime.read"])
+        server._shutdown_timeout_seconds = 0.1
+        server.start()
+
+        request_result = []
+
+        def send_request():
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.port}/api/v1/runtime/capabilities",
+                headers={"Authorization": "Bearer " + issued["token"]},
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=4.0) as response:
+                    request_result.append((response.status, response.read()))
+            except Exception as exc:
+                request_result.append(exc)
+
+        client = threading.Thread(target=send_request, daemon=True)
+        client.start()
+        try:
+            self.assertTrue(entered.wait(timeout=2.0), "handler did not enter the blocking worker")
+            started = time.monotonic()
+            with self.assertRaisesRegex(RuntimeError, "in-flight HTTP handler"):
+                server.stop()
+            self.assertLess(time.monotonic() - started, 2.0)
+            self.assertIsNotNone(server.security_store)
+            self.assertEqual(len(owned_store.list_tokens("shutdown-agent")), 1)
+
+            release.set()
+            client.join(timeout=3.0)
+            self.assertFalse(client.is_alive(), "HTTP client did not finish after handler release")
+            self.assertIsNotNone(server._server, "listener should remain open after a timed-out close")
+            follow_up = urllib.request.Request(
+                f"http://127.0.0.1:{server.port}/api/v1/runtime/capabilities",
+                headers={"Authorization": "Bearer " + issued["token"]},
+                method="GET",
+            )
+            with urllib.request.urlopen(follow_up, timeout=3.0) as response:
+                self.assertEqual(response.status, 200)
+            server.stop()
+            self.assertIsNone(server.security_store)
+            with self.assertRaises(sqlite3.ProgrammingError):
+                owned_store.list_tokens("shutdown-agent")
+        finally:
+            release.set()
+            client.join(timeout=3.0)
+            if server.security_store is not None:
+                server._shutdown_timeout_seconds = 3.0
+                server.stop()
 
     def test_legacy_eda_execute_alias_requires_authentication(self):
         status, body = self._request_json(

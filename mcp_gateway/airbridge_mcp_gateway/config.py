@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
+
+from .credential_store import CredentialStore, CredentialStoreError, default_credential_store
 
 
 class GatewayConfigurationError(ValueError):
@@ -55,6 +58,13 @@ def _validate_loopback_http_url(value: str) -> str:
     return value.strip().rstrip("/")
 
 
+def _validate_agent_id(value: str) -> str:
+    normalized = value.strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,63}", normalized):
+        raise GatewayConfigurationError("AIRBRIDGE_AGENT_ID must be a valid Agent ID")
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class GatewayConfig:
     """Runtime configuration; independent from AirBridge's Python environment."""
@@ -63,12 +73,18 @@ class GatewayConfig:
     http_timeout_seconds: float = 20.0
     enable_eda_execute: bool = False
     max_request_body_bytes: int = 60_000
+    agent_id: str = ""
     agent_token: str = field(default="", repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_url", _validate_loopback_http_url(self.base_url))
+        has_agent_id = bool(self.agent_id)
         if not isinstance(self.agent_token, str) or not self.agent_token.strip():
-            raise GatewayConfigurationError("AIRBRIDGE_AGENT_TOKEN is required")
+            raise GatewayConfigurationError(
+                "An Agent credential is required from the system credential store or legacy environment variable"
+            )
+        if has_agent_id:
+            object.__setattr__(self, "agent_id", _validate_agent_id(self.agent_id))
         if not 1.0 <= self.http_timeout_seconds <= 60.0:
             raise GatewayConfigurationError(
                 "AIRBRIDGE_HTTP_TIMEOUT_SECONDS must be between 1 and 60"
@@ -77,7 +93,12 @@ class GatewayConfig:
             raise GatewayConfigurationError("max_request_body_bytes must be in 1024..64000")
 
     @classmethod
-    def from_env(cls, environ: dict[str, str] | None = None) -> "GatewayConfig":
+    def from_env(
+        cls,
+        environ: dict[str, str] | None = None,
+        *,
+        credential_store: CredentialStore | None = None,
+    ) -> "GatewayConfig":
         env = os.environ if environ is None else environ
         raw_timeout = env.get("AIRBRIDGE_HTTP_TIMEOUT_SECONDS", "20")
         try:
@@ -86,11 +107,26 @@ class GatewayConfig:
             raise GatewayConfigurationError(
                 "AIRBRIDGE_HTTP_TIMEOUT_SECONDS must be numeric"
             ) from exc
+        agent_id = env.get("AIRBRIDGE_AGENT_ID", "").strip()
+        agent_token = env.get("AIRBRIDGE_AGENT_TOKEN", "").strip()
+        if agent_id and agent_token:
+            raise GatewayConfigurationError(
+                "Do not configure both AIRBRIDGE_AGENT_ID and legacy AIRBRIDGE_AGENT_TOKEN"
+            )
+        if agent_id:
+            try:
+                provider = credential_store or default_credential_store()
+                agent_token = provider.load(_validate_agent_id(agent_id))
+            except CredentialStoreError as exc:
+                raise GatewayConfigurationError(
+                    "Agent credential could not be loaded from the system credential store"
+                ) from exc
         return cls(
             base_url=env.get("AIRBRIDGE_BASE_URL", "http://127.0.0.1:8888"),
             http_timeout_seconds=timeout,
             enable_eda_execute=_parse_bool(
                 env.get("AIRBRIDGE_ENABLE_EDA_EXECUTE"), default=False
             ),
-            agent_token=env.get("AIRBRIDGE_AGENT_TOKEN", ""),
+            agent_id=agent_id,
+            agent_token=agent_token,
         )

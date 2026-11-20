@@ -1743,7 +1743,15 @@ class AntigravityIPCServer:
   ):
     self.worker = worker
     self.port = port
-    self.security_store = security_store or AgentSecurityStore.from_env()
+    self._owns_security_store = security_store is None
+    self.security_store = (
+        security_store if security_store is not None else AgentSecurityStore.from_env()
+    )
+    self._stop_lock = threading.Lock()
+    self._handler_condition = threading.Condition()
+    self._active_handlers = 0
+    self._shutting_down = False
+    self._shutdown_timeout_seconds = 5.0
     if allow_eda_execute is None:
       allow_eda_execute = os.environ.get("AIRBRIDGE_ALLOW_EDA_EXECUTE", "0").strip().lower() in ("1", "true", "yes", "on")
     self.allow_eda_execute = bool(allow_eda_execute)
@@ -1775,8 +1783,15 @@ class AntigravityIPCServer:
     self._server_ready = threading.Event()
     self._server_error = None
 
+  def _handler_finished(self):
+    with self._handler_condition:
+      if self._active_handlers > 0:
+        self._active_handlers -= 1
+      self._handler_condition.notify_all()
+
   def start(self):
     worker_ref = self.worker
+    server_owner = self
     security_ref = self.security_store
     allow_eda_execute = self.allow_eda_execute
     read_requests_per_minute = self.read_requests_per_minute
@@ -1789,37 +1804,63 @@ class AntigravityIPCServer:
       def log_message(self, format, *args):
         pass
 
-      def _reply_json(self, status_code: int, data: dict, extra_headers: Optional[dict] = None):
+      def _send_json(self, status_code: int, data: dict, extra_headers: Optional[dict] = None):
         body = json.dumps(data).encode("utf-8")
-        try:
-          self.send_response(status_code)
-          self.send_header("Content-Type", "application/json; charset=utf-8")
-          self.send_header("Content-Length", str(len(body)))
-          for header_name, header_value in (extra_headers or {}).items():
-            self.send_header(str(header_name), str(header_value))
-          self.end_headers()
-          self.wfile.write(body)
-        finally:
-          if getattr(self, "_audit_path", "").startswith("/api/"):
-            try:
-              security_ref.audit_request(
-                  agent_id=getattr(getattr(self, "_principal", None), "agent_id", None),
-                  token_id=getattr(getattr(self, "_principal", None), "token_id", None),
-                  method=getattr(self, "_audit_method", "GET"),
-                  path=self._audit_path,
-                  decision=getattr(self, "_audit_decision", "denied"),
-                  http_status=status_code,
-                  reason_code=getattr(self, "_audit_reason", None),
-                  request_id=getattr(self, "_audit_request_id", None),
-                  duration_ms=int((time.perf_counter() - self._audit_started) * 1000)
-                  if hasattr(self, "_audit_started") else None,
-                  payload_bytes=getattr(self, "_audit_payload_bytes", None),
-                  payload_sha256=getattr(self, "_audit_payload_sha256", None),
-              )
-            except Exception:
-              # An audit write failure must not leak request data or crash the
-              # HTTP response path. Authorization itself remains fail-closed.
-              pass
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        for header_name, header_value in (extra_headers or {}).items():
+          self.send_header(str(header_name), str(header_value))
+        self.end_headers()
+        self.wfile.write(body)
+
+      def _reply_json(self, status_code: int, data: dict, extra_headers: Optional[dict] = None):
+        # Admission is durably recorded by _authorize_api before an API handler
+        # may touch the Runtime. A failure to write the final outcome must not
+        # be converted into an apparently successful HTTP response.
+        if (
+            getattr(self, "_audit_path", "").startswith("/api/")
+            and not getattr(self, "_audit_preflight_failed", False)
+        ):
+          try:
+            security_ref.audit_request(
+                agent_id=getattr(getattr(self, "_principal", None), "agent_id", None),
+                token_id=getattr(getattr(self, "_principal", None), "token_id", None),
+                method=getattr(self, "_audit_method", "GET"),
+                path=self._audit_path,
+                decision=getattr(self, "_audit_decision", "denied"),
+                http_status=status_code,
+                reason_code=getattr(self, "_audit_reason", None),
+                request_id=getattr(self, "_audit_request_id", None),
+                duration_ms=int((time.perf_counter() - self._audit_started) * 1000)
+                if hasattr(self, "_audit_started") else None,
+                payload_bytes=getattr(self, "_audit_payload_bytes", None),
+                payload_sha256=getattr(self, "_audit_payload_sha256", None),
+            )
+          except Exception:
+            request_id = getattr(self, "_audit_request_id", None)
+            failure = {
+                "success": False,
+                "state": "unknown",
+                "error": {
+                    "code": "AGENT_AUDIT_FINALIZATION_FAILED",
+                    "message": (
+                        (
+                            "The request may already have been admitted. Query this request_id; "
+                            "do not submit the operation again."
+                            if request_id else
+                            "The operation outcome is unknown because its final audit record "
+                            "could not be persisted. Do not repeat a non-idempotent operation blindly."
+                        )
+                    ),
+                },
+            }
+            if request_id:
+              failure["request_id"] = request_id
+            self._send_json(503, failure)
+            return
+
+        self._send_json(status_code, data, extra_headers)
 
       @staticmethod
       def _required_scope(method: str, path: str) -> Optional[str]:
@@ -1992,6 +2033,7 @@ class AntigravityIPCServer:
               request_id=self._audit_request_id,
           )
         except Exception:
+          self._audit_preflight_failed = True
           self._audit_decision = "denied"
           self._audit_reason = "AGENT_AUDIT_UNAVAILABLE"
           self._reply_json(503, {
@@ -2563,10 +2605,33 @@ class AntigravityIPCServer:
         else:
           self._reply_json(404, {"error": "Not Found"})
 
+    class _TrackedThreadingHTTPServer(ThreadingHTTPServer):
+      # Handler threads are daemonized so server_close() never performs an
+      # unbounded implicit join. The owner performs an explicit bounded drain.
+      daemon_threads = True
+      block_on_close = False
+
+      def process_request(self, request, client_address):
+        with server_owner._handler_condition:
+          if server_owner._shutting_down:
+            self.shutdown_request(request)
+            return
+          server_owner._active_handlers += 1
+        try:
+          super().process_request(request, client_address)
+        except Exception:
+          server_owner._handler_finished()
+          raise
+
+      def process_request_thread(self, request, client_address):
+        try:
+          super().process_request_thread(request, client_address)
+        finally:
+          server_owner._handler_finished()
+
     def serve():
       try:
-        server = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
-        server.daemon_threads = True
+        server = _TrackedThreadingHTTPServer(("127.0.0.1", self.port), Handler)
         self._server = server
         self.port = server.server_address[1]
         self._server_ready.set()
@@ -2585,11 +2650,44 @@ class AntigravityIPCServer:
       raise RuntimeError(f"AirBridge HTTP server failed to start: {self._server_error}")
 
   def stop(self):
-    server = self._server
-    if server is not None:
-      server.shutdown()
-      server.server_close()
-      self._server = None
+    with self._stop_lock:
+      deadline = time.monotonic() + max(0.0, self._shutdown_timeout_seconds)
+      with self._handler_condition:
+        self._shutting_down = True
+        while self._active_handlers:
+          remaining = deadline - time.monotonic()
+          if remaining <= 0:
+            active = self._active_handlers
+            # The close was not completed. Resume normal service so the GUI
+            # can remain usable while the caller retries a later close.
+            self._shutting_down = False
+            self._handler_condition.notify_all()
+            raise RuntimeError(
+                f"AirBridge shutdown timed out with {active} "
+                "in-flight HTTP handler(s); the window and API service remain open"
+            )
+          self._handler_condition.wait(timeout=remaining)
+
+      # The drain completed while new accepted connections were being rejected.
+      # It is now safe to stop the serve loop and close the listening socket.
+      server = self._server
+      if server is not None:
+        server.shutdown()
+        server.server_close()
+        self._server = None
+
+      thread = self._server_thread
+      if thread is not None and thread is not threading.current_thread():
+        # The drain deadline may already be consumed; allow a small, separate
+        # bound for the serve_forever thread to return after shutdown().
+        thread.join(timeout=max(1.0, deadline - time.monotonic()))
+        if thread.is_alive():
+          raise RuntimeError("AirBridge HTTP server thread did not stop")
+        self._server_thread = None
+
+      if self._owns_security_store and self.security_store is not None:
+        self.security_store.close()
+        self.security_store = None
 
 
 # ==============================================================================
@@ -2642,6 +2740,19 @@ class AirBridgeMainWindow(QMainWindow):
     self.scan_ports()
     # Auto-connect to host B: prefer the USB/FTDI gateway and verify the link with a probe request
     QTimer.singleShot(100, self.auto_connect_serial)
+
+  def closeEvent(self, event):
+    try:
+      self.ipc.stop()
+    except Exception as exc:
+      QMessageBox.critical(
+          self,
+          "AirBridge shutdown failed",
+          f"The local API server could not shut down safely. The window will remain open.\n{exc}",
+      )
+      event.ignore()
+      return
+    event.accept()
 
   def auto_connect_serial(self):
     candidates = []

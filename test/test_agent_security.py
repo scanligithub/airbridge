@@ -35,6 +35,27 @@ class AgentSecurityStoreTests(unittest.TestCase):
         self.assertEqual(audit[0]["decision"], "issued")
         self.assertEqual(audit[0]["reason_code"], "AGENT_TOKEN_ISSUED")
 
+
+    def test_provision_can_atomically_reject_an_existing_active_credential(self):
+        first = self.store.issue_token("single-agent", ["runtime.read"])
+        with self.assertRaisesRegex(
+            AgentSecurityError, "already has an active credential"
+        ):
+            self.store.issue_token(
+                "single-agent",
+                ["runtime.read"],
+                reject_if_active=True,
+            )
+        self.assertEqual(len(self.store.list_tokens("single-agent")), 1)
+        self.assertTrue(self.store.revoke_token(first["token_id"]))
+        replacement = self.store.issue_token(
+            "single-agent",
+            ["runtime.read"],
+            reject_if_active=True,
+        )
+        self.assertEqual(len(self.store.list_tokens("single-agent")), 2)
+        self.assertTrue(self.store.authenticate("Bearer " + replacement["token"]))
+
     def test_invalid_or_missing_bearer_is_rejected(self):
         for header in (None, "", "Basic abc", "Bearer malformed"):
             with self.subTest(header=header):

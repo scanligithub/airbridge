@@ -221,8 +221,11 @@ class AgentSecurityStore:
         *,
         label: str = "",
         expires_in_days: Optional[int] = 90,
+        reject_if_active: bool = False,
     ) -> dict[str, Any]:
         normalized_agent = self._validate_agent_id(agent_id)
+        if not isinstance(reject_if_active, bool):
+            raise AgentSecurityError("reject_if_active must be a boolean")
         normalized_scopes = self._validate_scopes(scopes)
         if expires_in_days is not None and (
             isinstance(expires_in_days, bool)
@@ -243,6 +246,15 @@ class AgentSecurityStore:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
+                if reject_if_active:
+                    existing = self._conn.execute(
+                        "SELECT 1 FROM agent_credentials WHERE agent_id = ? AND enabled = 1 LIMIT 1",
+                        (normalized_agent,),
+                    ).fetchone()
+                    if existing is not None:
+                        raise AgentSecurityError(
+                            "Agent already has an active credential"
+                        )
                 self._conn.execute(
                     """
                     INSERT INTO agent_credentials
