@@ -101,11 +101,12 @@ class GatewayPolicyStore:
                 "GATEWAY_POLICY_INVALID",
                 "Gateway policy schema is missing or unsupported; access is denied.",
             )
-        if not isinstance(payload.get("enabled"), bool):
+        gateway = payload.get("gateway")
+        if not isinstance(gateway, dict) or not isinstance(gateway.get("enabled"), bool):
             return PolicyDecision(
                 False,
                 "GATEWAY_POLICY_INVALID",
-                "Gateway policy enabled must be a Boolean; access is denied.",
+                "Gateway policy gateway.enabled must be a Boolean; access is denied.",
             )
         agents = payload.get("agents")
         if not isinstance(agents, dict):
@@ -115,7 +116,7 @@ class GatewayPolicyStore:
                 "Gateway policy agents must be an object; access is denied.",
             )
 
-        if not payload["enabled"]:
+        if not gateway["enabled"]:
             return PolicyDecision(
                 False,
                 "GATEWAY_DISABLED",
@@ -158,7 +159,7 @@ class GatewayPolicyStore:
 
         payload = {
             "schema_version": POLICY_SCHEMA_VERSION,
-            "enabled": enabled,
+            "gateway": {"enabled": enabled},
             "agents": normalized_agents,
         }
         encoded = (
