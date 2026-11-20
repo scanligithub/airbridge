@@ -1795,35 +1795,36 @@ class AntigravityIPCServer:
 
       def _reply_json(self, status_code: int, data: dict, extra_headers: Optional[dict] = None):
         body = json.dumps(data).encode("utf-8")
-        try:
-          self.send_response(status_code)
-          self.send_header("Content-Type", "application/json; charset=utf-8")
-          self.send_header("Content-Length", str(len(body)))
-          for header_name, header_value in (extra_headers or {}).items():
-            self.send_header(str(header_name), str(header_value))
-          self.end_headers()
-          self.wfile.write(body)
-        finally:
-          if getattr(self, "_audit_path", "").startswith("/api/"):
-            try:
-              security_ref.audit_request(
-                  agent_id=getattr(getattr(self, "_principal", None), "agent_id", None),
-                  token_id=getattr(getattr(self, "_principal", None), "token_id", None),
-                  method=getattr(self, "_audit_method", "GET"),
-                  path=self._audit_path,
-                  decision=getattr(self, "_audit_decision", "denied"),
-                  http_status=status_code,
-                  reason_code=getattr(self, "_audit_reason", None),
-                  request_id=getattr(self, "_audit_request_id", None),
-                  duration_ms=int((time.perf_counter() - self._audit_started) * 1000)
-                  if hasattr(self, "_audit_started") else None,
-                  payload_bytes=getattr(self, "_audit_payload_bytes", None),
-                  payload_sha256=getattr(self, "_audit_payload_sha256", None),
-              )
-            except Exception:
-              # An audit write failure must not leak request data or crash the
-              # HTTP response path. Authorization itself remains fail-closed.
-              pass
+        # Persist the audit record before exposing the response to the caller.
+        # This makes a completed HTTP response a reliable audit visibility point.
+        if getattr(self, "_audit_path", "").startswith("/api/"):
+          try:
+            security_ref.audit_request(
+                agent_id=getattr(getattr(self, "_principal", None), "agent_id", None),
+                token_id=getattr(getattr(self, "_principal", None), "token_id", None),
+                method=getattr(self, "_audit_method", "GET"),
+                path=self._audit_path,
+                decision=getattr(self, "_audit_decision", "denied"),
+                http_status=status_code,
+                reason_code=getattr(self, "_audit_reason", None),
+                request_id=getattr(self, "_audit_request_id", None),
+                duration_ms=int((time.perf_counter() - self._audit_started) * 1000)
+                if hasattr(self, "_audit_started") else None,
+                payload_bytes=getattr(self, "_audit_payload_bytes", None),
+                payload_sha256=getattr(self, "_audit_payload_sha256", None),
+            )
+          except Exception:
+            # An audit write failure must not leak request data or crash the
+            # HTTP response path. Authorization itself remains fail-closed.
+            pass
+
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        for header_name, header_value in (extra_headers or {}).items():
+          self.send_header(str(header_name), str(header_value))
+        self.end_headers()
+        self.wfile.write(body)
 
       @staticmethod
       def _required_scope(method: str, path: str) -> Optional[str]:
