@@ -154,7 +154,7 @@
 ## 6. 评审通过后的冻结范围
 
 文档评审完成后：
-1. 将已确认 P-01 至 P-10 标记为 Frozen Product Requirements；
+1. 将已确认 P-01 至 P-13 标记为 Frozen Product Requirements；
 2. 对 D-01 至 D-09 记录用户选择或明确延期；
 3. 关闭 G-01 至 G-09 的技术可行性门禁，或者明确标记 No-Go / 暂缓；
 4. 更新 M2.5 架构文档和 ADR 状态；
