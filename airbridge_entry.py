@@ -20,7 +20,7 @@ def _run_stdio() -> int:
     except Exception as exc:
         try:
             if sys.stderr is not None:
-                sys.stderr.write(f"AirBridge MCP STDIO pipe setup failed: {exc}\\n")
+                sys.stderr.write(f"AirBridge MCP STDIO pipe setup failed: {exc}\n")
                 sys.stderr.flush()
         except Exception:
             pass
