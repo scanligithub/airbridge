@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import io
 import msvcrt
 import os
 import sys
@@ -34,22 +35,39 @@ def _open_standard_handle(which: int, *, readable: bool):
 def main() -> int:
     # PyInstaller --noconsole can initialize sys.stdin/stdout/stderr as None.
     # Rebind from inherited STARTF_USESTDHANDLES handles supplied by the MCP host.
-    sys.stdin = _open_standard_handle(STD_INPUT_HANDLE, readable=True)
-    sys.stdout = _open_standard_handle(STD_OUTPUT_HANDLE, readable=False)
-    sys.stderr = _open_standard_handle(STD_ERROR_HANDLE, readable=False)
+    sys.stdin = io.TextIOWrapper(
+        _open_standard_handle(STD_INPUT_HANDLE, readable=True),
+        encoding="utf-8",
+        errors="replace",
+    )
+    sys.stdout = io.TextIOWrapper(
+        _open_standard_handle(STD_OUTPUT_HANDLE, readable=False),
+        encoding="utf-8",
+        newline="\\n",
+        write_through=True,
+    )
+    sys.stderr = io.TextIOWrapper(
+        _open_standard_handle(STD_ERROR_HANDLE, readable=False),
+        encoding="utf-8",
+        write_through=True,
+    )
+    sys.__stdin__ = sys.stdin
+    sys.__stdout__ = sys.stdout
+    sys.__stderr__ = sys.stderr
 
     line = sys.stdin.readline()
     if not line:
         return 2
-    request = json.loads(line.decode("utf-8"))
+    request = json.loads(line)
     response = {
         "ok": True,
         "echo": request,
-        "stdin_restored": sys.stdin is not None,
-        "stdout_restored": sys.stdout is not None,
-        "stderr_restored": sys.stderr is not None,
+        "stdin_restored": sys.stdin is not None and hasattr(sys.stdin, "buffer"),
+        "stdout_restored": sys.stdout is not None and hasattr(sys.stdout, "buffer"),
+        "stderr_restored": sys.stderr is not None and hasattr(sys.stderr, "buffer"),
     }
-    sys.stdout.write((json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8"))
+    sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\\n")
+    sys.stdout.flush()
     return 0
 
 
