@@ -2654,11 +2654,24 @@ class AntigravityIPCServer:
       deadline = time.monotonic() + max(0.0, self._shutdown_timeout_seconds)
       with self._handler_condition:
         self._shutting_down = True
+        while self._active_handlers:
+          remaining = deadline - time.monotonic()
+          if remaining <= 0:
+            active = self._active_handlers
+            # The close was not completed. Resume normal service so the GUI
+            # can remain usable while the caller retries a later close.
+            self._shutting_down = False
+            self._handler_condition.notify_all()
+            raise RuntimeError(
+                f"AirBridge shutdown timed out with {active} "
+                "in-flight HTTP handler(s); the window and API service remain open"
+            )
+          self._handler_condition.wait(timeout=remaining)
 
+      # The drain completed while new accepted connections were being rejected.
+      # It is now safe to stop the serve loop and close the listening socket.
       server = self._server
       if server is not None:
-        # Stop accepting new work before closing the listening socket. Requests
-        # already admitted are counted and drained below.
         server.shutdown()
         server.server_close()
         self._server = None
@@ -2669,16 +2682,6 @@ class AntigravityIPCServer:
         if thread.is_alive():
           raise RuntimeError("AirBridge HTTP server thread did not stop")
         self._server_thread = None
-
-      with self._handler_condition:
-        while self._active_handlers:
-          remaining = deadline - time.monotonic()
-          if remaining <= 0:
-            raise RuntimeError(
-                f"AirBridge shutdown timed out with {self._active_handlers} "
-                "in-flight HTTP handler(s); the window will remain open"
-            )
-          self._handler_condition.wait(timeout=remaining)
 
       if self._owns_security_store and self.security_store is not None:
         self.security_store.close()

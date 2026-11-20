@@ -852,6 +852,14 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             release.set()
             client.join(timeout=3.0)
             self.assertFalse(client.is_alive(), "HTTP client did not finish after handler release")
+            self.assertIsNotNone(server._server, "listener should remain open after a timed-out close")
+            follow_up = urllib.request.Request(
+                f"http://127.0.0.1:{server.port}/api/v1/runtime/capabilities",
+                headers={"Authorization": "Bearer " + issued["token"]},
+                method="GET",
+            )
+            with urllib.request.urlopen(follow_up, timeout=3.0) as response:
+                self.assertEqual(response.status, 200)
             server.stop()
             self.assertIsNone(server.security_store)
             with self.assertRaises(sqlite3.ProgrammingError):
