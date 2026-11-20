@@ -58,7 +58,8 @@ function Open-G01CurrentUserStore {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$StoreName,
-        [switch]$SetLocalizedName
+        [switch]$SetLocalizedName,
+        [switch]$ReadOnly
     )
 
     $storeNamePointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($StoreName)
@@ -68,6 +69,10 @@ function Open-G01CurrentUserStore {
             # CERT_STORE_SET_LOCALIZED_NAME_FLAG: ask the provider to expose
             # CERT_STORE_LOCALIZED_NAME_PROP_ID for CryptUI wizard display.
             $storeFlags = $storeFlags -bor [uint32]0x00000002
+        }
+        if ($ReadOnly) {
+            # CERT_STORE_READONLY_FLAG: reject attempts to change the store.
+            $storeFlags = $storeFlags -bor [uint32]0x00008000
         }
         $handle = [AirBridge.G01.NativeMethods]::CertOpenStore(
             [IntPtr]10,             # CERT_STORE_PROV_SYSTEM_W
