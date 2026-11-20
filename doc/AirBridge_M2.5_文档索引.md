@@ -75,7 +75,7 @@
 - G-01 初步研究：Windows CurrentUser Root 有 Chrome / Bun / OpenCode Desktop 的公开依据；Antigravity App / IDE 与 OpenCode 目标版本尚未实测；G-01 目前 Partial Research / NOT PASS；
 
 - G-01A：GitHub Actions 非交互 Store-scope / CustomTrustStore Chain CI。
-- G-01A2：GitHub Actions 一次性标准用户 Profile 中的 CryptUIWizImport NO_UI API control（CurrentUser My）；验证 P/Invoke 与导入回读，不验证 Root 写入或交互 UI。
+- G-01A2：GitHub Actions 一次性标准用户 Profile 中的 CryptUIWizImport NO_UI API control（CurrentUser My）；验证 P/Invoke 与导入回读，不验证 Root 写入或交互 UI。 [run #44744616225 PASS](https://github.com/scanligithub/airbridge/actions/runs/44744616225)；CurrentUser Root NO_UI 对照在 hosted runner 的 native call 内超时（run #44743044286 / #44743660093），不代表交互向导结果。
 - G-01B：`.github/scripts/g01-interactive-currentuser-import.ps1`，在目标 Windows 用户交互桌面调用 CryptUIWizImport（不设置 NO_UI），验证真实 Windows 导入向导与 CurrentUser Root；当前 NOT RUN。
 - 本机 OAuth Broker + 两个 Worker endpoint 的 HTTPS 证书真实客户端验证；
 - 默认 TCP 端口、loopback-only 监听、实际 bind 冲突检测、Worker / Broker 端口迁移与 OAuth 重新授权验证；
