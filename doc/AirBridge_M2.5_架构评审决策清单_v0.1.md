@@ -244,6 +244,11 @@ Hosted Actions 在一次性标准用户 Profile 中通过 .github/scripts/g01-cr
 
 G-01A2 不显示交互向导、不代表用户批准，也不构成 G-01B 交互式导入 PASS。它只验证 CryptUI API / 结构体 / P/Invoke 在 CurrentUser\\My 控制场景下的基本链路，不能推断 Root 写入成功。
 
+**最新 Windows Actions 结果（2026-11-20）：** [run #44744616225](https://github.com/scanligithub/airbridge/actions/runs/44744616225) 在 commit `bb7977f` 上 SUCCESS。一次性标准用户（非管理员）Profile 中，`CryptUIWizImport` + `ALLOW_CERT | NO_CHANGE_DEST_STORE | NO_UI` 对 `CurrentUser\\My` 控制证书成功；API 返回、Thumbprint 回读、CurrentUser Root / LocalMachine Root 前后不变、精确清理均 PASS。该 run 证明 P/Invoke / 结构体 / flags / CertOpenStore 与无 UI API 导入控制路径可工作。
+
+**Root hosted-runner 负向证据：** [run #44743044286](https://github.com/scanligithub/airbridge/actions/runs/44743044286) 和 [run #44743660093](https://github.com/scanligithub/airbridge/actions/runs/44743660093) 在目标 Store 为 CurrentUser Root 时，均在 `CryptUIWizImport` 原生调用内 120 秒超时；第二轮阶段文件为 `before-cryptuiwizimport-native-call`，没有对应 after marker。两个 run 均未改变 CurrentUser Root / LocalMachine Root，并完成临时 Profile 清理。此结果只说明 hosted Actions 的无 UI Root 写入路径不可用，不证明用户交互桌面向导失败。
+
+
 ### 4.1.3 G-01B：交互式 CurrentUser Root 导入子 Gate
 
 生产 PoC 使用 CertOpenStore(CERT_STORE_PROV_SYSTEM_W, CERT_SYSTEM_STORE_CURRENT_USER, Root) 打开目标句柄，再调用 CryptUIWizImport。生产调用设置 CRYPTUI_WIZ_IMPORT_ALLOW_CERT (0x00020000) 与 CRYPTUI_WIZ_IMPORT_NO_CHANGE_DEST_STORE (0x00010000)，不设置 CRYPTUI_WIZ_NO_UI，由 Windows 显示原生导入向导；目标 Store 固定为预先打开的 CurrentUser Root。
