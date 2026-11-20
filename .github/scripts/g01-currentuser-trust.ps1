@@ -203,11 +203,8 @@ namespace AirBridge.G01
         [DllImport("crypt32.dll", ExactSpelling = true, SetLastError = true)]
         private static extern bool CertCloseStore(IntPtr certificateStore, uint flags);
 
-        public static void AddRoot(byte[] encodedCertificate)
+        public static IntPtr OpenCurrentUserRoot()
         {
-            if (encodedCertificate == null || encodedCertificate.Length == 0)
-                throw new ArgumentException("The public CA certificate is empty.", "encodedCertificate");
-
             // CERT_STORE_PROV_SYSTEM_W is MAKEINTRESOURCEW(10); ROOT is the system store name.
             IntPtr store = CertOpenStore(
                 new IntPtr(10), Encoding, IntPtr.Zero, CERT_SYSTEM_STORE_CURRENT_USER, "ROOT");
@@ -216,6 +213,15 @@ namespace AirBridge.G01
                 int error = Marshal.GetLastWin32Error();
                 throw new Win32Exception(error, "CertOpenStore(CurrentUser\\ROOT) failed.");
             }
+            return store;
+        }
+
+        public static void AddRoot(IntPtr store, byte[] encodedCertificate)
+        {
+            if (store == IntPtr.Zero)
+                throw new ArgumentException("The CurrentUser ROOT store handle is invalid.", "store");
+            if (encodedCertificate == null || encodedCertificate.Length == 0)
+                throw new ArgumentException("The public CA certificate is empty.", "encodedCertificate");
 
             IntPtr context = IntPtr.Zero;
             try
@@ -232,18 +238,40 @@ namespace AirBridge.G01
             {
                 if (context != IntPtr.Zero)
                     CertFreeCertificateContext(context);
-                CertCloseStore(store, 0);
+            }
+        }
+
+        public static void CloseStore(IntPtr store)
+        {
+            if (store != IntPtr.Zero && !CertCloseStore(store, 0))
+            {
+                int error = Marshal.GetLastWin32Error();
+                throw new Win32Exception(error, "CertCloseStore failed.");
             }
         }
     }
 }
 '@ -Language CSharp
 
-    Set-G01Phase 'before-cryptapi-currentuser-root-add'
-    Write-Host 'Phase: crypt32 CertAddEncodedCertificateToStore into CurrentUser Root'
-    [AirBridge.G01.CurrentUserRootStore]::AddRoot($rootPublic.RawData)
-    Set-G01Phase 'cryptapi-currentuser-root-add-returned'
-    $rootPublic.Dispose()
+    $nativeStore = [IntPtr]::Zero
+    try {
+        Set-G01Phase 'before-cryptapi-currentuser-root-open'
+        Write-Host 'Phase: crypt32 CertOpenStore for CurrentUser Root'
+        $nativeStore = [AirBridge.G01.CurrentUserRootStore]::OpenCurrentUserRoot()
+        Set-G01Phase 'cryptapi-currentuser-root-opened'
+        $results.current_user_root_store_open = 'PASS'
+
+        Set-G01Phase 'before-cryptapi-currentuser-root-add'
+        Write-Host 'Phase: crypt32 CertAddEncodedCertificateToStore into CurrentUser Root'
+        [AirBridge.G01.CurrentUserRootStore]::AddRoot($nativeStore, $rootPublic.RawData)
+        Set-G01Phase 'cryptapi-currentuser-root-add-returned'
+        $rootPublic.Dispose()
+    }
+    finally {
+        if ($nativeStore.ToInt64() -ne 0) {
+            [AirBridge.G01.CurrentUserRootStore]::CloseStore($nativeStore)
+        }
+    }
 
     $trustedRoot = Get-Item -LiteralPath "Cert:\CurrentUser\Root\$rootThumb" -ErrorAction Stop
     if ($trustedRoot.HasPrivateKey) {
