@@ -1,4 +1,4 @@
-name: G-01 Windows CurrentUser HTTPS Trust
+name: G-01 Windows CurrentUser Certificate Trust Store
 
 on:
   pull_request:
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   currentuser-https-trust:
-    name: CurrentUser CA import + loopback TLS (Windows)
+    name: CurrentUser Root import + X509Chain validation (Windows)
     runs-on: windows-2025
     timeout-minutes: 8
 
@@ -40,7 +40,7 @@ jobs:
           "runner_image=$env:ImageOS"
           "runner_version=$env:ImageVersion"
 
-      - name: Test CurrentUser Root import and HTTPS validation
+      - name: Test CurrentUser Root import and chain validation
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
