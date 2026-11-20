@@ -35,6 +35,7 @@
 
 ## G-01 技术 PoC 操作手册
 
+- Windows CurrentUser CI：[workflow](../.github/workflows/g01-windows-currentuser-ci.yml) · [PowerShell test](../.github/scripts/g01-currentuser-trust.ps1)：在 Windows Runner 验证 CurrentUser Root 写入 / 回读、X509Chain、LocalMachine Root 不变和精确清理。Hosted Runner 以 elevated `runneradmin` 运行，不替代普通用户安装器或 Antigravity / OpenCode 实际客户端验证。
 - [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)
   - Windows CurrentUser CA / localhost Leaf 测试证书、用户同意导入、LocalMachine Root 不变检查、Chrome / Antigravity / OpenCode TLS + OAuth + MCP 矩阵、负向测试与清理。当前未在任何目标主机执行；按每台计划启用 Managed HTTPS 的主机独立验证，G-01 仍为 Partial Research / NOT PASS。
 
