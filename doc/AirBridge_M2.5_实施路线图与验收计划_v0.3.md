@@ -470,6 +470,6 @@ AirBridge 不读取 Antigravity / OpenCode 的客户端 Token Vault。Broker 有
 
 ## 8.7 G-01 Windows PoC 执行手册
 
-G-01 分层验收：Windows Actions 对 CurrentUser Root 写入 / 回读、X509Chain 正反向构建、LocalMachine Root 不变和清理进行自动测试；真实目标主机 / 客户端再验证部署 Consent、非管理员上下文和 Antigravity / OpenCode TLS + OAuth + MCP。，统一见 [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。
+G-01 分层验收：Windows Actions 在标准非管理员用户下执行只读的 CurrentUser / LocalMachine Root 范围检查、`X509ChainPolicy.CustomTrustStore` 正向 / 负向链构建、localhost SAN 夹具和精确清理；CI 明确不写入 CurrentUser Root，并将 `current_user_root_import` 记为 `NOT_RUN_INTERACTIVE_WINDOWS_CONSENT_REQUIRED`。实际 Root 导入必须在部署 / Repair 时由目标用户完成应用层 Consent 和 Windows 交互式信任确认；随后在目标主机验证 Antigravity / OpenCode TLS + OAuth + MCP。统一见 [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。
 
 该手册当前为 NOT RUN；尚无任何目标主机的实测证据。PoC 不指定固定 Host A / Host B：每台实际部署 M2.5 AirBridge 的主机都必须在部署阶段独立完成本机 CurrentUser Root trust bootstrap；Gateway OFF 不跳过 CA 部署，也不启动 Broker / Worker。由于 endpoint 仅监听 loopback，MCP Client 与 Gateway 必须在同一台机器上；两台机器不共享 CA 私钥或信任状态。Chrome TLS smoke test、证书导入成功或单一客户端连通均不能单独关闭 G-01。PoC 必须验证所有首版承诺支持的客户端形态，并确认 TLS 负向场景 fail-closed。此阶段不授权产品代码、正式 EXE 或证书管理功能实施。
