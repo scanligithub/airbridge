@@ -464,6 +464,6 @@ AirBridge 不读取 Antigravity / OpenCode 的客户端 Token Vault。Broker 有
 
 ## 8.7 G-01 Windows PoC 执行手册
 
-G-01 Host A 证书创建、CurrentUser Root 用户同意导入、LocalMachine Root 不变验证、客户端 TLS / OAuth / MCP 测试矩阵、负向测试与清理步骤，统一见 [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。
+G-01 目标主机的本机 CA / Leaf 创建、CurrentUser Root 用户同意导入、LocalMachine Root 不变验证、客户端 TLS / OAuth / MCP 测试矩阵、负向测试与清理步骤，统一见 [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。
 
-该手册当前为 NOT RUN；尚无 Host A 实测证据。Chrome TLS smoke test、证书导入成功或单一客户端连通均不能单独关闭 G-01。PoC 必须验证所有首版承诺支持的客户端形态，并确认 TLS 负向场景 fail-closed。此阶段不授权产品代码、正式 EXE 或证书管理功能实施。
+该手册当前为 NOT RUN；尚无任何目标主机的实测证据。PoC 不指定固定 Host A / Host B：每台计划启用 Managed HTTPS 的主机必须独立验证本机 CurrentUser Root。由于 endpoint 仅监听 loopback，MCP Client 与 Gateway 必须在同一台机器上；两台机器不共享 CA 私钥或信任状态。Chrome TLS smoke test、证书导入成功或单一客户端连通均不能单独关闭 G-01。PoC 必须验证所有首版承诺支持的客户端形态，并确认 TLS 负向场景 fail-closed。此阶段不授权产品代码、正式 EXE 或证书管理功能实施。
