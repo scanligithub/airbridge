@@ -90,7 +90,7 @@
 
 **用户已确认并冻结：**
 - CA / localhost Server Certificate 的准备和信任导入属于每台 Windows 主机的 AirBridge 部署流程，不等待用户在 GUI 打开 Gateway 或第一次连接 MCP Client 时才导入。
-- 每台部署 M2.5 AirBridge 的主机独立创建 / 管理自己的 CA 私钥与服务器证书；不指定固定 Host A / Host B 签发端，不跨机器复制 CA 私钥，也不要求各机 Root Thumbprint 相同。
+- 每台部署 M2.5 AirBridge 的主机都在部署阶段获得适用于本机 localhost 的 CA 公钥信任材料并导入；不从固定 Host A / Host B 手工导入，不指定某台主机为固定 CA 来源。正式 CA 签发 / 供应模型由 G-01 技术验证确定，不能把 CA 私钥放入普通安装包或经 AirBridge Runtime 跨机传输；各部署 Root Thumbprint 是否相同取决于最终供应模型。
 - 部署时向目标 Windows 用户明确展示 CA Subject、Thumbprint、有效期、用途与信任范围；取得明确同意后，只把 CA 公钥导入该用户的 `Cert:\CurrentUser\Root`。CurrentUser 是每台机器、每个用户各自的证书库。
 - 不要求管理员权限，不修改 LocalMachine 证书存储区或 LocalMachine Root。若部署程序提升权限，证书信任导入必须在实际目标用户的非提升上下文完成，不能误写入安装管理员账户的 CurrentUser。
 - CA 部署与 Gateway 运行开关独立：首次安装 Gateway 总开关仍默认 OFF，部署完成不启动 Broker 或 Worker。
