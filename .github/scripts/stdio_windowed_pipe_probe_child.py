@@ -56,7 +56,7 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except BaseException as exc:
+    except Exception as exc:
         # In a frozen windowed process, emit only to the inherited stderr pipe.
         try:
             if sys.stderr is not None:
