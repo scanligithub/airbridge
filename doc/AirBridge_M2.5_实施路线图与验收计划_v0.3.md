@@ -330,6 +330,8 @@ OAuth 托管模式必须同时验证：
 - CIMD / DCR / pre-registration；
 - Access Token / Refresh Token 生命周期与撤销；
 - TLS 证书在 Antigravity App / IDE、OpenCode 和系统浏览器中均可信；
+- 证书信任仅写入 CurrentUser；首次安装取得明确用户同意；无管理员权限；不修改 LocalMachine Root；
+- 用户拒绝 / 撤销信任时 Managed HTTPS Mode fail-closed，不允许关闭 TLS 校验或降级到无认证 HTTP；
 - MCP Worker 与 Agent Service Credential 完全隔离。
 
 **TLS 规范基线：**
@@ -343,7 +345,14 @@ OAuth 托管模式必须同时验证：
 
 Go / No-Go：
 - **Go**：Antigravity 与 OpenCode 均能在正常证书校验下完成 OAuth 并访问各自 Resource Server，Agent / audience / scope 隔离、撤销和恢复测试通过。
-- **No-Go**：任一客户端必须关闭 TLS 校验、不能信任本机 issuer / resource certificate，或要求写入 M2.4 Agent Service Token；暂停 Streamable HTTP Managed Mode，保留既有 stdio，不得降级为无认证 HTTP。
+- **No-Go**：任一客户端必须关闭 TLS 校验、不能信任本机 issuer / resource certificate，CurrentUser 证书信任无法覆盖目标客户端，或要求扩大到 LocalMachine Root / 管理员权限，或要求写入 M2.4 Agent Service Token；暂停 Streamable HTTP Managed Mode，保留既有 stdio，不得降级为无认证 HTTP。
+
+证书策略验收还必须覆盖：
+- 安装 / 初始配置明确展示用途和信任范围，并等待用户同意；
+- 同意时只写 CurrentUser 证书信任存储，不触发 UAC，不修改 LocalMachine；
+- 拒绝、撤销、证书过期或证书不匹配时，HTTPS Gateway 明确不可用并 fail-closed；
+- 用户拒绝证书信任时，stdio 和 AirBridge Core / Runtime 仍可用；
+- 卸载与重装能清理 / 恢复 AirBridge 自己管理的证书对象，不误删用户其他证书。
 
 ### 8.4 OAuth 客户端交互验收
 
