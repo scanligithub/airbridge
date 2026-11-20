@@ -26,6 +26,8 @@ $results = [ordered]@{
     interactive_wizard_tested = $false
     current_user_my_import = 'NOT_RUN'
     current_user_my_readback = 'NOT_RUN'
+    current_user_root_handle_open = 'NOT_RUN'
+    current_user_root_localized_name = 'NOT_RUN'
     current_user_root_unchanged = 'NOT_RUN'
     local_machine_root_unchanged = 'NOT_RUN'
     cleanup = 'NOT_RUN'
@@ -36,6 +38,7 @@ $cert = $null
 $thumb = $null
 $publicCert = $null
 $store = [IntPtr]::Zero
+$rootStore = [IntPtr]::Zero
 $cerPath = Join-Path $evidenceDir 'cryptui-control-public.cer'
 $phaseFile = Join-Path $evidenceDir 'phase.txt'
 
@@ -108,6 +111,33 @@ try {
     if (-not (Test-G01SameSet -Before $localMachineBefore -After (Get-G01Thumbprints -Path 'Cert:\LocalMachine\Root'))) { throw 'LocalMachine\Root changed during My control test.' }
     $results.local_machine_root_unchanged = 'PASS'
     Set-G01Phase 'cryptui-my-control-import-passed'
+
+    # Read-only Root-target subtest. This intentionally does not call
+    # CryptUIWizImport for Root on hosted runners: the prior NO_UI Root call
+    # stalled inside the native API. It verifies the exact CurrentUser Root
+    # handle and the localized-name property required by the interactive UI.
+    Set-G01Phase 'before-open-currentuser-root-localized-handle'
+    $rootStore = Open-G01CurrentUserStore -StoreName 'Root' -SetLocalizedName
+    if ($rootStore -eq [IntPtr]::Zero) {
+        throw 'CertOpenStore(CurrentUser\\Root, SET_LOCALIZED_NAME) returned a null handle.'
+    }
+    $results.current_user_root_handle_open = 'PASS'
+    Set-G01Phase 'currentuser-root-localized-handle-opened'
+
+    $localizedName = Get-G01CertificateStoreLocalizedName -Handle $rootStore
+    $results.current_user_root_localized_name = $localizedName
+    if ([string]::IsNullOrWhiteSpace($localizedName)) {
+        throw 'CertGetStoreProperty did not return the CurrentUser Root localized name.'
+    }
+    Set-G01Phase 'currentuser-root-localized-name-read'
+
+    Close-G01CertificateStore -Handle $rootStore
+    $rootStore = [IntPtr]::Zero
+    if (-not (Test-G01SameSet -Before $currentUserRootBefore -After (Get-G01Thumbprints -Path 'Cert:\\CurrentUser\\Root'))) {
+        throw 'CurrentUser\\Root changed during read-only destination-handle test.'
+    }
+    $results.current_user_root_unchanged = 'PASS'
+    Set-G01Phase 'cryptui-root-store-readonly-subtest-passed'
 }
 catch {
     $results.failure = $_.Exception.ToString()
@@ -116,6 +146,7 @@ catch {
 finally {
     try {
         if ($store -ne [IntPtr]::Zero) { Close-G01CertificateStore -Handle $store; $store = [IntPtr]::Zero }
+        if ($rootStore -ne [IntPtr]::Zero) { Close-G01CertificateStore -Handle $rootStore; $rootStore = [IntPtr]::Zero }
         if ($thumb) {
             $myPath = 'Cert:\CurrentUser\My\' + $thumb
             if (Test-Path -LiteralPath $myPath) { Remove-Item -LiteralPath $myPath -Force -ErrorAction Stop }
@@ -136,6 +167,6 @@ finally {
     Get-Content -LiteralPath $resultPath | Write-Host
 }
 
-if ($results.current_user_my_import -ne 'PASS' -or $results.current_user_my_readback -ne 'PASS' -or $results.current_user_root_unchanged -ne 'PASS' -or $results.local_machine_root_unchanged -ne 'PASS' -or $results.temporary_current_user_my_cleanup -ne 'PASS' -or $results.cleanup -ne 'PASS') {
+if ($results.current_user_my_import -ne 'PASS' -or $results.current_user_my_readback -ne 'PASS' -or $results.current_user_root_handle_open -ne 'PASS' -or [string]::IsNullOrWhiteSpace([string]$results.current_user_root_localized_name) -or $results.current_user_root_unchanged -ne 'PASS' -or $results.local_machine_root_unchanged -ne 'PASS' -or $results.temporary_current_user_my_cleanup -ne 'PASS' -or $results.cleanup -ne 'PASS') {
     throw 'G-01A2 CryptUIWizImport control subgate failed; inspect g01-cryptui-control-result.json.'
 }
