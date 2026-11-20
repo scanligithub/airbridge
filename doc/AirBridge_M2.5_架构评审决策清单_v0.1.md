@@ -23,6 +23,7 @@
 | P-10 | AirBridge 不接管 Capture / Allegro 专业软件业务生命周期 | 既有项目架构原则 |
 | P-11 | M2.5 首批专用 MCP Client Adapter 仅支持 Antigravity 与 OpenCode；其他专用 Adapter 不属于首批范围 | 用户已确认 |
 | P-12 | M2.5 首版不提供 Generic / Manual 通用 MCP Client 手动接入；该能力留待后续版本评估 | 用户已确认 |
+| P-13 | 首次安装时 Gateway 总开关默认 OFF | 用户已确认 |
 
 ## 2. 建议采用的技术决策
 
@@ -42,13 +43,13 @@
 
 ## 3. 仍需产品决策的默认行为
 
-以下项目目前在文档中有建议，但不是用户明确指定的固定值。建议评审时逐项确定。
+以下项目仍需产品决策；已由用户明确确认的条目已在条目内标记为冻结，不再视为待决策。
 
 ### D-01：首次安装时 Gateway 默认状态
 
-建议：**新安装默认 OFF**；升级安装保留已有 Gateway 配置，不重置用户选择。
+**用户已确认并冻结：首次安装时 Gateway 总开关默认 OFF。** 新安装创建初始配置时必须写入 `gateway.enabled=false`，首次启动不得自动启动任何 Gateway Worker。
 
-状态：建议方案待用户最终确认。
+升级行为建议：升级安装保留用户已有的 Gateway 配置，不将现有 ON/OFF 状态重置；作为配置迁移兼容要求实施。
 
 ### D-02：Gateway 随 AirBridge 启动
 
