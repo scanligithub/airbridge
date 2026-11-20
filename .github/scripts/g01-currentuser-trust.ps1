@@ -290,3 +290,9 @@ finally {
         throw 'G-01 cleanup / CurrentUser Root / LocalMachine Root integrity check failed.'
     }
 }
+
+
+# Follow the read-only G-01A checks with an isolated, disposable standard-user
+# CryptUIWizImport API test. This CI-only invocation uses NO_UI; it does not
+# test or claim that the interactive Windows import wizard was shown.
+& (Join-Path $PSScriptRoot 'g01-cryptui-import-ci.ps1')
