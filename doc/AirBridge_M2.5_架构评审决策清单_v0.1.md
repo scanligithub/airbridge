@@ -1,5 +1,8 @@
 # AirBridge M2.5 架构评审决策清单
 
+> **决策更新（2026-11-20）：** 本清单中的 CurrentUser Root / CA 信任要求、D-04 证书导入、D-07 OAuth Client 注册、G-01 HTTPS 证书 PoC 均已由用户明确取消。M2.5 首版采用 STDIO；不建立证书、TLS、OAuth Broker 或 MCP 网络监听器。完整新约束与验收见 ADR-013。
+
+
 - 文档编号：AB-M2.5-REVIEW-001
 - 版本：0.1
 - 日期：2026-11-20
