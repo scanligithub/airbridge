@@ -66,7 +66,7 @@ function Open-G01CurrentUserRootStore {
 
     if ($handle -eq [IntPtr]::Zero) {
         $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        throw [ComponentModel.Win32Exception]::new($code, 'CertOpenStore(CurrentUser\Root) failed.')
+        throw [System.ComponentModel.Win32Exception]::new($code, 'CertOpenStore(CurrentUser\Root) failed.')
     }
     return $handle
 }
@@ -82,7 +82,7 @@ function Close-G01CertificateStore {
         $closed = [AirBridge.G01.NativeMethods]::CertCloseStore($Handle, [uint32]0)
         if (-not $closed) {
             $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-            throw [ComponentModel.Win32Exception]::new($code, 'CertCloseStore failed.')
+            throw [System.ComponentModel.Win32Exception]::new($code, 'CertCloseStore failed.')
         }
     }
 }
@@ -140,9 +140,9 @@ function Invoke-G01CryptUIWizImport {
         if (-not $ok) {
             $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
             if ($NoUI) {
-                throw [ComponentModel.Win32Exception]::new($code, 'CryptUIWizImport (CI no-UI test) failed.')
+                throw [System.ComponentModel.Win32Exception]::new($code, 'CryptUIWizImport (CI no-UI test) failed.')
             }
-            throw [ComponentModel.Win32Exception]::new($code, 'CryptUIWizImport wizard was cancelled or failed.')
+            throw [System.ComponentModel.Win32Exception]::new($code, 'CryptUIWizImport wizard was cancelled or failed.')
         }
 
         return [pscustomobject]@{
