@@ -35,7 +35,7 @@
 
 ## G-01 技术 PoC 操作手册
 
-- Windows CurrentUser CI：[workflow](../.github/workflows/g01-windows-currentuser-ci.yml) · [G-01A store/chain test](../.github/scripts/g01-currentuser-trust.ps1) · [CryptUI API test](../.github/scripts/g01-cryptui-import-ci.ps1)：在一次性标准用户 Profile 中验证非交互 Store-scope / CustomTrustStore 链逻辑，并使用 CryptUIWizImport 的 NO_UI 模式验证 CurrentUser Root 目标句柄、导入回读、Windows 默认链和清理。CI 不运行交互向导，不代表用户 Consent 或 G-01B PASS。
+- Windows CurrentUser CI：[workflow](../.github/workflows/g01-windows-currentuser-ci.yml) · [G-01A store/chain test](../.github/scripts/g01-currentuser-trust.ps1) · [CryptUI API test](../.github/scripts/g01-cryptui-import-ci.ps1)：在一次性标准用户 Profile 中验证非交互 Store-scope / CustomTrustStore 链逻辑，并以 CurrentUser My 为目标运行 CryptUIWizImport NO_UI API control，验证 P/Invoke 和导入回读。Hosted Root NO_UI 调用此前在 API 内 120 秒超时；CI 不运行交互向导，不代表用户 Consent 或 G-01B PASS。
 - [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)
   - Windows CurrentUser CA / localhost Leaf 测试证书、CryptUIWizImport 固定目标 Store 的交互导入、LocalMachine Root 不变检查、Chrome / Antigravity / OpenCode TLS + OAuth + MCP 矩阵、负向测试与清理。G-01B 仍需目标主机实测；G-01 总体为 Partial Research / NOT PASS。
 
@@ -75,7 +75,7 @@
 - G-01 初步研究：Windows CurrentUser Root 有 Chrome / Bun / OpenCode Desktop 的公开依据；Antigravity App / IDE 与 OpenCode 目标版本尚未实测；G-01 目前 Partial Research / NOT PASS；
 
 - G-01A：GitHub Actions 非交互 Store-scope / CustomTrustStore Chain CI。
-- G-01A2：GitHub Actions 一次性标准用户 Profile 中的 CryptUIWizImport NO_UI API 导入回读与默认链验证；不验证交互 UI。
+- G-01A2：GitHub Actions 一次性标准用户 Profile 中的 CryptUIWizImport NO_UI API control（CurrentUser My）；验证 P/Invoke 与导入回读，不验证 Root 写入或交互 UI。
 - G-01B：`.github/scripts/g01-interactive-currentuser-import.ps1`，在目标 Windows 用户交互桌面调用 CryptUIWizImport（不设置 NO_UI），验证真实 Windows 导入向导与 CurrentUser Root；当前 NOT RUN。
 - 本机 OAuth Broker + 两个 Worker endpoint 的 HTTPS 证书真实客户端验证；
 - 默认 TCP 端口、loopback-only 监听、实际 bind 冲突检测、Worker / Broker 端口迁移与 OAuth 重新授权验证；
