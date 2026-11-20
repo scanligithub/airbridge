@@ -241,6 +241,8 @@ M2.5 不得破坏以下既有能力：
 
 在生产 Gateway HTTP 授权实现前，必须先完成一个可丢弃的 Windows 技术原型；该原型不进入正式 AirBridge 产品包，除非通过评审后合并。
 
+G-01 的 Windows 基础证书库测试优先由独立 GitHub Actions workflow 在 `windows-2025` Runner 执行（`.github/workflows/g01-windows-currentuser-ci.yml`）。它覆盖 CurrentUser Root 写入 / 回读、Windows X509Chain 正反向构建、LocalMachine Root 不变和精确清理；不需要 Host A / B 参与。Hosted Runner 的当前身份是 elevated `runneradmin`，所以该 CI 不等同于非管理员安装器上下文测试，也不替代 Antigravity / OpenCode 实际 TLS / OAuth / MCP 客户端验收。
+
 研究范围：
 - MCP Authorization 规范要求的 HTTPS Authorization Server endpoints；
 - 本地证书生成、受信任证书链、安装/更新/撤销和卸载；
@@ -468,6 +470,6 @@ AirBridge 不读取 Antigravity / OpenCode 的客户端 Token Vault。Broker 有
 
 ## 8.7 G-01 Windows PoC 执行手册
 
-G-01 目标主机部署阶段的本机 CA / Leaf 创建、CurrentUser Root 用户同意导入、LocalMachine Root 不变验证、客户端 TLS / OAuth / MCP 测试矩阵、负向测试与清理步骤，统一见 [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。
+G-01 分层验收：Windows Actions 对 CurrentUser Root 写入 / 回读、X509Chain 正反向构建、LocalMachine Root 不变和清理进行自动测试；真实目标主机 / 客户端再验证部署 Consent、非管理员上下文和 Antigravity / OpenCode TLS + OAuth + MCP。，统一见 [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。
 
 该手册当前为 NOT RUN；尚无任何目标主机的实测证据。PoC 不指定固定 Host A / Host B：每台实际部署 M2.5 AirBridge 的主机都必须在部署阶段独立完成本机 CurrentUser Root trust bootstrap；Gateway OFF 不跳过 CA 部署，也不启动 Broker / Worker。由于 endpoint 仅监听 loopback，MCP Client 与 Gateway 必须在同一台机器上；两台机器不共享 CA 私钥或信任状态。Chrome TLS smoke test、证书导入成功或单一客户端连通均不能单独关闭 G-01。PoC 必须验证所有首版承诺支持的客户端形态，并确认 TLS 负向场景 fail-closed。此阶段不授权产品代码、正式 EXE 或证书管理功能实施。
