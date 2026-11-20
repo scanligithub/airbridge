@@ -184,16 +184,20 @@ class WindowsAgentCredentialLock:
     WAIT_FAILED = 0xFFFFFFFF
     INFINITE = 0xFFFFFFFF
 
+    @staticmethod
+    def _target_name(agent_id: str) -> str:
+        normalized = _validate_agent_id(agent_id)
+        digest = hashlib.sha256(normalized.encode("ascii")).hexdigest()
+        # Keep the Agent ID out of the global object name; Local\ scopes the
+        # mutex to this interactive Windows session.
+        return "Local\\AirBridge.AgentCredential." + digest
+
     def __init__(self, agent_id: str) -> None:
         if os.name != "nt":
             raise CredentialStoreError(
                 "Windows Agent credential locking is available only on Windows"
             )
-        normalized = _validate_agent_id(agent_id)
-        digest = hashlib.sha256(normalized.encode("ascii")).hexdigest()
-        # Keep the Agent ID out of the global object name; Local\ scopes the
-        # mutex to this interactive Windows session.
-        self.name = "Local\\AirBridge.AgentCredential." + digest
+        self.name = self._target_name(agent_id)
         self._kernel32 = ctypes.WinDLL("Kernel32.dll", use_last_error=True)
         self._kernel32.CreateMutexW.argtypes = [
             ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR
