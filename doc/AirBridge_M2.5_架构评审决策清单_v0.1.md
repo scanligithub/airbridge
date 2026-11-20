@@ -183,6 +183,7 @@
 | G-08 | Runtime Session | 新/新四种组合正确；新/旧、旧/新、旧/旧无误报 |
 | G-09 | Python 3.11+ | GUI、Gateway、Credential Provider、CI 和最终 EXE 统一运行时 |
 | G-10 | Gateway 端口管理 | 默认端口正确；每实例唯一持久化；loopback-only；真实 bind / excluded port 检查；冲突隔离；端口变更同步 metadata / 客户端配置并完成重新授权或回滚 |
+| G-11 | 升级配置与授权状态保留 | 首次安装默认 OFF；升级保留 Gateway / Agent / Credential / Broker Grant 与 Revocation / CurrentUser 证书 / 当前用户 MCP 配置；Token Vault 不读取；版本化幂等迁移、备份、原子提交、回滚及损坏恢复测试通过 |
 
 任一关键安全 PoC 不通过，不允许以无认证 HTTP 或明文 Service Token 作为临时上线方案。
 
@@ -198,7 +199,7 @@
 文档评审完成后：
 1. 将已确认 P-01 至 P-17 标记为 Frozen Product Requirements；
 2. 对 D-01 至 D-09 记录用户选择或明确延期；
-3. 关闭 G-01 至 G-10 的技术可行性门禁，并新增升级迁移保留 / 回滚 Gate（G-11），或者明确标记 No-Go / 暂缓；
+3. 关闭 G-01 至 G-11 的技术可行性门禁，或者明确标记 No-Go / 暂缓；
 4. 更新 M2.5 架构文档和 ADR 状态；
 5. 仅在用户明确批准后进入 M2.5.1 代码实施。
 
