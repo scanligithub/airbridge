@@ -229,9 +229,9 @@ class AdapterResult:
 
 
 def _line_indent(source: str, offset: int) -> str:
-    line_start = source.rfind("\\n", 0, offset) + 1
+    line_start = source.rfind("\n", 0, offset) + 1
     prefix = source[line_start:offset]
-    return prefix[: len(prefix) - len(prefix.lstrip(" \\t"))]
+    return prefix[: len(prefix) - len(prefix.lstrip(" \t"))]
 
 
 def _newline(source: str) -> str:
@@ -283,7 +283,7 @@ def _property_value_indent(source: str, obj: _Node, key: str) -> str:
     key_span = obj.property_spans.get(key)
     if not key_span:
         return _line_indent(source, obj.start) + "  "
-    return _line_indent(source, key_span[0]) + "  "
+    return _line_indent(source, key_span[0])
 
 
 def _backup_and_replace(path: Path, source_bytes: bytes, updated_bytes: bytes) -> str | None:
@@ -443,8 +443,8 @@ class _BaseAdapter:
 
         # Reparse our result before committing; never write an invalid document.
         _JsoncParser(updated).parse()
-        has_bom = original_bytes.startswith(b"\\xef\\xbb\\xbf")
-        updated_bytes = (b"\\xef\\xbb\\xbf" if has_bom else b"") + updated.encode("utf-8")
+        has_bom = original_bytes.startswith(b"\xef\xbb\xbf")
+        updated_bytes = (b"\xef\xbb\xbf" if has_bom else b"") + updated.encode("utf-8")
         backup = _backup_and_replace(config_path, original_bytes, updated_bytes)
         return AdapterResult(
             changed=(updated_bytes != original_bytes),
