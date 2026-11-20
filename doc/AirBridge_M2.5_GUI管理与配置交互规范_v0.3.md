@@ -85,7 +85,7 @@ AirBridge GUI 必须成为 Gateway 的统一管理控制台。用户无需手工
 
 每个已注册 Agent 实例独立启用。
 
-M2.5 首批专用 Adapter 仅为 Antigravity、OpenCode。其他产品的专用 Adapter 留待后续版本评估。通用 MCP Client 手动接入是否纳入首版仍待产品决策，不得将其当作已承诺的首版功能。
+M2.5 首批专用 Adapter 仅为 Antigravity、OpenCode。其他产品的专用 Adapter 留待后续版本评估。Generic / Manual 通用 MCP Client 手动接入已确认不纳入首版。
 
 Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭据和服务端权限策略。
 
@@ -141,7 +141,7 @@ M2.5 首批自动发现与自动配置仅支持：
 - Antigravity；
 - OpenCode。
 
-Cursor、VS Code / Copilot、Cline 等不属于首批专用 Adapter 范围。通用 MCP Client 手动接入是否纳入首版仍待产品决策；未获批准前，GUI 不得将其展示为首版已支持的添加方式。
+Cursor、VS Code / Copilot、Cline 等不属于首批专用 Adapter 范围。Generic / Manual 通用 MCP Client 手动接入不纳入首版，GUI 不得展示相应添加入口。
 
 发现结果需区分：
 - 已安装且找到配置；
@@ -258,6 +258,7 @@ Cursor、VS Code / Copilot、Cline 等不属于首批专用 Adapter 范围。通
 - [ ] 能显示每个 Worker 的 PID、endpoint、端口和最近错误。
 - [ ] Agent 凭据状态、Scope 和撤销状态正确。
 - [ ] 首批专用 Adapter 仅包含 Antigravity 和 OpenCode。
+- [ ] 首版 GUI 不提供 Generic / Manual 通用 MCP Client 添加入口。
 - [ ] MCP Adapter 自动写入仅限当前 Windows 用户级配置；项目级 / 系统级配置不被修改。
 - [ ] MCP 配置备份、合并、验证与恢复有效，其他 Server 配置不丢失。
 - [ ] 日志脱敏，不出现 Token 或 Authorization Header。
