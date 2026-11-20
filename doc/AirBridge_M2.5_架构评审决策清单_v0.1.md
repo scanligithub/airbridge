@@ -230,11 +230,11 @@
 5. 前后比较 `CurrentUser\\Root` 与 `LocalMachine\\Root` Thumbprint 集合均完全一致；CI 不写入任一 Root store；
 6. 按精确 Thumbprint 清理 `CurrentUser\\My` 临时证书，并删除临时用户及其 Profile。
 
-**明确不在 hosted Actions 执行的操作：** CurrentUser Root 导入。Windows Root store 是受保护的信任边界，写入会触发 Windows 用户确认；GitHub-hosted Runner 无法完成交互式确认。之前的 `Import-Certificate` 得到 `UI is not allowed in this operation`；`.NET X509Store.Add()` 与 `certutil -f -user -addstore Root` 在无交互子进程中分别超时。随后一次 `crypt32.dll` `CertOpenStore` / `CertAddEncodedCertificateToStore` 组合探针也在 120 秒后超时，阶段标记位于两个原生调用之前，无法判断具体阻塞点；拆分阶段的后续运行在测试步骤前被取消。以上均未提供 Root 导入回读或链结果，不能记为导入成功。Microsoft 说明见 [Managing Certificates with Certificate Stores](https://learn.microsoft.com/en-us/windows/win32/seccrypto/managing-certificates-with-certificate-stores)。
+**G-01A 的边界：** G-01A 只做只读 Root 范围快照和 CustomTrustStore 内存链测试，不写入 CurrentUser Root 或 LocalMachine Root。此前 `Import-Certificate` 在 hosted Runner 报 `UI is not allowed in this operation`；`.NET X509Store.Add()` 与 `certutil -f -user -addstore Root` 在无交互子进程中分别超时。一次 `crypt32.dll` `CertOpenStore` / `CertAddEncodedCertificateToStore` 组合探针也在 120 秒后超时，但阶段标记无法区分具体阻塞调用。上述尝试没有成功导入证据。Microsoft 对 Root store 的保护说明见 [Managing Certificates with Certificate Stores](https://learn.microsoft.com/en-us/windows/win32/seccrypto/managing-certificates-with-certificate-stores)。
 
 **最新运行结果：** [G-01 Windows CI run #44737654804](https://github.com/scanligithub/airbridge/actions/runs/44737654804) 在 commit `588d911` 上为 SUCCESS。标准用户身份验证通过；CustomTrustStore 正向链 / 负向拒绝、SAN 夹具、CurrentUser Root 与 LocalMachine Root 不变、精确清理全部 PASS。当前 Root 库前后各 564 个条目且 Thumbprint 集合不变。进程属性虽报告 `SessionId=2` 与 `Environment.UserInteractive=True`，但没有可由人工批准 Windows 根证书确认的操作员；导入仍未运行。
 
-新的 CI 将 `current_user_root_import` 记为 `NOT_RUN_INTERACTIVE_WINDOWS_CONSENT_REQUIRED`。因此 G-01A 当前仅表示 **非交互 Store-scope / CustomTrustStore Chain 检查**；这些检查通过后也不等于 CurrentUser Root 导入 PASS。真实 Root 导入必须在目标用户的交互式部署 / Repair 流程中完成应用层 Consent 和 Windows 系统确认，并确认只写入该用户的 CurrentUser Root。
+G-01A 的证据 JSON 将 `current_user_root_import` 记为 `NOT_RUN_INTERACTIVE_WINDOWS_CONSENT_REQUIRED`。新增 G-01A2 后，CI 会在独立一次性普通用户 Profile 内调用 `CryptUIWizImport` 的 `NO_UI` 模式，实际验证同一 API 的目标 Store handle、Root 写入与回读、默认 Windows 链和精确清理；该 A2 结果单独记录，不应覆盖 G-01A 的只读证据，也不证明 Windows 向导 UI 或用户 Consent。真实交互式导入仍由 G-01B 在目标用户桌面验证。
 
 该 workflow 不运行 Antigravity / OpenCode 桌面客户端，也不证明真实客户端的 TLS / OAuth / MCP 兼容。G-01 总体仍为 Partial Research / NOT PASS；不得扩大到 LocalMachine Root、注册表直写、隐藏或自动点击 Windows 确认、TLS bypass 或无认证 HTTP fallback。
 
