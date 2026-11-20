@@ -396,10 +396,29 @@ class _BaseAdapter:
         child = parent.properties.get(key)
         if child is not None:
             return source, _BaseAdapter._require_object(child, label)
+        parent_start = parent.start
         updated = _insert_property(source, parent, key, {})
         reparsed = _JsoncParser(updated).parse()
-        node = reparsed.properties[key]
-        return updated, node
+
+        def find_parent(node: _Node) -> _Node | None:
+            if node.kind == "object" and node.start == parent_start:
+                return node
+            for child in node.properties.values():
+                found = find_parent(child)
+                if found is not None:
+                    return found
+            for child in node.children:
+                found = find_parent(child)
+                if found is not None:
+                    return found
+            return None
+
+        reparsed_parent = find_parent(reparsed)
+        if reparsed_parent is None or key not in reparsed_parent.properties:
+            raise AdapterConfigurationError(
+                f"Cannot locate newly created configuration object {key!r}"
+            )
+        return updated, reparsed_parent.properties[key]
 
     def _managed_updates(self, agent_id: str, enabled: bool) -> list[tuple[tuple[str, ...], Any]]:
         raise NotImplementedError
