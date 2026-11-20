@@ -6,6 +6,7 @@ This is not an OS-level boundary against malicious code running as that same use
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
 import re
 from ctypes import wintypes
@@ -173,6 +174,71 @@ class WindowsCredentialStore:
         raise CredentialStoreError(
             f"Windows Credential Manager delete failed (error {code})"
         )
+
+
+class WindowsAgentCredentialLock:
+    """Cross-process per-Agent mutex for coordinated credential lifecycle changes."""
+
+    WAIT_OBJECT_0 = 0x00000000
+    WAIT_ABANDONED = 0x00000080
+    WAIT_FAILED = 0xFFFFFFFF
+    INFINITE = 0xFFFFFFFF
+
+    def __init__(self, agent_id: str) -> None:
+        if os.name != "nt":
+            raise CredentialStoreError(
+                "Windows Agent credential locking is available only on Windows"
+            )
+        normalized = _validate_agent_id(agent_id)
+        digest = hashlib.sha256(normalized.encode("ascii")).hexdigest()
+        # Keep the Agent ID out of the global object name; Local\ scopes the
+        # mutex to this interactive Windows session.
+        self.name = "Local\\AirBridge.AgentCredential." + digest
+        self._kernel32 = ctypes.WinDLL("Kernel32.dll", use_last_error=True)
+        self._kernel32.CreateMutexW.argtypes = [
+            ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR
+        ]
+        self._kernel32.CreateMutexW.restype = wintypes.HANDLE
+        self._kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self._kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        self._kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+        self._kernel32.ReleaseMutex.restype = wintypes.BOOL
+        self._kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self._kernel32.CloseHandle.restype = wintypes.BOOL
+        self._handle = None
+
+    def __enter__(self):
+        handle = self._kernel32.CreateMutexW(None, False, self.name)
+        if not handle:
+            code = ctypes.get_last_error()
+            raise CredentialStoreError(
+                f"Windows Agent credential mutex creation failed (error {code})"
+            )
+        self._handle = handle
+        result = int(self._kernel32.WaitForSingleObject(handle, self.INFINITE))
+        if result not in (self.WAIT_OBJECT_0, self.WAIT_ABANDONED):
+            code = ctypes.get_last_error()
+            self._kernel32.CloseHandle(handle)
+            self._handle = None
+            raise CredentialStoreError(
+                f"Windows Agent credential mutex wait failed "
+                f"(result {result}, error {code})"
+            )
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        handle = self._handle
+        self._handle = None
+        if handle:
+            try:
+                if not self._kernel32.ReleaseMutex(handle):
+                    code = ctypes.get_last_error()
+                    raise CredentialStoreError(
+                        f"Windows Agent credential mutex release failed (error {code})"
+                    )
+            finally:
+                self._kernel32.CloseHandle(handle)
+        return False
 
 
 def default_credential_store() -> CredentialStore:

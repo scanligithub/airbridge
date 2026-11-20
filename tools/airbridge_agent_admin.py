@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import hmac
 import json
 import os
@@ -16,10 +17,18 @@ from agent_security import AgentSecurityStore, VALID_SCOPES  # noqa: E402
 from airbridge_mcp_gateway.credential_store import (  # noqa: E402
     CredentialNotFound,
     CredentialStoreError,
+    WindowsAgentCredentialLock,
     WindowsCredentialStore,
 )
 
 DEFAULT_AGENT_SCOPES = ["runtime.read", "eda.versions.read", "request.read"]
+
+
+def _agent_credential_lock(agent_id: str):
+    """Serialize every local provision/revoke transaction for one Agent."""
+    if os.name != "nt":
+        return nullcontext()
+    return WindowsAgentCredentialLock(agent_id)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,6 +75,11 @@ def _provision_agent(store: AgentSecurityStore, args: argparse.Namespace) -> dic
         raise CredentialStoreError(
             "Zero-Touch provisioning currently requires Windows Credential Manager"
         )
+    with _agent_credential_lock(args.agent_id):
+        return _provision_agent_locked(store, args)
+
+
+def _provision_agent_locked(store: AgentSecurityStore, args: argparse.Namespace) -> dict:
     credentials = WindowsCredentialStore()
     existing = store.list_tokens(args.agent_id)
     if any(item["enabled"] for item in existing):
@@ -122,6 +136,23 @@ def _revoke_token(store: AgentSecurityStore, token_id: str) -> tuple[dict, int]:
         (item for item in store.list_tokens() if item["token_id"] == token_id),
         None,
     )
+    if target is None:
+        changed = store.revoke_token(token_id)
+        return {"revoked": changed, "credential_cleanup": "not_found"}, 0
+    with _agent_credential_lock(target["agent_id"]):
+        return _revoke_token_locked(store, token_id, target["agent_id"])
+
+
+def _revoke_token_locked(
+    store: AgentSecurityStore, token_id: str, agent_id: str
+) -> tuple[dict, int]:
+    target = next(
+        (
+            item for item in store.list_tokens(agent_id)
+            if item["token_id"] == token_id
+        ),
+        None,
+    )
     changed = store.revoke_token(token_id)
     if target is None:
         return {"revoked": changed, "credential_cleanup": "not_found"}, 0
@@ -171,6 +202,11 @@ def _revoke_token(store: AgentSecurityStore, token_id: str) -> tuple[dict, int]:
 
 def _revoke_agent(store: AgentSecurityStore, agent_id: str) -> tuple[dict, int]:
     """Revoke server credentials first, then report local vault cleanup precisely."""
+    with _agent_credential_lock(agent_id):
+        return _revoke_agent_locked(store, agent_id)
+
+
+def _revoke_agent_locked(store: AgentSecurityStore, agent_id: str) -> tuple[dict, int]:
     changed = store.revoke_agent(agent_id)
     if os.name != "nt":
         return {"revoked": changed, "credential_cleanup": "not_applicable"}, 0

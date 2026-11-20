@@ -43,6 +43,14 @@ class _FakeSecurityStore:
         return True
 
 
+class _FakeAgentLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+
 class _FakeCredentialStore:
     def __init__(self, *, fail_store=False, fail_load=False, fail_delete=False):
         self.values = {}
@@ -71,6 +79,15 @@ class _FakeCredentialStore:
 
 
 class AgentProvisioningTests(unittest.TestCase):
+    def setUp(self):
+        self.lock_patcher = patch.object(
+            airbridge_agent_admin,
+            "WindowsAgentCredentialLock",
+            side_effect=lambda _agent_id: _FakeAgentLock(),
+        )
+        self.lock_patcher.start()
+        self.addCleanup(self.lock_patcher.stop)
+
     def test_legacy_issue_requires_explicit_token_reveal_opt_in(self):
         args = airbridge_agent_admin.build_parser().parse_args([
             "issue", "--agent-id", "opencode", "--scope", "runtime.read"
