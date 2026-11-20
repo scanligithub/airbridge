@@ -454,7 +454,7 @@ AirBridge 不能读取客户端自己的 Token Vault，因此不能仅凭 Broker
 
 CA / localhost 服务器证书的创建和 CA 公钥导入属于每台主机的 AirBridge 部署流程，安装器 / 部署助手在目标 Windows 用户上下文中执行 Consent 和 CurrentUser Root 导入；不是 Gateway 开关动作，也不是每次 GUI 启动时执行。证书部署在 Gateway OFF 时也完成，但绝不因此启动 Broker / Worker。
 
-部署页面必须展示 CA issuer / subject、thumbprint、有效期、用途、CurrentUser 目标范围和信任影响，并明确说明用户拒绝后 AirBridge Core / Runtime 仍可用、Managed HTTPS 不可用。用户同意后只导入 CA 公钥到目标用户 CurrentUser Root；CA 私钥保留在本机受保护密钥容器。若安装器需要提升权限，CurrentUser Root 导入必须由真实目标用户上下文执行。
+部署页面必须展示 CA issuer / subject、thumbprint、有效期、用途、CurrentUser 目标范围和信任影响，并明确说明用户拒绝后 AirBridge Core / Runtime 仍可用、Managed HTTPS 不可用。用户同意后只导入 CA 公钥到目标用户 CurrentUser Root；任何部署到本机的私钥材料都必须使用受保护密钥容器并限制 ACL。若安装器需要提升权限，CurrentUser Root 导入必须由真实目标用户上下文执行。
 
 GUI 证书状态单独显示：
 - issuer / subject；
