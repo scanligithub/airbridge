@@ -28,7 +28,7 @@
 5. [ADR-011：Runtime Session Gateway 状态扩展与旧版兼容](ADR-011_RuntimeSession_Gateway_State_Extension.md)
    - 复用 0x15 / 0x16，新增可选 `gateway.state.v1`，兼容旧版并验证四种开关组合。
 6. [ADR-012：Agent 扩展与 MCP Client Adapter 注册机制](ADR-012_M2.5_Agent扩展与MCP_Client_Adapter注册机制.md)
-   - 区分客户端类型与 Agent 实例；首批专用 Adapter 仅 Antigravity / OpenCode；通用手动接入仍待单独决策。
+   - 区分客户端类型与 Agent 实例；首批专用 Adapter 仅 Antigravity / OpenCode；Generic / Manual 通用手动接入已明确延期，不纳入首版。
 7. [M2.5 架构评审决策清单 v0.1](AirBridge_M2.5_架构评审决策清单_v0.1.md)
    - 区分用户已确认原则、技术提案、尚需产品决策的默认行为和实施前必须完成的 PoC Gate。
 
