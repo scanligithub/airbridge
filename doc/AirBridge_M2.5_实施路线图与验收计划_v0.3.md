@@ -114,6 +114,8 @@ M2.5 的最终交付是一个统一的 AirBridge Windows 安装包 / AirBridge.e
 
 ### M2.5.5 — Agent 管理与凭据生命周期 GUI
 
+范围约束：Agent Registry / Agent 实例模型应可扩展；M2.5 首批专用 MCP Client Adapter 仅为 Antigravity、OpenCode。通用 MCP Client 手动接入仍待产品决定，不得默认纳入验收范围。
+
 工作：
 - GUI 添加 / 初始化 Agent；
 - 凭据状态查询；
@@ -129,6 +131,8 @@ M2.5 的最终交付是一个统一的 AirBridge Windows 安装包 / AirBridge.e
 - 凭据存储失败、撤销失败和服务端不可达时状态准确，失败关闭。
 
 ### M2.5.6 — Antigravity / OpenCode MCP 配置管理
+
+范围约束：本里程碑只实现 Antigravity 和 OpenCode 两个专用 Adapter；Cursor、VS Code / Copilot、Cline 等专用 Adapter 明确排除在 M2.5 首批之外。通用 MCP Client 手动接入只有经单独产品批准后才能加入范围。
 
 工作：
 - 研究并适配两种客户端实际版本的配置 schema；
@@ -210,7 +214,7 @@ M2.5 不得破坏以下既有能力：
 - 只构建和发布一个 AirBridge Windows 安装包 / EXE；
 - 主机 A 和主机 B 安装同一个版本；
 - 两端配置分别保存在各自本机；
-- 默认安装配置建议 Gateway OFF；由用户在 GUI 中显式启用。该默认值须在产品评审中确认；
+- 新安装默认 Gateway OFF 仍是建议项，尚待用户最终确认；升级安装应保留已有配置；
 - 主机 A 可由用户在 GUI 启用 Gateway 并配置 Agent；
 - 主机 B 可保持 OFF，仍具有完整 Gateway 管理能力；
 - 不要求在 B 上安装不同软件或移除 Gateway 模块。
@@ -267,7 +271,7 @@ M2.5.4 不只是启用 Streamable HTTP Server，还必须完成：
 
 - Antigravity 与 OpenCode 分别实现配置 Adapter；
 - 自动检测产品版本和 schema；
-- 默认采用用户级 / 应用级配置，不主动修改项目或系统级配置；
+- 自动写入严格限定当前 Windows 用户级 / 应用用户配置；项目级 / 系统级配置仅检测并提示，不修改；
 - Antigravity IDE CIMD 需确认版本 2.6.0+；否则验证 DCR 路径；
 - OpenCode V2 使用 `mcp.servers.<name>` 的 remote schema；
 - 两类客户端的 OAuth Token 都不得由 AirBridge GUI 读出或写入 MCP JSON。
