@@ -28,6 +28,13 @@ class _CredentialStoreProbe:
         raise AssertionError("GUI status inspection must not load credential secrets")
 
 
+class _NoopRequestBroker:
+    """No durable Runtime broker is needed because the worker is not started."""
+
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+
 class _NoopAntigravityIPCServer:
     """Avoid creating API/Runtime SQLite stores in a GUI-only offscreen test."""
 
@@ -57,6 +64,7 @@ class GatewayGuiSmokeTests(unittest.TestCase):
                     return_value=_CredentialStoreProbe(),
                 ),
                 patch.object(airbridge_app.SerialWorker, "start", lambda _self: None),
+                patch.object(airbridge_app, "RequestBroker", _NoopRequestBroker),
                 patch.object(
                     airbridge_app,
                     "AntigravityIPCServer",
