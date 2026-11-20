@@ -26,6 +26,7 @@ M2.5 不改变 AirBridge 的产品定位：AirBridge 仍是通用、透明的双
 8. 两端连接后交换 Gateway 启用状态。ON/ON、OFF/OFF 时向用户显示角色配置冲突提示；不自动更改任何一端配置，也不自动关闭 Gateway。
 9. 冲突检测只在双方已经建立可交换状态的双机通信会话后进行。没有对端、链路未建立或对端不支持该能力时，不得误报冲突。
 10. AirBridge 不接管 Capture / Allegro 的启动、关闭、工程打开、保存、Tcl / SKILL 业务流程；这些流程仍由对应 Agent Skill 实现。
+11. **首次安装时 Gateway 总开关默认 OFF**；首次安装不得自动启动任何 Gateway Worker。
 
 ## 3. 当前基线与 M2.5 变化
 
@@ -155,7 +156,7 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 该 JSON 是目标配置模型草案，字段、默认端口分配和迁移策略仍需在 GUI / 配置规范中评审。不得把 Token、密码或其他秘密写入该文件。Agent 凭据沿用 M2.4 Credential Provider / Windows Credential Manager 的安全设计。
 
 配置语义：
-- `gateway.enabled`：本机 Gateway 总开关；false 时不启动任何 Gateway Worker。
+- `gateway.enabled`：本机 Gateway 总开关；false 时不启动任何 Gateway Worker。首次安装初始值必须为 `false`（OFF），由用户在 GUI 中明确启用后才允许启动 Worker。
 - `gateway.start_with_airbridge`：Gateway 总开关为 true 时，是否随 AirBridge 主程序启动 Worker。
 - `agent_instances.<agent_instance_id>.enabled`：单个已注册 Agent 实例的 Worker 是否启用。
 - `client_type_id`：客户端产品类型；`adapter_id`：配置适配器类型。两者都不作为 Agent 实例身份。
@@ -163,7 +164,7 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 - `listen_host`：默认固定为 loopback；是否允许修改必须经过安全评审，初版不得开放公网监听。
 - `port`：由配置管理器分配并持久化；冲突时提示用户，不静默改用未知端口。
 
-配置读写必须具备 schema 版本、原子写入、损坏恢复提示、默认值迁移和未知字段保留策略。
+配置读写必须具备 schema 版本、原子写入、损坏恢复提示、默认值迁移和未知字段保留策略。首次安装创建配置时 `gateway.enabled=false`；升级迁移应保留已有用户开关值，不得因升级而自动开启 Gateway。
 
 ## 6. Agent 身份与权限
 
