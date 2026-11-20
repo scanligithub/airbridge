@@ -36,14 +36,14 @@ G-01 分为三个阶段：
 
 - 该机本地创建自己的短期测试 CA 和 localhost Leaf；正式产品模型也按每台机器 / 当前 Windows 用户维护独立的本机 CA 身份与私钥，不由另一台主机集中签发。
 - 只将该机 CA 的公钥证书，在运行 MCP Client 的 Windows 用户上下文中经明确同意导入该用户的 CurrentUser Root。CA 私钥不复制、不发送给另一台机器，也不放入仓库、共享目录或 AirBridge Runtime 通道。
-- Gateway Broker / Worker 使用该机本地 Leaf；MCP Client 通过 localhost 连接同一台机器的 loopback listener。localhost 永远指向客户端所在机器，因此不支持用 Host A 的客户端经 localhost 访问 Host B 的 Gateway。
+- Gateway Broker / Worker 使用该机本地 Leaf；MCP Client 通过 localhost 连接同一台机器的 loopback listener。localhost 永远指向客户端所在机器，因此不支持由另一台主机上的 MCP Client 通过 localhost 访问本机 Gateway。
 - A、B 的 AirBridge Runtime / 串口通信与本机 HTTPS 信任是两条独立路径；对端不需要信任本机 CA。若某台机器 Gateway 保持 OFF，且其上没有本机 Managed HTTPS 客户端需求，则无需为它导入该 CA。
 - CurrentUser 是每台 Windows 主机上的用户配置，不是跨机器共享的信任库。若两台机器都要启用 Managed HTTPS，必须分别生成、分别征求同意、分别导入并分别验证；不复制 CA 私钥，也不要求两台机器的 Root Thumbprint 相同。
 - 本手册的默认测试假设 AirBridge GUI / Gateway 与 MCP Client 由同一 Windows 登录用户运行。若实际部署采用不同 Windows 账户，必须分别验证客户端账户的 CurrentUser Root 信任和 Gateway 账户的私钥访问权限；不得假定一个账户的导入会影响另一个账户。
 
 ## 3. 目标 Windows 主机执行前基线
 
-在当前要验证的 Windows 主机上，使用运行 AirBridge / MCP Client 的目标 Windows 用户，以普通权限打开 PowerShell。此阶段只读取信息；不要假定它必须是 Host A。
+在当前要验证的 Windows 主机上，使用运行 AirBridge / MCP Client 的目标 Windows 用户，以普通权限打开 PowerShell。此阶段只读取信息；本节适用于当前被选作 PoC 的目标主机，不区分 A / B 角色。
 
 ~~~powershell
 $PSVersionTable
