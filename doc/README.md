@@ -44,4 +44,4 @@
 
 ## M2.5 技术 PoC 操作手册
 
-- [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)：Windows CurrentUser HTTPS 信任 PoC 的测试证书准备、用户同意导入、信任范围核验、客户端 TLS / OAuth / MCP 验证、负向测试与清理。当前为操作草案，尚未在 Host A 执行；G-01 不得标记为 PASS。
+- [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)：Windows CurrentUser HTTPS 信任 PoC 的测试证书准备、用户同意导入、信任范围核验、客户端 TLS / OAuth / MCP 验证、负向测试与清理。当前为操作草案，尚未在任何目标主机执行；按每台启用 Managed HTTPS 的主机独立验证，本机 CurrentUser Root 不跨机器共享，G-01 不得标记为 PASS。
