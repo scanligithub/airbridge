@@ -74,7 +74,7 @@ AirBridge GUI 必须成为 Gateway 的统一管理控制台。用户无需手工
 - **首次安装默认 OFF**：安装后的初始配置为关闭状态，不自动启动任何 Gateway Worker；用户必须在 GUI 中明确启用。
 - ON：允许 Gateway Supervisor 启动已启用 Agent 的 Worker。
 - OFF：停止所有受管 Worker；不关闭 AirBridge HTTP API、Runtime Session 或串行通信。
-- 升级安装不得把已有 Gateway 开关重置为默认值；应保留用户已保存的 ON / OFF 设置。
+- 升级安装不得把已有 Gateway 开关重置为默认值；应保留所有有效 Gateway / Agent / Broker OAuth / 证书 / MCP 用户配置状态，具体迁移和恢复规则见 5.6。
 - 配置更改必须持久化；写入失败时恢复 UI 原值并提示错误。
 
 ### 5.2 随 AirBridge 启动
@@ -137,6 +137,23 @@ Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭�
 - 用户拒绝导入、证书失效或用户撤销信任时，托管 Streamable HTTP / OAuth HTTPS Gateway 标记为不可用，说明原因和恢复方式。
 - 不得提示用户忽略证书错误，不得提供关闭 TLS 校验的选项，不得降级为无认证 HTTP。
 - 证书信任问题不得关闭既有 stdio 兼容路径或 AirBridge Core / Runtime。
+
+### 5.6 升级安装与配置迁移（D-01）
+
+升级安装时，GUI / Supervisor 必须显示正在执行的配置迁移、备份、验证或恢复状态，不得把升级配置重置成首次安装状态。
+
+必须保留：Gateway 总开关和启动策略；Agent 实例 ID、类型、Adapter、enabled、Scope、端口与 endpoint；M2.4 Credential Manager 凭据；OAuth Broker 客户端注册、Grant / Revocation、issuer / Resource Audience 与所需密钥材料；有效的 AirBridge CurrentUser 证书信任；Adapter 管理的当前用户级 MCP 配置条目。
+
+迁移安全要求：
+- 使用版本化、幂等的 schema migration；只为旧 schema 中确实缺失的字段应用已记录默认值，绝不覆盖已有用户值或未知字段。
+- 修改前为将被修改的 AirBridge 配置、Broker 状态 / 密钥元数据、AirBridge 证书元数据和 MCP Client 用户配置建立 CurrentUser ACL 保护的本地备份。
+- 不复制 / 导出 M2.4 Credential Manager Secret，不读取、备份、迁移或改写 Antigravity / OpenCode 私有 OAuth Token Vault。
+- MCP Adapter 仅更新明确归属 AirBridge 的用户级条目；保留其他 MCP Server、未知字段和 JSONC 注释 / 格式，仍不写项目级 / 系统级配置。
+- 迁移按“备份 → 校验 → 暂存 → 原子提交 → 健康验证”执行；失败时回滚原始文件和数据，不留下部分更新。
+- 配置损坏、版本不支持、备份或回滚失败时显示明确错误与恢复入口；不自动清空或重建配置，不将升级误判为首次安装。迁移问题解决前保持 Gateway Worker 停止。
+- 成功迁移后只按迁移前保存的 Gateway / Agent 开关恢复运行；不因升级自动开启 Gateway / Agent。保持 issuer / Resource URL / Audience 不变时，不要求用户无故重新授权；若有不可避免的授权变更，明确提示并只重新授权受影响的客户端 / Agent。
+
+首次安装默认 OFF 与升级配置保留是两个独立流程：首次安装写入安全初始值；升级保留有效用户状态。
 
 ## 6. Agent 管理
 
@@ -307,6 +324,10 @@ Cursor、VS Code / Copilot、Cline 等不属于首批专用 Adapter 范围。Gen
 - [ ] 双机 ON/ON 与 OFF/OFF 弹窗正确；ON/OFF 与 OFF/ON 不弹冲突。
 - [ ] 未建立链路、对端未知和旧协议场景不误报。
 - [ ] Gateway 故障不会导致 GUI 假死或 AirBridge Runtime 停止。
+- [ ] 升级安装保留 Gateway 总开关、启动策略、Agent 实例、Scope、端口 / endpoint。
+- [ ] 升级后 M2.4 Credential Manager 凭据、Broker Grant / Revocation、有效 CurrentUser 证书身份均保留；不发生无故重新授权。
+- [ ] Adapter 仅对 AirBridge 管理的当前用户配置条目做必要迁移；其他 MCP Server / JSONC 字段保留；客户端 Token Vault 未被读取或修改。
+- [ ] 迁移前备份、版本化幂等、原子提交、失败回滚和损坏配置恢复流程测试通过；损坏升级配置不得被当成首次安装重置。
 
 ---
 
