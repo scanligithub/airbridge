@@ -172,7 +172,8 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 - `listen_host`：默认固定为 loopback；是否允许修改必须经过安全评审，初版不得开放公网监听。
 - `gateway.oauth_broker.port`：OAuth Broker HTTPS issuer 的固定 TCP 端口，默认 38861；Broker 使用稳定 `https://localhost:<port>/` issuer。
 - `agent_instances.<agent_instance_id>.port`：每个 Agent Resource Server 的独立 TCP 端口；首次 Antigravity / OpenCode 实例默认 38862 / 38863。新增实例从默认候选池 `38801–38864` 中选择空闲且未被 AirBridge 分配的端口，并持久化。
-- 默认候选池当前在 IANA Registry 中标记为 Unassigned，但不是 AirBridge 专属保留段；本机是否可用必须以启动时实际 TCP bind 检查为准。启动前同时检查 IPv4 / IPv6 loopback、Windows 实际动态 / excluded port range 和端口占用。
+- 默认候选池 `38801–38864` 当前在 IANA Registry 中标记为 Unassigned（属于 IANA User Ports 范围），但不是 AirBridge 专属保留段；发布时应复核登记状态。本机是否可用必须以启动时实际 TCP bind 检查为准。启动前同时检查 IPv4 / IPv6 loopback、Windows 实际动态 / excluded port range 和端口占用。Windows 默认动态端口范围通常为 `49152–65535`，但可能被修改。
+- 参考：IANA https://www.iana.org/assignments/service-names-port-numbers/；Microsoft https://learn.microsoft.com/en-us/troubleshoot/windows-client/networking/tcp-ip-port-exhaustion-troubleshooting 及 https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/netsh-interface。
 - 端口冲突时不启动冲突服务，不静默改用随机端口；GUI 显示冲突端口及可获得的 PID / 进程名称。Broker 失败会阻断依赖其授权的 Managed HTTPS Worker；单个 Worker 冲突不影响其它实例。
 - 端口变更须同步 Resource / issuer metadata 与对应当前用户级 MCP Host 配置；Resource Audience 或 OAuth issuer 改变后必须重新授权。写入失败回滚，避免端口、listener、metadata、客户端配置不一致。
 
