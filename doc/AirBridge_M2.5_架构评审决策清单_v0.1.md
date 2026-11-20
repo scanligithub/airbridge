@@ -229,7 +229,7 @@ CI 层应验证：
 5. LocalMachine Root 在导入前、导入后和清理后 Thumbprint 集合完全一致；
 6. 通过精确 Thumbprint 清理本次创建 / 导入的证书，并保存不包含私钥的 JSON / certutil 证据。
 
-**CI 的证明边界：** GitHub-hosted Windows Runner 当前以 `runneradmin` 账户运行，日志已显示该进程为 elevated administrator。该 workflow 能验证 Windows CurrentUser 存储路径与 LocalMachine 隔离，但单凭 hosted runner 不能证明普通非管理员用户的完整部署权限体验；需要后续增加标准用户上下文测试或用目标环境补充验证。它也不运行 Antigravity / OpenCode 桌面客户端，不证明这些客户端读取相同信任库。
+**CI 的证明边界与当前状态：** GitHub-hosted Windows Runner 的父 workflow 进程以 elevated `runneradmin` 运行；workflow harness 现在会创建一次性普通本地 Windows 用户，并尝试在该用户的独立进程 / CurrentUser profile 中执行 CA 公钥导入与 X509Chain 正反向验证，结束后删除该临时账户。最早一次 `Import-Certificate` 尝试因非交互 Runner 报 `UI is not allowed in this operation` 而失败；后来增加的标准用户进程测试尚未得到成功结果，最新 run 仍处于执行中，因此 G-01A **NOT PASS / PENDING**。必须看到子进程身份确认为非管理员、CurrentUser Root 写入 / 回读成功、LocalMachine Root 前后完全不变、证书链正反向结果和清理成功，才能关闭 CI 子 Gate。该 workflow 不运行 Antigravity / OpenCode 桌面客户端，也不证明它们使用相同信任库。
 
 因此 G-01 分为 CI OS store / chain 子项和真实 MCP Client TLS / OAuth 子项；CI 子项通过不能单独把 G-01 总体标记为 PASS。当前 workflow 已接入 PR #16，执行状态与实际结论以该 workflow run 为准。
 
