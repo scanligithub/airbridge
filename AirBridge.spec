@@ -26,6 +26,7 @@ a = Analysis(
         'PySide6.QtWidgets',
         'PySide6.QtGui',
         'airbridge_mcp_gateway.server',
+        'tools.airbridge_agent_admin',
     ] + mcp_server_hiddenimports,
     hookspath=[],
     hooksconfig={},
