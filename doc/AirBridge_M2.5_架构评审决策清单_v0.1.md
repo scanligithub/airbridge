@@ -217,7 +217,7 @@
 
 ### 4.2 G-01 必须执行的 Windows PoC 矩阵
 
-**主机范围澄清：** G-01 不绑定 Host A / Host B 角色。Managed HTTPS endpoints 只监听 loopback，`localhost` 指向 MCP Client 所在的本机，因此 Gateway 与 MCP Client 必须位于同一台 Windows 主机。每台计划启用 Managed HTTPS 的主机独立持有本机 CA / Leaf 证书；CurrentUser Root 是该机当前 Windows 用户的信任库，不跨机器共享。不得从另一台主机导入 CA 私钥或依赖对端主机签发。若 A、B 都要启用 Managed HTTPS，应分别建立本机证书信任并分别测试；Gateway OFF 且无本机客户端需求的主机不需要导入。
+**主机范围澄清：** G-01 不绑定 Host A / Host B 角色。Managed HTTPS endpoints 只监听 loopback，`localhost` 指向 MCP Client 所在的本机，因此 Gateway 与 MCP Client 必须位于同一台 Windows 主机。每台实际部署 M2.5 的主机都在部署阶段导入适用于该机 localhost 的 CA 公钥；CurrentUser Root 是该机当前 Windows 用户的信任库，不跨机器共享。不得依赖固定 Host A / Host B 作为 CA 来源。正式 CA 签发 / 供应模型尚未冻结；若 A、B 都部署 M2.5，必须分别执行部署导入和信任检查；Gateway OFF 不跳过部署阶段的 CA 导入。
 
 
 **可执行操作手册：** [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。当前仅完成操作规范，未在任何目标 Windows 主机执行；PoC 应在每台计划启用 Managed HTTPS Gateway 的主机独立进行，G-01 状态继续保持 Partial Research / NOT PASS。
