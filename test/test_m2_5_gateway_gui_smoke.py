@@ -44,7 +44,6 @@ class GatewayGuiSmokeTests(unittest.TestCase):
                 ),
                 patch.object(airbridge_app.SerialWorker, "start", lambda _self: None),
                 patch.object(airbridge_app.AntigravityIPCServer, "start", lambda _self: None),
-                patch.object(airbridge_app.AntigravityIPCServer, "stop", lambda _self: None),
             ):
                 window = airbridge_app.AirBridgeMainWindow()
                 try:
