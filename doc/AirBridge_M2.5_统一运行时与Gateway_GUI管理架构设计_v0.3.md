@@ -31,6 +31,7 @@ M2.5 不改变 AirBridge 的产品定位：AirBridge 仍是通用、透明的双
 13. **M2.5 首版不配置 Windows 登录自动启动 AirBridge GUI**；这与 GUI 启动后的 Gateway Worker 启动策略分离，留待后续版本评估。
 14. 本机 HTTPS 证书只在当前 Windows 用户（CurrentUser）范围建立信任；安装时必须取得用户明确同意，不要求管理员权限，不修改 LocalMachine Root。用户拒绝或撤销信任时，托管 HTTPS Gateway 不可用，禁止关闭 TLS 校验或降级成无认证 HTTP。
 15. Gateway 端口默认固定为 Broker TCP 38861、首个 Antigravity Worker TCP 38862、首个 OpenCode Worker TCP 38863；每个 Agent 实例端口独立、持久化，冲突必须显式报告，不能随机改端口。
+16. **升级安装保留所有有效 Gateway / Agent / Broker OAuth Grant / 证书信任 / 当前用户 MCP 配置状态**；仅首次安装应用 Gateway 默认 OFF。升级迁移必须版本化、备份、原子提交和可回滚；异常配置不得静默重置。
 
 ## 3. 当前基线与 M2.5 变化
 
@@ -177,7 +178,29 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 - 端口冲突时不启动冲突服务，不静默改用随机端口；GUI 显示冲突端口及可获得的 PID / 进程名称。Broker 失败会阻断依赖其授权的 Managed HTTPS Worker；单个 Worker 冲突不影响其它实例。
 - 端口变更须同步 Resource / issuer metadata 与对应当前用户级 MCP Host 配置；Resource Audience 或 OAuth issuer 改变后必须重新授权。写入失败回滚，避免端口、listener、metadata、客户端配置不一致。
 
-配置读写必须具备 schema 版本、原子写入、损坏恢复提示、默认值迁移和未知字段保留策略。首次安装创建配置时 `gateway.enabled=false`；升级迁移应保留已有用户开关值，不得因升级而自动开启 Gateway。
+### 5.1 首次安装与升级迁移（D-01，用户已确认）
+
+**首次安装：**
+- 只有确认没有既有 AirBridge 安装 / 实例标记时，才创建全新 Gateway 配置；`gateway.enabled=false`，`gateway.start_with_airbridge=true`，首批 Agent 实例初始为 disabled。
+- 首次安装不得启动任何 Gateway Worker；Gateway 总开关必须由用户在 GUI 中明确开启。
+
+**升级安装：**
+- 必须通过持久化安装 / 实例标记识别升级；不能仅因配置文件不存在或无法解析就把升级误判为首次安装。
+- 保留现有 `gateway.enabled`、`gateway.start_with_airbridge`、Agent 实例 ID / 类型 / Adapter / enabled / Scope、Broker / Worker 端口和 endpoint。
+- 保留 M2.4 Credential Provider / Windows Credential Manager 中现有 Agent Service Credential；升级不得自动重签、轮换或撤销。
+- 保留 Broker 客户端注册、Grant / Revocation、issuer / Resource Audience 绑定及维持授权有效所需的持久化数据 / 密钥材料；稳定 issuer、Resource URL、Audience 和有效证书身份，避免正常升级触发无故重新授权。
+- 保留有效的 AirBridge CurrentUser 证书、私钥关联和信任状态；不重新导入、不扩大信任范围、不无故删除或重建证书。
+- 保留 Adapter 管理的当前用户级 Antigravity / OpenCode MCP 配置条目；更新时只修改明确归属 AirBridge 的条目，保留其他 MCP Server、未知字段与 JSONC 注释 / 格式。项目级 / 系统级配置仍只读、不修改。
+- 客户端自己的 OAuth Token Vault 完全由客户端管理。AirBridge 不读取、复制、备份、改写或删除其中的 Access Token / Refresh Token。正常升级保留客户端端点及 Broker 状态，使客户端原授权继续有效；若必要迁移导致某个授权失效，必须明确说明并只要求受影响的客户端 / Agent 重新授权。
+- 对旧 schema 中不存在的新字段，只能按版本化迁移表添加明确默认值；现有用户值和未知字段不得被新默认值覆盖。迁移必须幂等，可重复运行而不改变已迁移值。
+
+**安全迁移与失败恢复：**
+- 修改前为 AirBridge 配置、Broker 持久化状态 / 密钥元数据、AirBridge 管理的证书元数据，以及本次确实要写入的当前用户 MCP 配置建立受当前 Windows 用户 ACL 保护的本地备份；不备份客户端 OAuth Token Vault，也不复制 / 导出 M2.4 Credential Manager Secret。
+- 先备份、校验、暂存，再原子提交；跨多个文件 / 数据库的迁移必须有明确提交标记和恢复日志，确保失败后可判定回滚或完成，不留下半迁移状态。
+- 配置损坏、未知 schema、备份失败或回滚失败时，GUI 显示明确恢复提示；不得自动清空、重建或覆盖原配置。迁移未解决前，Gateway Worker 保持停止，原始用户数据和持久化 ON / OFF 值保留供恢复。
+- 迁移成功后，按保留下来的 Gateway 总开关、启动策略和各 Agent enabled 状态恢复服务；升级过程不得自动开启 Gateway 或 Agent。
+
+配置读写必须具备 schema 版本、原子写入、损坏恢复提示和未知字段保留策略。
 
 ## 6. Agent 身份与权限
 
