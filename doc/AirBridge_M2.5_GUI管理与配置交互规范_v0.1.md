@@ -1,0 +1,264 @@
+# AirBridge M2.5：Gateway GUI 管理与配置交互规范
+
+- 文档编号：AB-M2.5-GUI-001
+- 版本：0.1（初稿，待评审）
+- 日期：2026-11-20
+- 状态：目标交互规范；GUI 尚未实现
+- 关联文档：《AirBridge M2.5：统一运行时与 Gateway GUI 管理架构设计》
+
+## 1. 设计目标
+
+AirBridge GUI 必须成为 Gateway 的统一管理控制台。用户无需手工创建 Python 虚拟环境、手工运行 Gateway 命令或直接编辑 MCP JSON，即可完成 Gateway 日常管理。
+
+主机 A 和主机 B 的 GUI 页面、功能和选项完全相同。两台主机的初始配置可以不同，但不得根据主机环境隐藏功能或自动推断角色。
+
+## 2. 导航结构建议
+
+在 AirBridge 主界面增加 Gateway 管理入口，页面分为：
+
+1. Gateway 总览
+2. 服务与传输配置
+3. Agent 管理
+4. MCP 客户端配置
+5. 日志与诊断
+
+页面入口在 A/B 两端均可见；Gateway OFF 时仍允许查看和编辑配置、初始化 Agent、诊断配置，不启动服务。
+
+## 3. Gateway 总览
+
+总览至少显示：
+
+| 字段 | 说明 |
+|---|---|
+| 本机 Gateway 开关 | 用户配置的 ON / OFF |
+| 实际运行状态 | Stopped / Starting / Running / Stopping / Failed / Degraded |
+| 启动策略 | 是否随 AirBridge 启动 |
+| Worker 数量 | 当前运行、已启用和失败的实例数量 |
+| Agent | Antigravity、OpenCode 等 Agent 的独立状态 |
+| 传输方式 | 当前配置的 stdio / Streamable HTTP 等 |
+| Endpoint / 端口 | 仅展示实际绑定成功的 endpoint |
+| PID | 对应 Worker 的真实进程 ID |
+| 运行时长 | Worker 本次运行时长 |
+| 版本 | AirBridge / Gateway / MCP SDK 版本 |
+| 最近错误 | 最近一次启动或健康检查错误摘要 |
+
+必须将“配置已启用”与“服务正在运行”分开显示。例如：
+- Enabled + Running：已启用且运行正常；
+- Enabled + Failed：配置要求运行，但启动失败；
+- Disabled + Stopped：用户主动关闭；
+- Disabled + Running：状态异常，应触发受管进程收敛。
+
+## 4. 服务控制
+
+提供：
+- 启动 Gateway；
+- 停止 Gateway；
+- 重启 Gateway；
+- 刷新状态；
+- 查看 Worker 日志。
+
+按钮行为：
+- Starting 时禁用重复启动；
+- Stopping 时禁用重复停止/重启；
+- Failed 时允许查看诊断并重新启动；
+- 启动前校验 Agent 凭据、端口和配置；
+- 停止前显示在途请求数量；排空超时则明确报告，不得谎报停止成功；
+- 所有操作显示实际结果，不仅根据按钮点击推断成功。
+
+## 5. Gateway 配置
+
+### 5.1 总开关
+
+`Gateway enabled` 是本机总开关：
+- ON：允许 Gateway Supervisor 启动已启用 Agent 的 Worker。
+- OFF：停止所有受管 Worker；不关闭 AirBridge HTTP API、Runtime Session 或串行通信。
+- 配置更改必须持久化；写入失败时恢复 UI 原值并提示错误。
+
+### 5.2 随 AirBridge 启动
+
+提供独立选项：
+- ON：AirBridge GUI 启动后，根据总开关和 Agent 开关启动 Worker。
+- OFF：AirBridge 启动时不自动启动 Worker，用户可手动启动。
+- 该选项不等于 Windows 开机启动；是否增加开机启动属于另行评审的功能。
+
+### 5.3 Agent 实例开关
+
+每个 Agent 独立启用：
+- Antigravity；
+- OpenCode；
+- 后续注册的其他 Agent。
+
+Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭据和服务端权限策略。
+
+### 5.4 传输与网络
+
+初版目标优先评估 Streamable HTTP，以便 AirBridge GUI 管理 Gateway 生命周期。页面可显示：
+- transport；
+- listen host；
+- port；
+- MCP endpoint；
+- 访问认证状态。
+
+安全限制：
+- 初版默认只允许 loopback；
+- 不允许用户通过 GUI 将 Gateway 直接暴露到 LAN / 公网；
+- loopback 不是身份认证，启动前必须完成本地客户端访问认证设计；
+- 端口冲突必须明确报错，不能静默改成任意端口后不更新 MCP 客户端配置。
+
+## 6. Agent 管理
+
+每个 Agent 行展示：
+- Agent ID；
+- 显示名称；
+- 是否启用；
+- 凭据状态（有效 / 缺失 / 已撤销 / 读取失败 / 未验证）；
+- 已授权 Scope；
+- Worker 运行状态；
+- 最近连接时间；
+- 最近错误。
+
+操作：
+- 添加 / 初始化 Agent；
+- 启用 / 停用 Agent；
+- 查看权限；
+- 授予或撤销敏感权限（必须二次确认）；
+- 轮换凭据；
+- 撤销 Agent 凭据；
+- 运行连接诊断。
+
+安全 UX：
+- 不提供 Token 明文查看/复制入口；
+- 不在普通配置页面显示秘密；
+- 新 Agent 默认只读；
+- Scope 变更明确展示新增/移除权限并要求确认；
+- 凭据读取失败时 fail closed，不得提供“跳过认证继续运行”按钮。
+
+## 7. MCP 客户端配置
+
+### 7.1 客户端发现
+
+支持检测：
+- Antigravity；
+- OpenCode。
+
+发现结果需区分：
+- 已安装且找到配置；
+- 已安装但未找到配置；
+- 未检测到客户端；
+- 配置文件格式错误；
+- 配置文件不可读/不可写。
+
+不得因为未检测到客户端而阻止 Gateway 自身运行。
+
+### 7.2 配置写入
+
+自动配置流程：
+1. 读取现有客户端配置；
+2. 解析并校验格式；
+3. 展示将新增/更新的 AirBridge MCP Server 项；
+4. 备份原文件；
+5. 仅新增或更新 AirBridge 对应条目；
+6. 保留其他 MCP Server、用户自定义字段和无关配置；
+7. 原子写入；
+8. 重新读取并验证；
+9. 展示成功/失败和备份位置。
+
+如果格式未知、解析失败或不能安全合并，必须停止写入并提示用户；不得覆盖整个文件。配置文件中不得写入 Agent Token。
+
+### 7.3 客户端连接验证
+
+提供分层诊断：
+- 配置文件可解析；
+- endpoint 可达；
+- 本地访问认证通过；
+- MCP initialize 成功；
+- tools/list 成功；
+- 指定只读工具调用成功。
+
+连接验证默认使用只读工具，不调用 EDA execute、Shell execute 或文件写入能力。
+
+## 8. 日志与诊断
+
+日志页面支持按时间、Agent、Worker、级别筛选。展示：
+- Worker 启停；
+- PID / 端口绑定；
+- MCP initialize / tools/list；
+- Agent 认证和 Scope 拒绝的非秘密摘要；
+- HTTP API 依赖状态；
+- 崩溃退出码；
+- 端口冲突；
+- 配置解析和写入结果。
+
+禁止记录：
+- Bearer Token、凭据内容、Authorization Header；
+- 用户密码；
+- 完整脚本正文；
+- 不必要的工程数据和文件内容。
+
+日志应可导出脱敏诊断包；导出前提示用户检查敏感路径或环境信息。
+
+## 9. 双机状态与提示
+
+在 AirBridge 通信状态页显示：
+- 本机 Gateway：ON / OFF；
+- 对端 Gateway：ON / OFF / 未知；
+- 最后交换时间；
+- 协议能力是否支持 Gateway 状态字段。
+
+收到双方状态后：
+- ON/OFF：显示状态互补；
+- OFF/ON：显示状态互补；
+- ON/ON：显示配置冲突弹窗；
+- OFF/OFF：显示配置冲突弹窗。
+
+弹窗建议文案：
+
+**Gateway 配置冲突**
+
+本机与对端的 Gateway 启用状态相同。通常双机部署应由一端启用 Gateway，另一端关闭 Gateway。
+
+请分别检查两端 AirBridge GUI 中的 Gateway 开关。本提示不会自动修改配置或停止服务。
+
+提供“稍后处理”和“打开 Gateway 设置”操作。是否增加“忽略本次会话”选项待评审。
+
+如果对端状态未知、链路未连接或对端协议版本不支持该字段，不弹冲突窗，只显示“尚未获取对端 Gateway 状态”。
+
+## 10. GUI 状态模型
+
+建议统一状态枚举：
+- DISABLED：总开关关闭；
+- STOPPED：已启用但尚未启动；
+- STARTING：启动中；
+- RUNNING：健康检查通过；
+- DEGRADED：进程存在但依赖或健康检查异常；
+- STOPPING：正在排空和关闭；
+- FAILED：启动失败或进程异常退出。
+
+状态来源必须是 Supervisor 对进程、健康检查和配置的真实观察。GUI 不得仅依据配置值推断 Worker 已运行。
+
+## 11. 可访问性与可维护性
+
+- 关键状态同时使用文本和图标/颜色表达，不只依赖颜色；
+- 启停操作显示进行中状态和结果；
+- 所有错误提供可复制的非秘密诊断代码；
+- 配置变更有明确保存反馈；
+- 页面刷新不应触发服务重启；
+- UI 线程不得执行阻塞式网络调用、进程等待或配置文件扫描；
+- 日志刷新和健康检查应有频率上限，不能影响 AirBridge 串行通信与 GUI 响应。
+
+## 12. GUI 验收清单
+
+- [ ] A/B 两端显示相同 Gateway 页面和相同功能入口。
+- [ ] Gateway OFF 时所有管理页面仍可访问，AirBridge Runtime 正常。
+- [ ] 总开关、Agent 开关和随 AirBridge 启动配置正确持久化。
+- [ ] GUI 能准确显示配置状态与实际运行状态。
+- [ ] 启动、停止、重启和失败恢复反馈真实。
+- [ ] 能显示每个 Worker 的 PID、endpoint、端口和最近错误。
+- [ ] Agent 凭据状态、Scope 和撤销状态正确。
+- [ ] MCP 配置备份、合并、验证与恢复有效，其他 Server 配置不丢失。
+- [ ] 日志脱敏，不出现 Token 或 Authorization Header。
+- [ ] 双机 ON/ON 与 OFF/OFF 弹窗正确；ON/OFF 与 OFF/ON 不弹冲突。
+- [ ] 未建立链路、对端未知和旧协议场景不误报。
+- [ ] Gateway 故障不会导致 GUI 假死或 AirBridge Runtime 停止。
+
+---
