@@ -27,6 +27,8 @@
    - Opaque Token、Grant 撤销、双 HTTPS、Agent / Resource Audience 绑定和证书管理。
 5. [ADR-011：Runtime Session Gateway 状态扩展与旧版兼容](ADR-011_RuntimeSession_Gateway_State_Extension.md)
    - 复用 0x15 / 0x16，新增可选 `gateway.state.v1`，兼容旧版并验证四种开关组合。
+6. [M2.5 架构评审决策清单 v0.1](AirBridge_M2.5_架构评审决策清单_v0.1.md)
+   - 区分用户已确认原则、技术提案、尚需产品决策的默认行为和实施前必须完成的 PoC Gate。
 
 ## 三、历史草稿
 
