@@ -1,4 +1,4 @@
-name: G-01 Windows CurrentUser Certificate Trust Store
+name: G-01 Windows CurrentUser trust-scope and chain CI
 
 on:
   pull_request:
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   currentuser-https-trust:
-    name: CurrentUser Root import + X509Chain validation (Windows)
+    name: Standard-user store-scope + custom-chain checks (Windows)
     runs-on: windows-2025
     timeout-minutes: 8
 
@@ -40,7 +40,7 @@ jobs:
           "runner_image=$env:ImageOS"
           "runner_version=$env:ImageVersion"
 
-      - name: Test CurrentUser Root import and chain validation
+      - name: Run noninteractive-safe trust-scope and custom-chain checks
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
