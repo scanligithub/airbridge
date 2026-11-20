@@ -2,12 +2,15 @@
 # -*- coding: utf-8 -*-
 """HTTP contract tests for the A-side correlated EDA and Shell endpoints."""
 import json
+import os
+import sqlite3
 import tempfile
 import urllib.error
 import urllib.request
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_security import AgentSecurityStore
 from airbridge_app import AntigravityIPCServer
@@ -590,6 +593,22 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(status, 401, body)
         self.assertEqual(body["error"]["code"], "INVALID_AGENT_TOKEN")
         self.assertEqual(self.worker.frames, [])
+
+
+    def test_stop_does_not_close_injected_security_store(self):
+        self.server.stop()
+        issued = self.security.issue_token("store-owner-check", ["runtime.read"])
+        self.assertTrue(issued["token_id"])
+
+    def test_stop_closes_server_owned_security_store(self):
+        db_path = str(Path(self.temp.name) / "server-owned.sqlite3")
+        with patch.dict(os.environ, {"AIRBRIDGE_AGENT_SECURITY_DB": db_path}):
+            server = AntigravityIPCServer(FakeWorker(), port=0)
+            owned_store = server.security_store
+            server.start()
+            server.stop()
+        with self.assertRaises(sqlite3.ProgrammingError):
+            owned_store.list_tokens()
 
     def test_read_only_agent_cannot_submit_eda_execution(self):
         read_only = self.security.issue_token(
