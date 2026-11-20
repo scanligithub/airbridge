@@ -46,31 +46,36 @@ namespace AirBridge.G01
 '@
 }
 
-function Open-G01CurrentUserRootStore {
+function Open-G01CurrentUserStore {
     [CmdletBinding()]
-    param()
+    param([Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$StoreName)
 
-    $rootNamePointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni('Root')
+    $storeNamePointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($StoreName)
     try {
         $handle = [AirBridge.G01.NativeMethods]::CertOpenStore(
             [IntPtr]10,             # CERT_STORE_PROV_SYSTEM_W
             [uint32]0,
             [IntPtr]::Zero,
             [uint32]0x00010000,     # CERT_SYSTEM_STORE_CURRENT_USER
-            $rootNamePointer
+            $storeNamePointer
         )
     }
     finally {
-        [Runtime.InteropServices.Marshal]::FreeHGlobal($rootNamePointer)
+        [Runtime.InteropServices.Marshal]::FreeHGlobal($storeNamePointer)
     }
 
     if ($handle -eq [IntPtr]::Zero) {
         $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        throw [System.ComponentModel.Win32Exception]::new($code, 'CertOpenStore(CurrentUser\Root) failed.')
+        throw [System.ComponentModel.Win32Exception]::new($code, "CertOpenStore(CurrentUser\\$StoreName) failed.")
     }
     return $handle
 }
 
+function Open-G01CurrentUserRootStore {
+    [CmdletBinding()]
+    param()
+    return Open-G01CurrentUserStore -StoreName 'Root'
+}
 function Close-G01CertificateStore {
     [CmdletBinding()]
     param(
@@ -97,6 +102,8 @@ function Invoke-G01CryptUIWizImport {
         [IntPtr]$DestinationStore,
 
         [string]$WizardTitle = 'AirBridge certificate trust',
+
+        [string]$DestinationLabel = 'Cert:\CurrentUser\Root',
 
         # CI-only: skips all UI. Never use this switch in the product deployment flow.
         [switch]$NoUI,
@@ -158,7 +165,7 @@ function Invoke-G01CryptUIWizImport {
             Success = $true
             Flags = ('0x{0:X8}' -f $flags)
             UiSuppressed = [bool]$NoUI
-            Destination = 'Cert:\CurrentUser\Root'
+            Destination = $DestinationLabel
         }
     }
     finally {
