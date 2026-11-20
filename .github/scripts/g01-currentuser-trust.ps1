@@ -85,6 +85,9 @@ public sealed class G01LoopbackTlsServer : IDisposable
             using (TcpClient tcp = listener.AcceptTcpClient())
             using (SslStream ssl = new SslStream(tcp.GetStream(), false))
             {
+                tcp.ReceiveTimeout = 8000;
+                ssl.ReadTimeout = 8000;
+                ssl.WriteTimeout = 8000;
                 ssl.AuthenticateAsServer(_certificate, false, SslProtocols.Tls12, false);
                 byte[] request = new byte[4096];
                 int received = ssl.Read(request, 0, request.Length);
@@ -197,6 +200,7 @@ function Invoke-G01HttpsProbe {
     $handler.UseProxy = $false
     $handler.CheckCertificateRevocationList = $false
     $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(10)
     try {
         $uri = "https://localhost:$($server.Port)/health"
         $response = $client.GetAsync($uri).GetAwaiter().GetResult()
@@ -234,6 +238,7 @@ function Assert-G01HttpsRejected {
     $handler.UseProxy = $false
     $handler.CheckCertificateRevocationList = $false
     $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(10)
     $rejectedForTls = $false
     try {
         try {
@@ -335,10 +340,12 @@ try {
     $results.local_machine_root_unchanged = 'PASS'
     $results.local_machine_root_after_import_count = $localMachineAfterImport.Count
 
+    Write-Host 'Phase: X509Chain.Build for a CA trusted in CurrentUser Root'
     Test-TrustedChain -Certificate $leaf
     $results.trusted_chain_build = 'PASS'
 
     # Real loopback TLS handshake using the platform default certificate validation.
+    Write-Host 'Phase: positive https://localhost loopback TLS probe'
     $httpsResult = Invoke-G01HttpsProbe -Certificate $leaf
     $results.localhost_https = 'PASS'
     $results.https_status_code = $httpsResult.StatusCode
@@ -346,10 +353,12 @@ try {
     $results.https_port = $httpsResult.Port
 
     # Same trusted CA, but a wrong DNS SAN must be rejected by the system TLS client.
+    Write-Host 'Phase: negative hostname mismatch TLS probe'
     Assert-G01HttpsRejected -Certificate $mismatchLeaf -Uri 'https://localhost:{PORT}/health' -Scenario 'hostname-mismatch'
     $results.hostname_mismatch_rejected = 'PASS'
 
     # A second CA which is not in CurrentUser Root must not be trusted.
+    Write-Host 'Phase: negative untrusted CA TLS probe'
     Assert-G01HttpsRejected -Certificate $untrustedLeaf -Uri 'https://localhost:{PORT}/health' -Scenario 'untrusted-CA'
     $results.untrusted_ca_rejected = 'PASS'
 
