@@ -348,12 +348,15 @@ Hosted Actions 无法由操作员完成 Windows 原生证书导入向导，因�
 
 - P/Invoke 对 crypt32.dll / cryptui.dll 的声明能加载；
 - CRYPTUI_WIZ_IMPORT_SRC_INFO 结构体可正确构造；
-- CertOpenStore 打开 CERT_SYSTEM_STORE_CURRENT_USER 下的 Root Store；
-- ALLOW_CERT + NO_CHANGE_DEST_STORE + NO_UI 调用成功并回读测试证书 Thumbprint；
-- CryptUIWizImport 返回成功，CurrentUser Root 按 Thumbprint 回读；
-- Windows 默认 X509Chain 对 localhost Leaf 正向验证成功；
+- CertOpenStore 打开 CERT_SYSTEM_STORE_CURRENT_USER 下的 My Store；
+- ALLOW_CERT + NO_CHANGE_DEST_STORE + NO_UI 调用成功，并从 CurrentUser My 按 Thumbprint 回读测试证书；
 - LocalMachine Root 前后 Thumbprint 集合不变；
-- CurrentUser Root 与 LocalMachine Root 前后不变；清理后 CurrentUser My 精确临时测试证书已删除；
+- CurrentUser Root 与 LocalMachine Root 前后 Thumbprint 集合不变；清理后 CurrentUser My 精确临时测试证书已删除；
 - 最后按 SID 删除整个 disposable Profile。
 
-该 CI 只验证 API / 结构体 / 句柄 / flags 在 CurrentUser My 控制场景下的导入与清理路径。此前将同一 NO_UI API 指向 CurrentUser Root 的 hosted Actions 测试在 native call 内 120 秒超时，阶段标记证明未返回；这不能说明目标机交互向导失败，但也不能算 Root 导入成功。NO_UI 模式不显示 Windows 向导，不证明用户授权，也不能代替 G-01B。
+该 CI 只验证 API / 结构体 / 句柄 / flags 在 CurrentUser My 控制场景下的导入与清理路径。
+
+**已完成的 CI 证据（2026-11-20）：** [run #44744616225](https://github.com/scanligithub/airbridge/actions/runs/44744616225) SUCCESS。一次性非管理员用户 Profile 中 API 返回、CurrentUser My Thumbprint 回读、CurrentUser Root / LocalMachine Root 不变、清理全部 PASS。该结果证明 CryptUIWizImport 的 API/P/Invoke 控制调用可工作，但不证明 Root 导入或图形 UI。
+
+**Root 对照结果：** [run #44743044286](https://github.com/scanligithub/airbridge/actions/runs/44743044286) 和 [run #44743660093](https://github.com/scanligithub/airbridge/actions/runs/44743660093) 以 CurrentUser Root 为目的 Store 时，native API 调用内 120 秒超时；第二轮明确记录了调用前 marker、无调用后 marker。两次都未改变 CurrentUser Root / LocalMachine Root，临时 Profile 清理完成。将这一点标记为 hosted-runner Root no-UI 操作的限制/失败，而不是生产交互向导失败。
+此前将同一 NO_UI API 指向 CurrentUser Root 的 hosted Actions 测试在 native call 内 120 秒超时，阶段标记证明未返回；这不能说明目标机交互向导失败，但也不能算 Root 导入成功。NO_UI 模式不显示 Windows 向导，不证明用户授权，也不能代替 G-01B。
