@@ -230,7 +230,7 @@
 5. 前后比较 `CurrentUser\\Root` 与 `LocalMachine\\Root` Thumbprint 集合均完全一致；CI 不写入任一 Root store；
 6. 按精确 Thumbprint 清理 `CurrentUser\\My` 临时证书，并删除临时用户及其 Profile。
 
-**明确不在 hosted Actions 执行的操作：** CurrentUser Root 导入。Windows Root store 是受保护的信任边界，写入会触发 Windows 用户确认；GitHub-hosted Runner 无法完成交互式确认。之前的 `Import-Certificate` 得到 `UI is not allowed in this operation`，而 `.NET X509Store.Add()` 与 `certutil -f -user -addstore Root` 在无交互子进程中分别超时。最新证据没有 Root 导入回读或链结果，不能记为导入成功。Microsoft 说明见 [Managing Certificates with Certificate Stores](https://learn.microsoft.com/en-us/windows/win32/seccrypto/managing-certificates-with-certificate-stores)。
+**明确不在 hosted Actions 执行的操作：** CurrentUser Root 导入。Windows Root store 是受保护的信任边界，写入会触发 Windows 用户确认；GitHub-hosted Runner 无法完成交互式确认。之前的 `Import-Certificate` 得到 `UI is not allowed in this operation`；`.NET X509Store.Add()` 与 `certutil -f -user -addstore Root` 在无交互子进程中分别超时。随后一次 `crypt32.dll` `CertOpenStore` / `CertAddEncodedCertificateToStore` 组合探针也在 120 秒后超时，阶段标记位于两个原生调用之前，无法判断具体阻塞点；拆分阶段的后续运行在测试步骤前被取消。以上均未提供 Root 导入回读或链结果，不能记为导入成功。Microsoft 说明见 [Managing Certificates with Certificate Stores](https://learn.microsoft.com/en-us/windows/win32/seccrypto/managing-certificates-with-certificate-stores)。
 
 **最新运行结果：** [G-01 Windows CI run #44737030727](https://github.com/scanligithub/airbridge/actions/runs/44737030727) 在 commit `1310b5d` 上为 SUCCESS。标准用户身份验证通过；CustomTrustStore 正向链 / 负向拒绝、SAN 夹具、CurrentUser Root 与 LocalMachine Root 不变、精确清理全部 PASS。进程属性虽报告 `SessionId=2` 与 `Environment.UserInteractive=True`，但没有可由人工批准 Windows 根证书确认的操作员；导入仍未运行。
 
