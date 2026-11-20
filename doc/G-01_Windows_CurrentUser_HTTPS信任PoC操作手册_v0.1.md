@@ -132,7 +132,13 @@ certutil.exe -dump $leafCer
 
 向目标 Windows 用户展示 Root Subject、Thumbprint、NotBefore / NotAfter、导入目标（Cert:\CurrentUser\Root）、CA 私钥用途、证书可被本用户信任链使用的影响，以及“拒绝后 AirBridge 仍安装成功但 Managed HTTPS 不可用”的结果，取得明确同意。用户未明确同意时不得运行导入命令。
 
-仅在模拟部署阶段、且用户明确同意后，部署程序使用 Windows 证书存储 API 写入公钥证书。不要在非交互式部署子进程中调用依赖证书导入向导 UI 的 `Import-Certificate`；CI 已观察到该 cmdlet 在 GitHub Runner 上报 `UI is not allowed in this operation`。建议用 .NET `X509Store` API 执行实际写入，Consent UI 仍由 AirBridge 部署界面提前完成：
+仅在模拟部署阶段、且用户明确同意后，才测试 Windows 证书存储写入。当前 CI 结果尚未确认一种可直接用于产品部署的无交互写入方法：
+
+- PowerShell `Import-Certificate` 在 GitHub 非交互 Runner 中报 `UI is not allowed in this operation`。
+- 标准 Windows 用户子进程成功打开 `CurrentUser\\Root`，但 `.NET X509Store.Add()` 没有返回；测试阶段文件停在 `currentuser-root-store-opened`，120 秒后被 wrapper 终止。不能把它记为成功，也不能据此断定交互式安装界面下同样失败。
+- 当前 CI 正在测试 `certutil -f -user -addstore Root` 作为诊断性导入路径。Microsoft 文档列明 `-user` 指向当前用户证书库，但同时明确不建议把 certutil 当作正式产品代码接口；因此即使该命令在 CI 通过，也不能直接冻结为 AirBridge 安装器 API。参考：[Microsoft certutil](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/certutil)。
+
+正式安装器必须在部署 UI 已取得明确 Consent 后调用经验证的 Windows 证书存储接口；Consent UI 由 AirBridge 部署界面负责。以下 `.NET X509Store` 代码仅作为当前待验证候选，不是已确认的产品实现：
 
 ~~~powershell
 $rootPublic = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCer)
