@@ -2737,6 +2737,7 @@ class AirBridgeMainWindow(QMainWindow):
       from airbridge_mcp_gateway.gateway_policy import GatewayPolicyStore
       from airbridge_mcp_gateway.credential_store import default_credential_store
       from airbridge_mcp_gateway.client_adapters import AntigravityAdapter, OpenCodeAdapter
+      from tools import airbridge_agent_admin
     except ModuleNotFoundError:
       gateway_package_dir = os.path.join(os.path.dirname(__file__), "mcp_gateway")
       if gateway_package_dir not in sys.path:
@@ -2744,7 +2745,9 @@ class AirBridgeMainWindow(QMainWindow):
       from airbridge_mcp_gateway.gateway_policy import GatewayPolicyStore
       from airbridge_mcp_gateway.credential_store import default_credential_store
       from airbridge_mcp_gateway.client_adapters import AntigravityAdapter, OpenCodeAdapter
+      from tools import airbridge_agent_admin
 
+    self.gateway_agent_admin = airbridge_agent_admin
     self.gateway_policy_store = GatewayPolicyStore.for_current_user()
     self._gateway_policy_agents: Dict[str, bool] = {}
     self._gateway_policy_invalid = False
@@ -2775,6 +2778,9 @@ class AirBridgeMainWindow(QMainWindow):
 
     self.ipc = AntigravityIPCServer(self.worker, port=8888)
     self.ipc.start()
+    # The existing M2.4 registry remains the authority for server-side Agent
+    # credentials; the GUI reuses it rather than creating another SQLite DB.
+    self.gateway_security_store = getattr(self.ipc, "security_store", None)
 
     self.init_ui()
     self.bind_events()
@@ -3051,12 +3057,29 @@ class AirBridgeMainWindow(QMainWindow):
     gateway_agents_layout.addWidget(self.chk_gateway_antigravity)
     gateway_agents_layout.addWidget(self.chk_gateway_opencode)
 
-    credential_row = QHBoxLayout()
-    self.lbl_gateway_antigravity_credential = QLabel("Antigravity 本机凭据：检查中")
-    self.lbl_gateway_opencode_credential = QLabel("OpenCode 本机凭据：检查中")
-    credential_row.addWidget(self.lbl_gateway_antigravity_credential)
-    credential_row.addWidget(self.lbl_gateway_opencode_credential)
-    gateway_agents_layout.addLayout(credential_row)
+    self.lbl_gateway_antigravity_credential = QLabel("Antigravity 凭据：检查中")
+    self.btn_gateway_antigravity_provision = QPushButton("Provision（只读）")
+    self.btn_gateway_antigravity_revoke = QPushButton("Revoke 凭据")
+    antigravity_credential_row = QHBoxLayout()
+    antigravity_credential_row.addWidget(self.lbl_gateway_antigravity_credential, stretch=1)
+    antigravity_credential_row.addWidget(self.btn_gateway_antigravity_provision)
+    antigravity_credential_row.addWidget(self.btn_gateway_antigravity_revoke)
+    gateway_agents_layout.addLayout(antigravity_credential_row)
+
+    self.lbl_gateway_opencode_credential = QLabel("OpenCode 凭据：检查中")
+    self.btn_gateway_opencode_provision = QPushButton("Provision（只读）")
+    self.btn_gateway_opencode_revoke = QPushButton("Revoke 凭据")
+    opencode_credential_row = QHBoxLayout()
+    opencode_credential_row.addWidget(self.lbl_gateway_opencode_credential, stretch=1)
+    opencode_credential_row.addWidget(self.btn_gateway_opencode_provision)
+    opencode_credential_row.addWidget(self.btn_gateway_opencode_revoke)
+    gateway_agents_layout.addLayout(opencode_credential_row)
+    gateway_credential_note = QLabel(
+        "Provision 使用只读 Scope（runtime.read、eda.versions.read、request.read），默认 90 天；"
+        "Token 只写入当前用户 Credential Manager，不显示、不进入 MCP 配置。Revoke 会撤销该 Agent 的全部有效凭据。"
+    )
+    gateway_credential_note.setWordWrap(True)
+    gateway_agents_layout.addWidget(gateway_credential_note)
     gateway_layout.addWidget(gateway_agents)
 
     antigravity_adapter_group = QGroupBox("Antigravity App / IDE")
@@ -3141,6 +3164,18 @@ class AirBridgeMainWindow(QMainWindow):
     self.btn_clear_console.clicked.connect(self.txt_console.clear)
     self.btn_gateway_refresh.clicked.connect(self.refresh_gateway_settings)
     self.btn_gateway_save.clicked.connect(self.save_gateway_settings)
+    self.btn_gateway_antigravity_provision.clicked.connect(
+        lambda: self.provision_gateway_agent("antigravity")
+    )
+    self.btn_gateway_antigravity_revoke.clicked.connect(
+        lambda: self.revoke_gateway_agent("antigravity")
+    )
+    self.btn_gateway_opencode_provision.clicked.connect(
+        lambda: self.provision_gateway_agent("opencode")
+    )
+    self.btn_gateway_opencode_revoke.clicked.connect(
+        lambda: self.revoke_gateway_agent("opencode")
+    )
     self.btn_gateway_antigravity_install.clicked.connect(
         lambda: self.install_gateway_adapter("antigravity")
     )
@@ -3237,20 +3272,183 @@ class AirBridgeMainWindow(QMainWindow):
           "保存新设置前会要求确认修复。"
       )
 
-    antigravity_present = self._gateway_agent_credential_present("antigravity")
-    opencode_present = self._gateway_agent_credential_present("opencode")
-    self.lbl_gateway_antigravity_credential.setText(
-        "Antigravity 本机凭据：" + ("已存在" if antigravity_present else "未配置 / 不可读取")
-    )
-    self.lbl_gateway_opencode_credential.setText(
-        "OpenCode 本机凭据：" + ("已存在" if opencode_present else "未配置 / 不可读取")
-    )
+    self._refresh_gateway_credential_status("antigravity")
+    self._refresh_gateway_credential_status("opencode")
     if self.gateway_credential_store is None:
       self.lbl_gateway_policy_status.setText(
           self.lbl_gateway_policy_status.text()
           + " Windows Credential Manager 不可用，不能启用 Agent。"
       )
+    if self.gateway_security_store is None:
+      self.lbl_gateway_policy_status.setText(
+          self.lbl_gateway_policy_status.text()
+          + " Agent Security Registry 不可用；Provision / Revoke 已禁用。"
+      )
     self.refresh_gateway_adapter_statuses()
+
+  def _refresh_gateway_credential_status(self, agent_id: str):
+    label = (
+        self.lbl_gateway_antigravity_credential
+        if agent_id == "antigravity"
+        else self.lbl_gateway_opencode_credential
+    )
+    provision_button = (
+        self.btn_gateway_antigravity_provision
+        if agent_id == "antigravity"
+        else self.btn_gateway_opencode_provision
+    )
+    revoke_button = (
+        self.btn_gateway_antigravity_revoke
+        if agent_id == "antigravity"
+        else self.btn_gateway_opencode_revoke
+    )
+    local_present = self._gateway_agent_credential_present(agent_id)
+    active_tokens = []
+    registry_available = self.gateway_security_store is not None
+    if registry_available:
+      try:
+        active_tokens = [
+            item for item in self.gateway_security_store.list_tokens(agent_id)
+            if item.get("enabled")
+        ]
+      except Exception:
+        registry_available = False
+
+    if registry_available:
+      server_text = f"服务端有效凭据：{len(active_tokens)}"
+    else:
+      server_text = "服务端凭据状态：不可读取"
+
+    local_text = "本机 Credential Manager：已存在" if local_present else "本机 Credential Manager：未配置"
+    label.setText(f"{agent_id} — {local_text}；{server_text}")
+
+    can_manage = (
+        os.name == "nt"
+        and registry_available
+        and self.gateway_credential_store is not None
+        and self.gateway_agent_admin is not None
+    )
+    provision_button.setEnabled(can_manage and not active_tokens)
+    revoke_button.setEnabled(can_manage and (bool(active_tokens) or local_present))
+
+  def provision_gateway_agent(self, agent_id: str):
+    """Reuse the tested M2.4 zero-token provisioning transaction."""
+    if self.gateway_security_store is None or not self.gateway_agent_admin:
+      QMessageBox.warning(self, "Agent Provision 不可用", "M2.4 Agent Security Registry 不可用。")
+      return
+    display = "Antigravity" if agent_id == "antigravity" else "OpenCode"
+    answer = QMessageBox.question(
+        self,
+        f"Provision {display}",
+        "将创建该 Agent 的 M2.4 Service Credential，并原子写入当前 Windows 用户 Credential Manager。"
+        "默认只读 Scope：runtime.read、eda.versions.read、request.read；有效期 90 天。"
+        "Token 不会显示，也不会写入 MCP 配置。是否继续？",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    if answer != QMessageBox.StandardButton.Yes:
+      return
+    try:
+      from types import SimpleNamespace
+
+      args = SimpleNamespace(
+          agent_id=agent_id,
+          scope=None,
+          label=f"{display} local MCP",
+          expires_days=90,
+      )
+      result = self.gateway_agent_admin._provision_agent(self.gateway_security_store, args)
+    except Exception as exc:
+      QMessageBox.warning(self, f"{display} Provision 失败", str(exc))
+      self.refresh_gateway_settings()
+      return
+
+    scopes = ", ".join(result.get("scopes", []))
+    expires = result.get("expires_at") or "Never"
+    QMessageBox.information(
+        self,
+        f"{display} Provision 成功",
+        f"Agent：{result.get('agent_id')}\n"
+        f"Token ID：{result.get('token_id')}\n"
+        f"Scopes：{scopes}\n"
+        f"到期时间：{expires}\n\n"
+        "Token 已写入 Windows Credential Manager；明文未显示。",
+    )
+    self.refresh_gateway_settings()
+
+  def revoke_gateway_agent(self, agent_id: str):
+    """Switch the Agent OFF before revoking all server and local credentials."""
+    if self.gateway_security_store is None or not self.gateway_agent_admin:
+      QMessageBox.warning(self, "Agent Revoke 不可用", "M2.4 Agent Security Registry 不可用。")
+      return
+    display = "Antigravity" if agent_id == "antigravity" else "OpenCode"
+    answer = QMessageBox.question(
+        self,
+        f"Revoke {display}",
+        "将先把该 Agent 的本机策略设为 OFF，阻止存量 STDIO 子进程继续请求；"
+        "然后撤销服务端该 Agent 的全部有效 M2.4 凭据，并删除当前用户 Credential Manager 中对应条目。"
+        "此操作不能撤销。是否继续？",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    if answer != QMessageBox.StandardButton.Yes:
+      return
+
+    # Disable this Agent first; if persistence fails, do not revoke or clean up.
+    try:
+      try:
+        gateway_enabled, agents = self.gateway_policy_store.read_snapshot()
+      except (OSError, ValueError):
+        gateway_enabled, agents = False, {}
+      agents[agent_id] = False
+      self.gateway_policy_store.write(enabled=gateway_enabled, agents=agents)
+    except (OSError, ValueError) as exc:
+      QMessageBox.critical(
+          self,
+          "无法安全撤销 Agent",
+          f"Agent OFF 策略写入失败，未执行服务端撤销或 Credential 删除。\n{exc}",
+      )
+      return
+
+    self._gateway_policy_agents = dict(agents)
+    self._gateway_policy_invalid = False
+    if agent_id == "antigravity":
+      self.chk_gateway_antigravity.setChecked(False)
+    else:
+      self.chk_gateway_opencode.setChecked(False)
+    adapter_outcomes = self._sync_installed_gateway_adapters(gateway_enabled, agents)
+
+    try:
+      result, exit_code = self.gateway_agent_admin._revoke_agent(
+          self.gateway_security_store, agent_id
+      )
+    except Exception as exc:
+      QMessageBox.critical(
+          self,
+          f"{display} Revoke 失败",
+          f"Agent 已被本机策略设为 OFF，存量 MCP Tool 调用应被阻止；"
+          f"但服务端撤销未确认：{exc}。请检查 Agent Security 状态。",
+      )
+      self.refresh_gateway_settings()
+      return
+
+    cleanup = result.get("credential_cleanup", "unknown")
+    revoked = result.get("revoked", False)
+    detail = (
+        f"服务端凭据撤销：{'已完成' if revoked else '没有活动凭据'}\n"
+        f"本机 Credential Manager 清理：{cleanup}"
+    )
+    if adapter_outcomes:
+      detail += "\nAdapter 状态：" + "; ".join(adapter_outcomes)
+    if exit_code != 0 or cleanup == "failed":
+      QMessageBox.warning(
+          self,
+          f"{display} Revoke 部分完成",
+          detail + "\nAgent 保持 OFF；请检查本机 Credential Manager 并重试清理。",
+      )
+    else:
+      QMessageBox.information(self, f"{display} Revoke 完成", detail)
+    self.refresh_gateway_settings()
 
   def _gateway_adapter_details(self, agent_id: str):
     if agent_id == "antigravity":
