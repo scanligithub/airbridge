@@ -379,6 +379,10 @@ Go / No-Go：
 - **No-Go**：任一客户端必须关闭 TLS 校验、不能信任本机 issuer / resource certificate，CurrentUser 证书信任无法覆盖某个首版承诺支持的客户端形态，或要求扩大到 LocalMachine Root / 管理员权限，或要求写入 M2.4 Agent Service Token；暂停 Streamable HTTP Managed Mode，保留既有 stdio，不得降级为无认证 HTTP。
 
 证书策略验收还必须覆盖：
+- 每台部署 M2.5 的 Windows 主机在部署阶段执行本机 CA / localhost Server Certificate bootstrap；不以 Gateway ON/OFF 决定是否准备证书；
+- 部署程序在实际目标 Windows 用户上下文完成 CurrentUser Root Consent / 导入；若安装流程提升权限，信任写入必须由目标用户非提升上下文执行；
+- CA 部署成功不启动 Broker / Worker，首次安装 Gateway 总开关仍 OFF；用户拒绝则安装继续、Managed HTTPS 不可用；
+- 升级保留有效 CA / 私钥 / Leaf / CurrentUser trust；缺失或轮换仅能通过明确部署 / Repair Consent 流程处理；
 - 安装 / 初始配置明确展示用途和信任范围，并等待用户同意；
 - 同意时只写 CurrentUser 证书信任存储，不触发 UAC，不修改 LocalMachine；
 - 拒绝、撤销、证书过期或证书不匹配时，HTTPS Gateway 明确不可用并 fail-closed；
@@ -464,6 +468,6 @@ AirBridge 不读取 Antigravity / OpenCode 的客户端 Token Vault。Broker 有
 
 ## 8.7 G-01 Windows PoC 执行手册
 
-G-01 目标主机的本机 CA / Leaf 创建、CurrentUser Root 用户同意导入、LocalMachine Root 不变验证、客户端 TLS / OAuth / MCP 测试矩阵、负向测试与清理步骤，统一见 [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。
+G-01 目标主机部署阶段的本机 CA / Leaf 创建、CurrentUser Root 用户同意导入、LocalMachine Root 不变验证、客户端 TLS / OAuth / MCP 测试矩阵、负向测试与清理步骤，统一见 [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。
 
-该手册当前为 NOT RUN；尚无任何目标主机的实测证据。PoC 不指定固定 Host A / Host B：每台计划启用 Managed HTTPS 的主机必须独立验证本机 CurrentUser Root。由于 endpoint 仅监听 loopback，MCP Client 与 Gateway 必须在同一台机器上；两台机器不共享 CA 私钥或信任状态。Chrome TLS smoke test、证书导入成功或单一客户端连通均不能单独关闭 G-01。PoC 必须验证所有首版承诺支持的客户端形态，并确认 TLS 负向场景 fail-closed。此阶段不授权产品代码、正式 EXE 或证书管理功能实施。
+该手册当前为 NOT RUN；尚无任何目标主机的实测证据。PoC 不指定固定 Host A / Host B：每台实际部署 M2.5 AirBridge 的主机都必须在部署阶段独立完成本机 CurrentUser Root trust bootstrap；Gateway OFF 不跳过 CA 部署，也不启动 Broker / Worker。由于 endpoint 仅监听 loopback，MCP Client 与 Gateway 必须在同一台机器上；两台机器不共享 CA 私钥或信任状态。Chrome TLS smoke test、证书导入成功或单一客户端连通均不能单独关闭 G-01。PoC 必须验证所有首版承诺支持的客户端形态，并确认 TLS 负向场景 fail-closed。此阶段不授权产品代码、正式 EXE 或证书管理功能实施。
