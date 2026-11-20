@@ -270,7 +270,7 @@ finally {
         $myPath = "Cert:\CurrentUser\My\$thumb"
         if (Test-Path -LiteralPath $myPath) {
             try { Remove-Item -LiteralPath $myPath -Force -ErrorAction Stop }
-            catch { $cleanupFailures.Add("Remove CurrentUser My certificate $thumb: $($_.Exception.Message)") }
+            catch { $cleanupFailures.Add("Remove CurrentUser My certificate ${thumb}: $($_.Exception.Message)") }
         }
     }
 
