@@ -19,6 +19,7 @@
 1. [ADR-007：Streamable HTTP 与 OAuth 本机授权](ADR-007_M2.5_Streamable_HTTP与OAuth本机授权.md)
 2. [ADR-008：统一 AirBridge.exe 的 Gateway Worker 进程模型](ADR-008_M2.5_统一EXE_Gateway_Worker进程模型.md)
 3. [ADR-009：Antigravity / OpenCode MCP 配置适配规范](ADR-009_M2.5_Antigravity与OpenCode配置适配规范.md)
+4. [ADR-010：本机 OAuth Broker 与多 Agent Worker 授权拓扑](ADR-010_M2.5_本机OAuth_Broker与多Agent_Worker授权拓扑.md)
 
 ## 三、v0.1 初稿
 
