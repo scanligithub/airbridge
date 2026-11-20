@@ -253,6 +253,79 @@ class ClientAdapterTests(unittest.TestCase):
 
         self.assertEqual(path.read_text(encoding="utf-8"), source)
 
+    def test_remove_owned_antigravity_entry_preserves_other_servers_and_backs_up(self):
+        path = self.root / "mcp_config.json"
+        original = json.dumps({
+            "mcpServers": {
+                "airbridge-antigravity": {
+                    "command": str(self.exe.resolve()),
+                    "args": ["mcp", "stdio"],
+                    "env": {"AIRBRIDGE_AGENT_ID": "antigravity"},
+                    "disabled": True,
+                },
+                "other-server": {"command": "other.exe", "args": []},
+            },
+            "userSetting": True,
+        }, indent=2)
+        path.write_text(original, encoding="utf-8")
+
+        result = self.antigravity.remove_owned(path, "antigravity")
+
+        payload = self.read_jsonc(path)
+        self.assertNotIn("airbridge-antigravity", payload["mcpServers"])
+        self.assertEqual(payload["mcpServers"]["other-server"], {
+            "command": "other.exe", "args": []
+        })
+        self.assertTrue(payload["userSetting"])
+        self.assertTrue(result.changed)
+        self.assertIsNotNone(result.backup_path)
+        self.assertEqual(Path(result.backup_path).read_text(encoding="utf-8"), original)
+
+    def test_remove_owned_refuses_same_name_user_entry_without_modification(self):
+        path = self.root / "mcp_config.json"
+        original = json.dumps({
+            "mcpServers": {
+                "airbridge-antigravity": {
+                    "command": "python.exe",
+                    "args": ["-m", "some.other.server"],
+                }
+            }
+        })
+        path.write_text(original, encoding="utf-8")
+
+        with self.assertRaises(AdapterConflictError):
+            self.antigravity.remove_owned(path, "antigravity")
+
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_remove_owned_opencode_removes_only_dedicated_server_entry(self):
+        path = self.root / "opencode.jsonc"
+        payload = {
+            "mcp": {
+                "servers": {
+                    "airbridge-opencode": {
+                        "type": "local",
+                        "command": [str(self.exe.resolve()), "mcp", "stdio"],
+                        "environment": {"AIRBRIDGE_AGENT_ID": "opencode"},
+                        "disabled": True,
+                    },
+                    "other": {"type": "local", "command": ["other.exe"]},
+                }
+            }
+        }
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+        result = self.opencode.remove_owned(path, "opencode")
+
+        updated = self.read_jsonc(path)
+        self.assertNotIn("airbridge-opencode", updated["mcp"]["servers"])
+        self.assertEqual(
+            updated["mcp"]["servers"]["other"],
+            {"type": "local", "command": ["other.exe"]},
+        )
+        self.assertTrue(result.changed)
+        self.assertIsNotNone(result.backup_path)
+
     def test_jsonc_utf8_bom_is_preserved(self):
         path = self.root / "mcp_config.json"
         path.write_bytes(b"\xef\xbb\xbf" + b'{"mcpServers": {}}')
