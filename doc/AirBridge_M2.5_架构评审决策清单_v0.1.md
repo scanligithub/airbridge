@@ -28,6 +28,7 @@
 | P-15 | M2.5 固定默认 TCP 端口：OAuth Broker 38861、首个 Antigravity Worker 38862、首个 OpenCode Worker 38863；仅监听 loopback，每个 Agent 实例端口独立持久化；冲突必须显式处理，不随机切换 | 用户已确认 |
 | P-16 | 双机 Gateway 配置冲突按连接代次 / 冲突状态去重弹窗；提示可稍后处理或打开设置；GUI 保留非模态冲突提示直至恢复；首版不提供会话忽略按钮 | 用户已确认 |
 | P-17 | 升级安装保留所有有效用户 Gateway / Agent / 端口 / 证书 / OAuth Broker Grant / 当前用户 MCP 配置状态；版本化迁移须备份、原子提交、可回滚；异常配置不得静默重置为首次安装默认值 | 用户已确认 |
+| P-18 | OAuth 客户端注册：Antigravity / OpenCode 官方 CIMD Metadata URL 精确白名单优先；目标客户端不支持 CIMD 时 DCR 兼容回退；注册不授予 Agent 权限，每次 Grant 必须经用户 Consent 并绑定独立 Agent / Resource Audience / Scope；不启用任意 CIMD URL fetch | 用户已确认 |
 
 ## 2. 建议采用的技术决策
 
@@ -132,13 +133,22 @@
 
 ### D-07：OAuth 客户端注册策略
 
-建议：
-- M2.5 首批仅为 Antigravity / OpenCode 内置专用 Adapter；
-- Generic / Manual 通用 MCP Client 手动接入明确排除在首版之外；
-- 其他客户端后续只有在通过 Streamable HTTP、HTTPS 和 MCP OAuth 兼容性验证，并完成对应产品范围评审后，才考虑增加专用 Adapter 或通用接入能力；
-- 不开放无限制的任意 CIMD Metadata URL fetch；DCR / CIMD 注册不代表用户已授权 Agent；新 Client / 新 Grant 必须明确 Consent。
+**用户已确认并冻结：官方 CIMD 白名单优先 + DCR 兼容回退 + 每 Agent 独立用户授权。**
 
-**已确认：** M2.5 首批专用 Adapter 仅包含 Antigravity 和 OpenCode；Cursor、VS Code / Copilot、Cline 等不属于首批专用适配器开发范围，留待后续版本按需求和兼容性验证评估。
+首批 CIMD Client ID Metadata URL 精确白名单：
+- Antigravity：`https://antigravity.google/oauth/client-metadata.json`。官方文档指出 IDE CIMD 支持要求 2.6.0+；旧版应验证 DCR 回退。
+- OpenCode：`https://opencode.ai/oauth/opencode/client.json`。当 Authorization Server 声明支持 CIMD、公有客户端且客户端未设置自定义 `redirect_uri` 时，OpenCode 优先使用 CIMD；否则按其官方注册优先级回退 DCR。
+- AirBridge OAuth metadata 在支持的情况下声明 `client_id_metadata_document_supported=true`，同时保留 DCR registration endpoint 以兼容未支持 / 未采用 CIMD 的首批客户端版本。托管 MCP Host 配置不写入自定义 `oauth.client_id`、`client_secret` 或 `redirect_uri`，避免人为绕过标准发现顺序。
+
+注册安全边界：
+- CIMD 只接受以上两个精确、固定的 HTTPS Client ID Metadata URL；不得开放任意 URL、通配域名、用户自定义 Metadata URL 或任意重定向抓取。优先按官方已核验 Metadata 预登记 / allowlist，不需要为任意客户端 URL 发起网络请求。
+- DCR 仅作为 Antigravity / OpenCode 首批兼容回退机制，不代表新增 Generic / Manual 客户端支持。DCR 提供的 client name、logo、URI 等元数据一律视为未经验证的用户声明，不把它们当成客户端真实性证明。新 DCR Client 必须显示来源 / 声明信息并取得用户明确 Consent。
+- CIMD / DCR 注册本身只建立 OAuth Client Registration，不创建 Agent Grant、不授予 Scope、不允许访问任何 MCP Tool。
+- 每次 Grant 必须由用户确认，并精确绑定 `oauth_client_id + agent_instance_id + resource/audience + scopes`；同一个 Client ID 访问不同 Agent 或 Resource 时必须分别授权。不得因 Client ID 在白名单中而自动授予权限。
+- 严格校验 HTTPS issuer、PKCE S256、OAuth state、redirect URI 和 RFC 8707 resource；DCR 仅接受支持的公有客户端配置与授权码流程，拒绝不支持的 grant / response / token endpoint auth method。
+- DCR endpoint 需要请求限流、注册数量 / 元数据大小限制、重复注册处理和审计。未知 / 不受支持客户端不得仅凭 DCR 成功连接或获得授权。
+
+**已确认的客户端首批范围：** Antigravity 和 OpenCode 专用 Adapter；Cursor、VS Code / Copilot、Cline 等不属于首批专用适配器开发范围。
 
 **用户已确认：** Generic / Manual 通用 MCP Client 手动接入不纳入 M2.5 首版，不开发首版 GUI 入口，不列入首版验收。未来版本如有需要再单独评估。
 
@@ -178,7 +188,7 @@
 | G-03 | OpenCode OAuth | 当前目标版本完成 /mcps 或 CLI auth，并成功调用只读 MCP Tool |
 | G-04 | Worker HTTPS | 两个 Agent Resource Server 均能被目标客户端正常验证 TLS |
 | G-05 | Opaque Token / IPC | 每次请求验证 Token、Resource、Agent、Scope；撤销后下一次请求拒绝 |
-| G-06 | CIMD / DCR | 注册、用户 Consent、SSRF 防护、重定向 / DNS rebinding 测试通过 |
+| G-06 | CIMD / DCR | 两个官方 Client Metadata URL 精确白名单；受支持客户端优先 CIMD；不支持时 DCR 回退；恶意 / 任意 URL 不被抓取；DCR 声明元数据不被当成身份认证；注册与 Grant / Scope 分离；每次授权精确绑定 Client / Agent / Resource / Scope；Consent、PKCE、redirect URI、state、resource、限流与审计测试通过 |
 | G-07 | PyInstaller onefile Worker | 同一个 EXE 启动 Worker，GUI 退出/崩溃时 Worker 有界收敛，不依赖父进程临时目录 |
 | G-08 | Runtime Session | 新/新四种组合正确；新/旧、旧/新、旧/旧无误报 |
 | G-09 | Python 3.11+ | GUI、Gateway、Credential Provider、CI 和最终 EXE 统一运行时 |
@@ -197,7 +207,7 @@
 ## 6. 评审通过后的冻结范围
 
 文档评审完成后：
-1. 将已确认 P-01 至 P-17 标记为 Frozen Product Requirements；
+1. 将已确认 P-01 至 P-18 标记为 Frozen Product Requirements；
 2. 对 D-01 至 D-09 记录用户选择或明确延期；
 3. 关闭 G-01 至 G-11 的技术可行性门禁，或者明确标记 No-Go / 暂缓；
 4. 更新 M2.5 架构文档和 ADR 状态；
