@@ -3130,13 +3130,11 @@ class AirBridgeMainWindow(QMainWindow):
     if self.gateway_credential_store is None:
       return False
     try:
-      token = self.gateway_credential_store.load(agent_id)
-      # Check presence only. Never display, log, or persist the token.
-      present = bool(token)
-      del token
-      return present
+      # CredReadW presence check frees the native structure without decoding
+      # the credential blob into a Python string in the GUI process.
+      return bool(self.gateway_credential_store.exists(agent_id))
     except Exception:
-      # Missing credentials and Credential Manager read errors both mean
+      # Missing credentials and Credential Manager lookup errors both mean
       # that this Agent cannot be enabled from the GUI yet.
       return False
 
