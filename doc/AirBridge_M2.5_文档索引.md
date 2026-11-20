@@ -36,7 +36,7 @@
 ## G-01 技术 PoC 操作手册
 
 - [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)
-  - Windows CurrentUser CA / localhost Leaf 测试证书、用户同意导入、LocalMachine Root 不变检查、Chrome / Antigravity / OpenCode TLS + OAuth + MCP 矩阵、负向测试与清理。当前未在 Host A 执行，G-01 仍为 Partial Research / NOT PASS。
+  - Windows CurrentUser CA / localhost Leaf 测试证书、用户同意导入、LocalMachine Root 不变检查、Chrome / Antigravity / OpenCode TLS + OAuth + MCP 矩阵、负向测试与清理。当前未在任何目标主机执行；按每台计划启用 Managed HTTPS 的主机独立验证，G-01 仍为 Partial Research / NOT PASS。
 
 ## 三、历史草稿
 
@@ -60,6 +60,7 @@
 - OAuth Access Token 与 M2.4 Agent Service Token 不得混用；Service Token 不进入 MCP Host 配置。
 - MCP Authorization Server 和携带 Bearer Token 的 MCP Resource Server endpoint 都使用 HTTPS。
 - 本机 HTTPS 证书只在 CurrentUser 范围建立信任；安装时明确征求同意，不要求管理员权限、不修改 LocalMachine Root；拒绝信任时 Managed HTTPS Gateway 不可用且不得不安全降级。
+- CurrentUser HTTPS 信任与 CA 私钥按本机 / 当前 Windows 用户维护；loopback `localhost` Gateway 与 MCP Client 同机运行。A / B 不共享 CA 私钥或依赖固定主机签发；每台启用 Managed HTTPS 的主机分别建立信任。
 - Gateway 默认端口：OAuth Broker 38861、首个 Antigravity Worker 38862、首个 OpenCode Worker 38863；每个 Agent 实例使用独立持久化端口，冲突不随机改端口，端口变更触发 metadata / 客户端配置同步与重新授权。
 - 旧 stdio 暂时保留；不能因 OAuth HTTPS PoC 不通过而降级成无认证 HTTP。
 - Runtime Session 通过可选 `gateway.state.v1` 扩展交换状态；旧版缺失字段视为 UNKNOWN。
