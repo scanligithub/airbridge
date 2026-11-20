@@ -78,10 +78,11 @@ AirBridge GUI 必须成为 Gateway 的统一管理控制台。用户无需手工
 
 ### 5.2 随 AirBridge 启动
 
-提供独立选项：
-- ON：AirBridge GUI 启动后，根据总开关和 Agent 开关启动 Worker。
-- OFF：AirBridge 启动时不自动启动 Worker，用户可手动启动。
-- 该选项不等于 Windows 开机启动；是否增加开机启动属于另行评审的功能。
+提供独立选项 `gateway.start_with_airbridge`：
+- **默认 ON（`true`）**：AirBridge GUI 启动后，仅当 Gateway 总开关 ON 且对应 Agent 实例已启用时，Supervisor 才启动其 Worker。
+- OFF（`false`）：AirBridge GUI 启动时不自动启动 Gateway Worker；用户仍可在 GUI 中手动启动。
+- 该选项不能覆盖 `gateway.enabled` 总开关。首次安装时 `gateway.enabled=false`，所以首次启动仍不会运行任何 Worker。
+- **M2.5 首版不实现 Windows 登录自动启动 AirBridge GUI**，不创建注册表 Run 项、Startup 快捷方式或计划任务。Windows 登录自启动与 GUI 启动 Gateway 是两个独立功能，前者留待后续版本评估。
 
 ### 5.3 Agent 实例开关
 
