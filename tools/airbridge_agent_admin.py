@@ -129,8 +129,8 @@ def _revoke_token(store: AgentSecurityStore, token_id: str) -> tuple[dict, int]:
         return {"revoked": changed, "credential_cleanup": "not_applicable"}, 0
 
     agent_id = target["agent_id"]
-    credentials = WindowsCredentialStore()
     try:
+        credentials = WindowsCredentialStore()
         stored_token = credentials.load(agent_id)
     except CredentialNotFound:
         return {
