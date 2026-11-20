@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/scripts/g01-currentuser-trust.ps1"
       - ".github/scripts/run-g01-as-standard-user.ps1"
+      - ".github/scripts/g01-interactive-currentuser-import.ps1"
       - ".github/workflows/g01-windows-currentuser-ci.yml"
   workflow_dispatch:
 
@@ -39,6 +40,35 @@ jobs:
           "powershell=$($PSVersionTable.PSVersion)"
           "runner_image=$env:ImageOS"
           "runner_version=$env:ImageVersion"
+
+      - name: Parse interactive G-01B script (do not execute in CI)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $scriptPath = ".github/scripts/g01-interactive-currentuser-import.ps1"
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $scriptPath).Path,
+            [ref]$tokens,
+            [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | Format-List | Out-String | Write-Host
+            throw "G-01B PowerShell parser reported errors."
+          }
+          $source = Get-Content -LiteralPath $scriptPath -Raw
+          $imports = @($tokens | Where-Object {
+            $_ -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+            $_.Value -eq "Import-Certificate"
+          })
+          if ($source -notmatch "CertStoreLocation\\s+'Cert:\\\\CurrentUser\\\\Root'") {
+            throw "G-01B must target CurrentUser\\Root explicitly."
+          }
+          if ($source -match "CertStoreLocation\\s+'Cert:\\\\LocalMachine") {
+            throw "G-01B must never target LocalMachine certificate stores."
+          }
+          "G-01B syntax and target-store static checks: PASS (interactive script not executed)."
 
       - name: Run noninteractive-safe trust-scope and custom-chain checks
         shell: pwsh
