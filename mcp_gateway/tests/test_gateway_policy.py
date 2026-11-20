@@ -158,6 +158,36 @@ class GatewayPolicyTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "GATEWAY_POLICY_INVALID")
         self.assertEqual(self.client.calls, [])
 
+    def test_read_snapshot_defaults_to_first_install_off(self):
+        enabled, agents = self.policy.read_snapshot()
+        self.assertFalse(enabled)
+        self.assertEqual(agents, {})
+
+    def test_read_snapshot_returns_global_and_per_agent_settings(self):
+        self.policy.write(
+            enabled=True,
+            agents={"Antigravity": True, "OpenCode": False},
+        )
+
+        enabled, agents = self.policy.read_snapshot()
+
+        self.assertTrue(enabled)
+        self.assertEqual(agents, {"antigravity": True, "opencode": False})
+
+    def test_read_snapshot_rejects_malformed_agent_entries(self):
+        self.policy_path.parent.mkdir(parents=True, exist_ok=True)
+        self.policy_path.write_text(
+            json.dumps({
+                "schema_version": 1,
+                "gateway": {"enabled": True},
+                "agents": {"antigravity": {"enabled": "yes"}},
+            }),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "enabled must be a Boolean"):
+            self.policy.read_snapshot()
+
     def test_policy_writer_is_atomic_and_does_not_store_credentials(self):
         self.policy.write(enabled=True, agents={"Antigravity": True, "OpenCode": False})
 
