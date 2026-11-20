@@ -73,6 +73,9 @@
 - 首次安装默认 OFF 与升级配置 / 授权状态保留、配置损坏恢复和迁移回滚验证；
 - Antigravity / OpenCode CIMD 白名单、DCR 回退、用户 Consent、独立 Agent / Resource / Scope Grant 和反 SSRF 测试；
 - G-01 初步研究：Windows CurrentUser Root 有 Chrome / Bun / OpenCode Desktop 的公开依据；Antigravity App / IDE 与 OpenCode 目标版本尚未实测；G-01 目前 Partial Research / NOT PASS；
+
+- G-01A：GitHub Actions 非交互 Store-scope / CustomTrustStore Chain CI；明确不导入 Root。
+- G-01B：`.github/scripts/g01-interactive-currentuser-import.ps1`，按操作手册第 13 节在目标 Windows 用户交互桌面做 disposable CurrentUser Root 导入与系统链验证；当前 NOT RUN。
 - 本机 OAuth Broker + 两个 Worker endpoint 的 HTTPS 证书真实客户端验证；
 - 默认 TCP 端口、loopback-only 监听、实际 bind 冲突检测、Worker / Broker 端口迁移与 OAuth 重新授权验证；
 - Antigravity Authenticate 与 OpenCode `/mcps` / CLI auth 验证；
