@@ -58,7 +58,7 @@
 
 ### D-03：GUI 关闭时 Gateway Worker 行为
 
-**用户已确认：** GUI 正常退出时，先对在途请求进行有界排空，然后停止所有 Gateway Worker 和 OAuth Broker；不保留后台 Worker，不允许 Worker 脱离 Supervisor 孤立运行。首版不引入系统托盘 / 后台常驻模式。
+**用户已确认：** GUI 退出时，先对在途请求进行有界排空，然后停止所有受管 Gateway Worker；不保留后台 Worker，不允许 Worker 脱离 Supervisor 孤立运行。OAuth Broker 等共享依赖的关闭顺序由 Supervisor 管理，未单独作为用户确认项。
 
 ### D-04：本机 HTTPS 证书信任
 
