@@ -426,3 +426,20 @@ No Shell execution, EDA Execute, Capture, Allegro, design modification, manual H
 - **Stage F: PASS** for the deployed exact-head EXE on Host A, including two graceful close / restart cycles and final recovery.
 - The earlier Host A Stages C–E evidence remains scoped to the isolated test-Agent acceptance described in Section 10; it is not being re-labelled as a new test against this exact-head EXE.
 - PR #14 remains Draft / Open / unmerged and still requires a separate merge decision.
+
+
+## 15. PR #14 merge completion — 2026-11-20
+
+The merge decision was explicitly authorized by the user after Stages A / B / F passed.
+
+- PR: https://github.com/scanligithub/airbridge/pull/14
+- Final PR head before merge: `c4b1cd6bf2cbd7c8a05fa4ace7650bf0b1d2140c`.
+- Merge method: **Squash**.
+- PR state after merge: **closed / merged**.
+- Merge commit: `454e1dc1e43009cb0eb5f23e85327a6135c9418a`.
+- Verified `main` branch HEAD after merge: `454e1dc1e43009cb0eb5f23e85327a6135c9418a`.
+- The merged PR tree includes the exact-head source revision accepted on Host A plus the acceptance documentation update. No additional application-code changes were introduced after the accepted executable source commit `5dcdd572c083602a58416655ef282286af5229c3`.
+
+This section supersedes earlier statements in this runbook that PR #14 remained Draft / Open / unmerged. Those statements describe the state at the time their respective historical records were written.
+
+Host A remains running the verified executable with launcher PID `18268`, GUI / HTTP PID `2484`, and listener `127.0.0.1:8888`. No Host B or EDA operations were performed as part of the merge.
