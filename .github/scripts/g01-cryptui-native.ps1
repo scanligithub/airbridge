@@ -99,7 +99,10 @@ function Invoke-G01CryptUIWizImport {
         [string]$WizardTitle = 'AirBridge certificate trust',
 
         # CI-only: skips all UI. Never use this switch in the product deployment flow.
-        [switch]$NoUI
+        [switch]$NoUI,
+
+        # Optional CI diagnostic file. Records the exact native-call boundary.
+        [string]$PhaseFile
     )
 
     if (-not (Test-Path -LiteralPath $CertificateFile -PathType Leaf)) {
@@ -130,6 +133,9 @@ function Invoke-G01CryptUIWizImport {
             $flags = $flags -bor 0x00000001
         }
 
+        if ($PhaseFile) {
+            'before-cryptuiwizimport-native-call' | Set-Content -LiteralPath $PhaseFile -Encoding UTF8
+        }
         $ok = [AirBridge.G01.NativeMethods]::CryptUIWizImport(
             $flags,
             [IntPtr]::Zero,
@@ -137,6 +143,9 @@ function Invoke-G01CryptUIWizImport {
             [ref]$source,
             $DestinationStore
         )
+        if ($PhaseFile) {
+            'after-cryptuiwizimport-native-call' | Set-Content -LiteralPath $PhaseFile -Encoding UTF8
+        }
         if (-not $ok) {
             $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
             if ($NoUI) {
