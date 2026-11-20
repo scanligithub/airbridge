@@ -359,9 +359,24 @@ OAuth 托管模式必须同时验证：
 - https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization
 - https://www.rfc-editor.org/rfc/rfc6750
 
+### G-01 公开资料初步结论（2026-11-20；非 PoC PASS）
+
+- Windows CurrentUser（HKCU）证书库与 LocalMachine（HKLM）分离；Chromium 在 Windows TCP TLS 本地信任决策中读取 Current User Trusted Root Certification Authorities。参考 Microsoft / Chromium 文档。
+- OpenCode 项目支持回复称 V2 Desktop 使用 OS certificate store；OpenCode CLI 的 TLS 行为取决于目标 Bun / Node 打包版本与 system-CA 设置。Bun 提供 `NODE_USE_SYSTEM_CA=1` / `--use-system-ca`，Windows 当前运行时文档描述会读取系统 CA。需对 Desktop / CLI 分别实测。
+- Antigravity 官方文档未明确其 App / IDE / CLI 使用哪个 TLS trust store，CurrentUser Root 兼容性仍未知。
+
+因此 G-01 暂记 **Partial Research / NOT PASS**。完整证据、来源及测试矩阵见《架构评审决策清单》4.1 / 4.2 和 ADR-007 9.5。不能以浏览器通过或证书导入成功代替目标 MCP 客户端 OAuth / MCP 实测。
+
+**Windows PoC 至少覆盖：**
+- CurrentUser Root 仅经用户同意导入；记录 thumbprint，验证 LocalMachine 未改变；
+- Chrome、Antigravity App / IDE、OpenCode Desktop、OpenCode CLI 分别测试同一 `https://localhost:<port>` 证书链、SAN、OAuth discovery、PKCE、MCP initialize / tools/list / 只读调用；
+- OpenCode CLI 若需 system CA 选项，记录实际 runtime 版本及其支持前提；禁止关闭 TLS 验证；
+- CA 撤销 / 移除、证书过期、SAN 不匹配、证书链缺失均应 fail-closed；
+- 保留用户拒绝信任时的 stdio / AirBridge Core / Runtime 可用性。
+
 Go / No-Go：
-- **Go**：Antigravity 与 OpenCode 均能在正常证书校验下完成 OAuth 并访问各自 Resource Server，Agent / audience / scope 隔离、撤销和恢复测试通过。
-- **No-Go**：任一客户端必须关闭 TLS 校验、不能信任本机 issuer / resource certificate，CurrentUser 证书信任无法覆盖目标客户端，或要求扩大到 LocalMachine Root / 管理员权限，或要求写入 M2.4 Agent Service Token；暂停 Streamable HTTP Managed Mode，保留既有 stdio，不得降级为无认证 HTTP。
+- **Go**：所有首版承诺支持的 MCP 客户端形态都能在 CurrentUser trust 范围完成正常 TLS、OAuth 和只读 MCP 调用，且负向测试 fail-closed；Agent / audience / scope 隔离、撤销和恢复测试通过。
+- **No-Go**：任一客户端必须关闭 TLS 校验、不能信任本机 issuer / resource certificate，CurrentUser 证书信任无法覆盖某个首版承诺支持的客户端形态，或要求扩大到 LocalMachine Root / 管理员权限，或要求写入 M2.4 Agent Service Token；暂停 Streamable HTTP Managed Mode，保留既有 stdio，不得降级为无认证 HTTP。
 
 证书策略验收还必须覆盖：
 - 安装 / 初始配置明确展示用途和信任范围，并等待用户同意；
