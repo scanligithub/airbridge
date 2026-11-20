@@ -114,6 +114,25 @@ def _provision_agent(store: AgentSecurityStore, args: argparse.Namespace) -> dic
     }
 
 
+def _revoke_agent(store: AgentSecurityStore, agent_id: str) -> tuple[dict, int]:
+    """Revoke server credentials first, then report local vault cleanup precisely."""
+    changed = store.revoke_agent(agent_id)
+    if os.name != "nt":
+        return {"revoked": changed, "credential_cleanup": "not_applicable"}, 0
+    try:
+        deleted = WindowsCredentialStore().delete(agent_id)
+    except CredentialStoreError:
+        return {
+            "revoked": changed,
+            "credential_deleted": False,
+            "credential_cleanup": "failed",
+        }, 1
+    return {
+        "revoked": changed,
+        "credential_deleted": deleted,
+        "credential_cleanup": "deleted" if deleted else "not_found",
+    }, 0
+
 def main() -> int:
     args = build_parser().parse_args()
     store = AgentSecurityStore.from_env()
@@ -144,17 +163,15 @@ def main() -> int:
                 changed = store.revoke_token(args.token_id)
                 credential_deleted = None
             else:
-                changed = store.revoke_agent(args.agent_id)
-                credential_deleted = None
-                if os.name == "nt":
-                    try:
-                        credential_deleted = WindowsCredentialStore().delete(args.agent_id)
-                    except CredentialStoreError:
-                        credential_deleted = False
-            result = {"revoked": changed}
-            if credential_deleted is not None:
-                result["credential_deleted"] = credential_deleted
-            print(json.dumps(result, ensure_ascii=False))
+                result, exit_code = _revoke_agent(store, args.agent_id)
+                print(json.dumps(result, ensure_ascii=False))
+                if exit_code:
+                    print(
+                        "Server credential is revoked, but local Credential Manager cleanup failed; retry cleanup.",
+                        file=sys.stderr,
+                    )
+                return exit_code
+            print(json.dumps({"revoked": changed}, ensure_ascii=False))
             return 0
         if args.command == "list":
             print(json.dumps(store.list_tokens(args.agent_id), ensure_ascii=False, indent=2))
