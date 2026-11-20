@@ -163,7 +163,7 @@ class GatewayPolicyTests(unittest.TestCase):
 
         payload = json.loads(self.policy_path.read_text(encoding="utf-8"))
         self.assertEqual(payload["schema_version"], 1)
-        self.assertTrue(payload["enabled"])
+        self.assertTrue(payload["gateway"]["enabled"])
         self.assertEqual(payload["agents"], {
             "antigravity": {"enabled": True},
             "opencode": {"enabled": False},
