@@ -1,10 +1,10 @@
 # AirBridge M2.4.1 — Host A Tokenless Credential Acceptance Runbook
 
-- Status: preparation only; no Host A operation has been performed by this change
+- Status: Host A Stages A–F accepted on 2026-11-20; PR #14 remains Draft / Open and is not merged
 - PR: #14 (Draft; not merged)
 - Branch: `feature/m2-4-zero-touch-agent-auth`
-- Scope: Windows Credential Manager provisioning, Gateway Agent-ID lookup, read-only HTTP/MCP verification, revocation
-- Explicit exclusions: no EXE deployment, no process termination, no Shell / EDA execution, no Capture / Allegro lifecycle operation
+- Scope: exact-revision Windows EXE build and SHA-256 verification, Windows Credential Manager provisioning, Gateway Agent-ID lookup, read-only HTTP/MCP verification, revocation, graceful desktop / HTTP lifecycle validation
+- Explicit exclusions: no forced process termination, no Shell / EDA execution, no Capture / Allegro lifecycle operation, no Host B operation, and no formal OpenCode / Antigravity MCP Host migration
 
 ## 1. Acceptance stages
 
@@ -233,6 +233,76 @@ This runbook does not authorize deployment, process termination, database replac
 ### Acceptance result and remaining boundary
 
 - **Stages C–E: PASS** for the isolated test Agent credential lookup, authenticated HTTP / MCP read-only checks, server-side revocation and local Credential Manager cleanup.
-- **Stage A / B: not claimed by this acceptance record.** The running executable's directory name identified the PR #14 source SHA, but this record does not include a fresh manual-dispatch build run plus independent `BUILD_INFO.txt` and executable SHA-256 verification.
-- **Stage F: not performed.** No AirBridge EXE replacement or GUI shutdown test was attempted. This still requires separate explicit authorization.
-- The above does not constitute Host B, Capture, Allegro, EDA execution, Shell execution, MCP Host migration, or production Agent migration acceptance.
+- **Stages A / B: PASS** for the manual-dispatch build from exact PR head `35dd48dd162bd47db882de9137c870b388a58601`, artifact inspection, and independent Host A EXE SHA-256 / size verification; see Section 11.
+- **Stage F: PASS** for graceful GUI shutdown, parent / child process exit, port release, relaunch of the same verified EXE, GUI recovery, HTTP listener recovery, and continued HTTP 401 protection for unauthenticated requests; see Section 11.
+- The acceptance does not cover Host B, Capture, Allegro, EDA execution, Shell execution, formal MCP Host migration, or production Agent migration.
+
+
+## 11. Stage A / B / F acceptance update — 2026-11-20
+
+### Stage A — exact-revision GitHub build
+
+- Workflow: **AirBridge Windows EXE Build**, run #7.
+- Run URL: https://github.com/scanligithub/airbridge/actions/runs/44661076364
+- Source branch: `feature/m2-4-zero-touch-agent-auth`.
+- Source commit: `35dd48dd162bd47db882de9137c870b388a58601`.
+- Build result: `success`.
+- Artifact name: `AirBridge-Windows-x64-35dd48dd162bd47db882de9137c870b388a58601`.
+- Artifact ID: `14595437949`.
+- Uploaded ZIP size: `48,911,885` bytes.
+- Uploaded artifact ZIP SHA-256 digest: `71238dd1f4c03e033a8170c20a4dfaf9b5d67bd3967fd6e577ec256f1e28b379`.
+- The build log recorded `BUILD_INFO.txt` with `source_commit=35dd48dd162bd47db882de9137c870b388a58601`, Python 3.10.11, PyInstaller 6.22.3, Windows x64, EXE size `49,245,414` bytes, and EXE SHA-256 `0f55cecd703801788093187191577a3588c4543f020e4bd1fb265dfc5671e631`.
+
+### Stage B — independent Host A artifact verification
+
+- Verified executable path: `E:\\download\\AirBridge-Windows-x64-35dd48dd162bd47db882de9137c870b388a58601\\AirBridge.exe`.
+- Host A independently calculated EXE SHA-256: `0f55cecd703801788093187191577a3588c4543f020e4bd1fb265dfc5671e631`.
+- Host A independently reported file size: `49,245,414` bytes.
+- The adjacent `BUILD_INFO.txt` source commit, SHA-256, size, Python version, PyInstaller version and platform matched the build record.
+- Result: **PASS**. The executable that was running on Host A was the same verified build artifact; no additional download or binary replacement was needed for this acceptance.
+
+### Stage F — graceful shutdown and restart
+
+All operations below were explicitly authorized by the user and were performed on Host A using the normal desktop close path. No forced process termination was used.
+
+**Before close**
+
+- The verified EXE ran from the path recorded in Stage B.
+- Parent / launcher PID: `9608`, parent process `explorer.exe` PID `14128`.
+- GUI / HTTP child PID: `8480`.
+- GUI window handle: `589988`.
+- TCP listener: `127.0.0.1:8888`, owned by PID `8480`.
+- Unauthenticated `GET /api/v1/runtime/capabilities` returned HTTP 401.
+
+**Graceful close**
+
+- Sent Windows `WM_CLOSE` to the verified AirBridge GUI window for PID `8480`.
+- Message delivery result: `1`; message result: `0`.
+- GUI PID `8480` exited.
+- Parent / launcher PID `9608` exited.
+- TCP port `8888` was released.
+- No `Stop-Process`, taskkill, or forced termination was used.
+- Result: **PASS**.
+
+**Restart and recovery**
+
+- Rechecked the EXE SHA-256 before restart; it still matched the Stage B value.
+- Relaunched the same verified EXE path using `Start-Process`.
+- New parent / launcher PID: `9600`.
+- New GUI / HTTP child PID: `19740`.
+- GUI window handle: `591982`.
+- TCP listener returned on `127.0.0.1:8888`, owned by PID `19740`; its executable path matched the verified EXE.
+- An immediate first sample reported `Responding=False`; after a 10-second stabilization interval, the GUI reported `Responding=True`, and a non-mutating `WM_NULL` probe returned `RESPONDED`.
+- Unauthenticated `GET /api/v1/runtime/capabilities` again returned HTTP 401.
+- Result: **PASS**. The temporary early `Responding=False` sample cleared after startup stabilization and was not persistent.
+
+### Stage F evidence boundary
+
+The acceptance directly verified graceful GUI / parent process exit, release and recovery of TCP port 8888, successful relaunch, stable GUI responsiveness, and continued HTTP authentication enforcement. The SQLite Store shutdown / ownership behavior is additionally covered by the PR's Agent Security CI and implementation tests; this host run did not separately instrument or inspect an OS-level SQLite file handle. No database was deleted, replaced, copied, or modified during Stage F.
+
+### Overall Host A result
+
+- **Stages A–F: PASS** within the scope described in this runbook.
+- The AirBridge desktop application was left running after successful restart, under PID `19740`, with its HTTP listener on `127.0.0.1:8888`.
+- No EDA Execute request, Shell operation, Capture operation, Allegro operation, Host B operation, or formal MCP Host migration was performed.
+- PR #14 remains Draft / Open and requires a separate merge decision.
