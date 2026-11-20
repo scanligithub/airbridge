@@ -27,6 +27,7 @@
 | P-14 | 本机 HTTPS 证书仅在当前 Windows 用户范围建立信任；安装时须明确征求用户同意，不要求管理员权限，不修改 LocalMachine Root；拒绝信任时托管 HTTPS Gateway 不可用，禁止不安全降级 | 用户已确认 |
 | P-15 | M2.5 固定默认 TCP 端口：OAuth Broker 38861、首个 Antigravity Worker 38862、首个 OpenCode Worker 38863；仅监听 loopback，每个 Agent 实例端口独立持久化；冲突必须显式处理，不随机切换 | 用户已确认 |
 | P-16 | 双机 Gateway 配置冲突按连接代次 / 冲突状态去重弹窗；提示可稍后处理或打开设置；GUI 保留非模态冲突提示直至恢复；首版不提供会话忽略按钮 | 用户已确认 |
+| P-17 | 升级安装保留所有有效用户 Gateway / Agent / 端口 / 证书 / OAuth Broker Grant / 当前用户 MCP 配置状态；版本化迁移须备份、原子提交、可回滚；异常配置不得静默重置为首次安装默认值 | 用户已确认 |
 
 ## 2. 建议采用的技术决策
 
@@ -48,11 +49,27 @@
 
 以下项目仍需产品决策；已由用户明确确认的条目已在条目内标记为冻结，不再视为待决策。
 
-### D-01：首次安装时 Gateway 默认状态
+### D-01：首次安装默认与升级配置迁移
 
-**用户已确认并冻结：首次安装时 Gateway 总开关默认 OFF。** 新安装创建初始配置时必须写入 `gateway.enabled=false`，首次启动不得自动启动任何 Gateway Worker。
+**用户已确认并冻结：首次安装时 Gateway 总开关默认 OFF。** 仅真正首次安装创建初始配置时，必须写入 `gateway.enabled=false`，首次启动不得自动启动任何 Gateway Worker。
 
-升级行为建议：升级安装保留用户已有的 Gateway 配置，不将现有 ON/OFF 状态重置；作为配置迁移兼容要求实施。
+**用户已确认并冻结：升级安装保留所有有效用户配置和授权状态，不得套用首次安装默认值重置用户环境。** 至少包括：
+- Gateway 总开关 `gateway.enabled`、`gateway.start_with_airbridge`、各 Agent 实例启用状态；
+- 稳定的 `agent_instance_id`、`client_type_id`、`adapter_id`、Scope、监听地址、Broker / Worker 端口及 endpoint；
+- M2.4 Agent Service Credential 在当前 Windows 用户 Credential Manager 中的既有条目；升级不得自动重新签发、轮换或撤销；
+- OAuth Broker 的客户端注册、Grant / Revocation 状态、issuer / Resource Audience 绑定及维持这些状态所需的持久化数据 / 密钥材料；
+- AirBridge 当前用户级 Antigravity / OpenCode MCP 配置中由 Adapter 管理的条目，以及其他 MCP Server、未知字段和 JSONC 注释 / 格式；
+- 仍有效且由 AirBridge 管理的 CurrentUser 证书及其私钥关联 / 信任状态；升级不得无故删除、重建或静默扩大证书信任范围。
+
+**授权数据边界：** Antigravity / OpenCode 自己的 OAuth Token Vault 仍完全由客户端管理。AirBridge 不读取、复制、备份、迁移、改写或删除客户端 Access Token / Refresh Token。正常升级应保持 issuer、Resource URL / Audience 和 Broker 持久化状态稳定，使已有授权无需无故重新进行；若必要变更确实导致某个授权失效，必须明确告知并只要求受影响的客户端 / Agent 重新授权。
+
+**迁移与恢复要求：**
+- 通过可靠的安装 / 实例标记区分首次安装与升级；升级时即使配置文件缺失、损坏或 schema 不支持，也不得误判为首次安装并静默写入默认配置。
+- 升级前为 AirBridge 配置、Broker 持久化状态 / 密钥元数据、AirBridge 管理的证书元数据和将被 Adapter 修改的当前用户 MCP 配置建立受当前用户 ACL 保护的本地备份；不得把客户端 OAuth Token Vault 纳入备份。
+- 按 schema version 执行可重复、幂等的迁移；保留未知字段和已存在的用户值。只允许为旧 schema 中确实不存在的新字段应用明确记录的迁移默认值，不得覆盖现有值。
+- 迁移先备份、校验、暂存，再原子提交；任一步骤失败均回滚到升级前状态，不留下配置、Grant、证书或 MCP endpoint 的半迁移状态。
+- 配置损坏、未知版本或备份 / 回滚失败时，GUI 显示明确恢复提示；不得自动清空或重建配置。托管 Gateway Worker 在迁移未解决前保持停止，原始用户设置和数据保留供恢复。
+- 成功迁移后根据保留的用户开关和 Agent 状态恢复服务，不因“正在升级”而自动开启 Gateway 或 Agent。
 
 ### D-02：Gateway 随 AirBridge 启动
 
@@ -179,9 +196,9 @@
 ## 6. 评审通过后的冻结范围
 
 文档评审完成后：
-1. 将已确认 P-01 至 P-16 标记为 Frozen Product Requirements；
+1. 将已确认 P-01 至 P-17 标记为 Frozen Product Requirements；
 2. 对 D-01 至 D-09 记录用户选择或明确延期；
-3. 关闭 G-01 至 G-10 的技术可行性门禁，或者明确标记 No-Go / 暂缓；
+3. 关闭 G-01 至 G-10 的技术可行性门禁，并新增升级迁移保留 / 回滚 Gate（G-11），或者明确标记 No-Go / 暂缓；
 4. 更新 M2.5 架构文档和 ADR 状态；
 5. 仅在用户明确批准后进入 M2.5.1 代码实施。
 
