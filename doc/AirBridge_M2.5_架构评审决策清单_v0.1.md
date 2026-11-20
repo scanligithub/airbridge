@@ -24,6 +24,7 @@
 | P-11 | M2.5 首批专用 MCP Client Adapter 仅支持 Antigravity 与 OpenCode；其他专用 Adapter 不属于首批范围 | 用户已确认 |
 | P-12 | M2.5 首版不提供 Generic / Manual 通用 MCP Client 手动接入；该能力留待后续版本评估 | 用户已确认 |
 | P-13 | 首次安装时 Gateway 总开关默认 OFF | 用户已确认 |
+| P-14 | 本机 HTTPS 证书仅在当前 Windows 用户范围建立信任；安装时须明确征求用户同意，不要求管理员权限，不修改 LocalMachine Root；拒绝信任时托管 HTTPS Gateway 不可用，禁止不安全降级 | 用户已确认 |
 
 ## 2. 建议采用的技术决策
 
@@ -67,12 +68,14 @@
 
 ### D-04：本机 HTTPS 证书信任
 
-建议优先研究 CurrentUser 范围的本机 CA / Server Certificate 信任，避免无必要的 LocalMachine Root 修改。
+**用户已确认并冻结：**
+- 本机证书信任只在当前 Windows 用户（CurrentUser）范围建立，不修改 LocalMachine 证书存储区，尤其不得写入 LocalMachine Root。
+- 首次安装 / 初始配置证书时，必须向用户清楚说明证书用途和信任范围，并取得明确同意；不得静默导入。
+- 不要求管理员权限。
+- 用户拒绝导入或撤销信任后，托管 Streamable HTTP / OAuth HTTPS Gateway 保持不可用；不得关闭 TLS 证书校验、忽略证书错误或降级成无认证 HTTP。
+- 现有 stdio 兼容路径及 AirBridge Core / Runtime 不因用户拒绝本机 HTTPS 证书而被关闭。
 
-需要决定：
-- 是否接受安装时由用户明确确认导入本机信任证书；
-- 证书被用户拒绝时，是否将 Managed HTTP Mode 保持为不可用（建议是）；
-- 是否要求管理员权限（建议初版不要求，除非 PoC 证明不可避免）。
+**仍需技术 PoC：** CurrentUser 信任证书对目标 Windows 环境、Antigravity App / IDE、OpenCode 和系统浏览器是否均生效；并验证证书 SAN、私钥保护、轮换、撤销、升级和卸载。PoC 不得擅自改变上述信任范围和用户同意要求；若无法满足，Managed HTTPS Mode 判定 No-Go，需重新评审替代方案。
 
 ### D-05：MCP Client 配置安装范围
 
@@ -154,7 +157,7 @@
 ## 6. 评审通过后的冻结范围
 
 文档评审完成后：
-1. 将已确认 P-01 至 P-13 标记为 Frozen Product Requirements；
+1. 将已确认 P-01 至 P-14 标记为 Frozen Product Requirements；
 2. 对 D-01 至 D-09 记录用户选择或明确延期；
 3. 关闭 G-01 至 G-09 的技术可行性门禁，或者明确标记 No-Go / 暂缓；
 4. 更新 M2.5 架构文档和 ADR 状态；
