@@ -25,6 +25,7 @@
 | P-12 | M2.5 首版不提供 Generic / Manual 通用 MCP Client 手动接入；该能力留待后续版本评估 | 用户已确认 |
 | P-13 | 首次安装时 Gateway 总开关默认 OFF | 用户已确认 |
 | P-14 | 本机 HTTPS 证书仅在当前 Windows 用户范围建立信任；安装时须明确征求用户同意，不要求管理员权限，不修改 LocalMachine Root；拒绝信任时托管 HTTPS Gateway 不可用，禁止不安全降级 | 用户已确认 |
+| P-15 | M2.5 固定默认 TCP 端口：OAuth Broker 38861、首个 Antigravity Worker 38862、首个 OpenCode Worker 38863；仅监听 loopback，每个 Agent 实例端口独立持久化；冲突必须显式处理，不随机切换 | 用户已确认 |
 
 ## 2. 建议采用的技术决策
 
@@ -83,13 +84,28 @@
 
 ### D-06：端口分配
 
-建议：
-- Broker 使用稳定 issuer 地址；
-- Antigravity / OpenCode Worker 使用固定且不同的 loopback 端口；
-- 端口冲突时提示用户解决，不静默切换到随机端口；
-- 变更端口时自动更新相应 MCP Host 配置。
+**用户已确认并冻结默认端口（TCP）：**
 
-最终端口范围需在 OAuth redirect / certificate SAN / 客户端 compatibility PoC 后决定。
+| 服务 | 默认端口 | 默认 HTTPS 地址 |
+|---|---:|---|
+| Local OAuth Broker | **38861** | `https://localhost:38861/` |
+| 首个 Antigravity Agent Worker | **38862** | `https://localhost:38862/mcp` |
+| 首个 OpenCode Agent Worker | **38863** | `https://localhost:38863/mcp` |
+
+**端口分配与监听规则：**
+- 三个服务使用不同端口；AirBridge 现有 HTTP API `127.0.0.1:8888` 保持不变，不与 Gateway 共用端口。
+- 仅监听本机 loopback（IPv4 `127.0.0.1` / IPv6 `::1`，按平台支持情况绑定）；面向 MCP Client 的稳定 hostname 为 `localhost`。禁止绑定 `0.0.0.0`、`::` 等通配地址，不自动开放 LAN / 公网访问。
+- 每个 Agent 实例必须有独立、固定、持久化的 TCP 端口；同类型客户端的多个实例也不得共用 Worker 监听端口。新增实例由配置管理器从 M2.5 默认候选端口池中选择未占用端口并持久化。
+- M2.5 默认候选端口池为 `38801–38864`。IANA 当前登记快照将该段列为 Unassigned；这不代表为 AirBridge 保留，也不保证目标主机端口空闲。发布时应复核 IANA 登记状态，实际启动仍必须在本机检查。
+- Windows 默认动态客户端端口范围通常为 `49152–65535`，但系统配置可能被修改；启动前仍须检查目标主机的实际动态 / excluded port range 和监听占用，不得仅凭默认值判断。
+- 端口冲突时显示端口及可获得的进程名称 / PID；冲突服务不得启动。Broker 冲突会阻断依赖它的 Managed HTTPS OAuth 服务；单个 Worker 冲突只使对应 Agent 实例失败，其它独立 Worker 可继续运行。
+- 禁止静默切换到随机端口。用户可在 GUI 主动选择候选池内的空闲端口；保存前重新校验并持久化。
+
+**端口变更规则：**
+- Worker 端口变化会改变 MCP Resource URL / Resource Audience。必须更新对应 Protected Resource Metadata 和当前用户级 Antigravity / OpenCode 配置，备份并原子写入；旧 Resource 授权失效，要求客户端重新授权。
+- Broker 端口变化会改变 OAuth issuer / Discovery Metadata。必须更新 issuer 和 Worker 元数据引用，使客户端重新发现授权服务器并重新授权；旧 issuer 下的 Grant 不得被新 issuer 复用。
+- 端口变更前先验证新端口可绑定；任一配置写入失败必须回滚配置，不得留下 listener、metadata 与 MCP Client 配置不一致的半迁移状态。证书 SAN 只绑定 hostname，不包含 TCP 端口；hostname 仍须为 `localhost` 并通过正常 TLS 校验。
+- 首次安装初始化上述默认值；升级必须保留用户已保存端口，不得重置为默认值。
 
 ### D-07：OAuth 客户端注册策略
 
