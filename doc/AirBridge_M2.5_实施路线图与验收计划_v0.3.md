@@ -247,7 +247,11 @@ M2.5 不得破坏以下既有能力：
 - Antigravity App / IDE / CLI 对本地 HTTPS Authorization Server 的支持；
 - OpenCode 对本地 HTTPS issuer、PKCE、CIMD / DCR 的支持；
 - OAuth callback、state、resource / audience、Token refresh 和 revoke；
-- 两个 Agent Worker 的授权隔离。
+- 两个 Agent Worker 的授权隔离；
+- 两个官方 CIMD Client ID 精确白名单、CIMD 优先和 DCR fallback；
+- Antigravity IDE 2.6.0+ CIMD 与旧版本 DCR fallback；OpenCode CIMD 条件、未配置自定义 redirect_uri 的兼容行为；
+- DCR 客户端声明可信度边界、Consent UI、Client / Agent / Resource / Scope 绑定；
+- 禁止任意 CIMD URL fetch，并验证 DCR 注册限流和审计。
 
 Go / No-Go：
 - **Go**：两类客户端都能完成标准 OAuth 授权，且 HTTPS 信任和凭据隔离可部署、可恢复；进入 M2.5.4 实现。
@@ -271,7 +275,10 @@ Go / No-Go：
 M2.5.4 不只是启用 Streamable HTTP Server，还必须完成：
 - OAuth Authorization Server 与 Resource Server 的分离职责；
 - Protected Resource Metadata 与 Authorization Server Metadata；
-- PKCE S256、DCR / CIMD、redirect URI 精确校验、state、resource / audience 验证；
+- PKCE S256、官方 CIMD 精确白名单优先、DCR 兼容回退、redirect URI 精确校验、state、resource / audience 验证；
+- 验证 Antigravity https://antigravity.google/oauth/client-metadata.json 与 OpenCode https://opencode.ai/oauth/opencode/client.json；拒绝相似域名、任意 URL、URL 变体和跨域重定向；
+- 分别测试 Antigravity CIMD 和旧版本 DCR 回退；测试 OpenCode 在 AS 启用 CIMD 且无自定义 redirect_uri 时采用 CIMD，在 CIMD 不可用 / 未采用时回退 DCR；
+- 测试 DCR 元数据伪造不会被当成客户端真实性证明；每个 Grant 都必须显式 Consent，并绑定 Client ID / Agent ID / Resource Audience / Scope；同一 Client ID 跨 Agent 不能复用未授权权限；
 - HTTP Worker 的 TokenVerifier 与 Agent / scope 映射；
 - M2.4 Service Token 由 Credential Provider 独立读取，绝不透传客户端 OAuth Token；
 - HTTPS issuer / certificate trust 原型先通过 M2.5.0-A Gate。
@@ -284,8 +291,8 @@ M2.5.4 不只是启用 Streamable HTTP Server，还必须完成：
 - Antigravity 与 OpenCode 分别实现配置 Adapter；
 - 自动检测产品版本和 schema；
 - 自动写入严格限定当前 Windows 用户级 / 应用用户配置；项目级 / 系统级配置仅检测并提示，不修改；
-- Antigravity IDE CIMD 需确认版本 2.6.0+；否则验证 DCR 路径；
-- OpenCode V2 使用 `mcp.servers.<name>` 的 remote schema；
+- Antigravity IDE CIMD 需确认版本 2.6.0+；旧版本 / 未采用 CIMD 的目标版本验证 DCR fallback；
+- OpenCode V2 使用 `mcp.servers.<name>` 的 remote schema；MCP 配置不写自定义 `oauth.client_id` / `client_secret` / `redirect_uri`，以便官方 CIMD 优先；
 - 两类客户端的 OAuth Token 都不得由 AirBridge GUI 读出或写入 MCP JSON。
 
 ### 8.6 发布 Gate 补充
@@ -367,6 +374,7 @@ Go / No-Go：
 
 **Antigravity：**
 - GUI 写入 `mcpServers.<name>.serverUrl`；
+- 验证官方 CIMD URL `https://antigravity.google/oauth/client-metadata.json` 与 2.6.0+ IDE CIMD 流程；旧版本验证 DCR fallback；
 - 提示用户在 Antigravity Customizations / MCP Servers 中点击 Authenticate；
 - 按其官方流程完成浏览器授权和授权码提交；
 - 通过 Worker 的成功认证请求确认实际连通；
@@ -374,6 +382,7 @@ Go / No-Go：
 
 **OpenCode：**
 - GUI 写入 V2 `mcp.servers.<name>` 的 remote `url`，首个实例默认 `https://localhost:38863/mcp`；
+- 验证 OpenCode 官方 CIMD URL `https://opencode.ai/oauth/opencode/client.json`；只有 AS 声明支持 CIMD、公有客户端且未配置自定义 `redirect_uri` 时优先 CIMD；其它受支持情形验证 DCR fallback；
 - 用户在 `/mcps` 中授权，或通过 `opencode mcp auth <name>` 启动授权；
 - 通过 Worker 的成功认证请求确认实际连通；
 - 不读取 OpenCode 私有 OAuth credential store。
