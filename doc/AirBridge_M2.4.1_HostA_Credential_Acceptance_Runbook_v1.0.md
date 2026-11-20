@@ -1,6 +1,6 @@
 # AirBridge M2.4.1 — Host A Tokenless Credential Acceptance Runbook
 
-- Status: Host A Stages A–F accepted on 2026-11-20; PR #14 remains Draft / Open and is not merged
+- Status: Host A Stages A–F accepted for artifact source `35dd48dd162bd47db882de9137c870b388a58601`; later PR #14 lifecycle / audit / token-revoke changes require a new build and Host A retest
 - PR: #14 (Draft; not merged)
 - Branch: `feature/m2-4-zero-touch-agent-auth`
 - Scope: exact-revision Windows EXE build and SHA-256 verification, Windows Credential Manager provisioning, Gateway Agent-ID lookup, read-only HTTP/MCP verification, revocation, graceful desktop / HTTP lifecycle validation
@@ -233,8 +233,9 @@ This runbook does not authorize deployment, process termination, database replac
 ### Acceptance result and remaining boundary
 
 - **Stages C–E: PASS** for the isolated test Agent credential lookup, authenticated HTTP / MCP read-only checks, server-side revocation and local Credential Manager cleanup.
-- **Stages A / B: PASS** for the manual-dispatch build from exact PR head `35dd48dd162bd47db882de9137c870b388a58601`, artifact inspection, and independent Host A EXE SHA-256 / size verification; see Section 11.
-- **Stage F: PASS** for graceful GUI shutdown, parent / child process exit, port release, relaunch of the same verified EXE, GUI recovery, HTTP listener recovery, and continued HTTP 401 protection for unauthenticated requests; see Section 11.
+- **Stages A / B: PASS for source `35dd48dd162bd47db882de9137c870b388a58601` only**; see Section 11.
+- **Stage F: PASS for the same source `35dd48dd162bd47db882de9137c870b388a58601` only**; see Section 11.
+- The PR branch subsequently changed the HTTP shutdown implementation, final-audit failure handling, and single-token revocation cleanup. Those changes are newer than the verified Host A executable and have not yet been built or accepted on Host A. Do not treat the earlier Stage A / B / F evidence as acceptance of the latest PR HEAD.
 - The acceptance does not cover Host B, Capture, Allegro, EDA execution, Shell execution, formal MCP Host migration, or production Agent migration.
 
 
@@ -302,8 +303,26 @@ The acceptance directly verified graceful GUI / parent process exit, release and
 
 ### Overall Host A result
 
-- **Stages A–F: PASS** within the scope described in this runbook.
+- **Stages A–F: PASS for the deployed / tested EXE source `35dd48dd162bd47db882de9137c870b388a58601` only.** The latest PR branch contains later source changes that still require a fresh exact-head build and, for the lifecycle changes, a separately authorized Host A Stage F retest.
 - The AirBridge desktop application was left running after successful restart, under PID `19740`, with its HTTP listener on `127.0.0.1:8888`.
 - No manual Host B operation, EDA Execute request, Shell operation, Capture operation, Allegro operation, or formal MCP Host migration was performed.
 - The existing desktop startup code schedules `auto_connect_serial` after 100 ms. That routine scans serial ports and may issue a read-only `eda_versions` probe to a discovered candidate. Because Stage F relaunched the desktop application, this built-in startup probe may have run; its outcome was not separately captured. No Host B execution or design modification was initiated.
 - PR #14 remains Draft / Open and requires a separate merge decision.
+
+
+## 12. Subsequent PR code changes — new artifact acceptance required
+
+After the Host A tests recorded in Section 11, PR #14 added the following code changes:
+
+- Bounded HTTP handler draining during GUI shutdown (default 5-second drain deadline); if an active handler does not finish, the listener is stopped, the SQLite Store is retained, and the GUI close is rejected so shutdown can be retried safely.
+- Final audit write failure now returns HTTP 503 / `AGENT_AUDIT_FINALIZATION_FAILED` and an `unknown` outcome instead of returning an apparently successful response. The durable admission audit remains the precondition for Runtime access.
+- Single-token revocation removes the local Credential Manager entry only if its stored Token ID matches the target; another current credential for the same Agent is preserved as `not_current`.
+
+These source changes are newer than the Host A binary tested in Section 11. The current running Host A EXE remains the previously verified build unless separately replaced. Before claiming these changes accepted on Host A:
+
+1. Build an EXE from the exact current PR HEAD.
+2. Independently verify `BUILD_INFO.txt`, executable SHA-256, size and source commit.
+3. Obtain explicit authorization for the updated artifact's Host A replacement / normal shutdown / restart test.
+4. Repeat Stage F and record the new parent / child PIDs, listener release and recovery, GUI responsiveness, and HTTP 401 behavior.
+
+No new artifact deployment is authorized by this runbook update. PR #14 remains Draft / Open and unmerged.

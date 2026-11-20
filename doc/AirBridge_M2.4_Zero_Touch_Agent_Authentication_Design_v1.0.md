@@ -148,12 +148,13 @@ Windows Credential Manager 可以避免明文 Token 出现在普通配置文件�
 - 管理 CLI 新增 `provision`：默认授予三个只读 Scope，直接写入并回读验证 Windows Credential Manager，只输出非秘密元数据；凭据写入失败会撤销刚签发的服务端 Token；拒绝覆盖已有有效凭据。
 - 旧 `issue` 命令现在必须显式提供 `--reveal-token` 才显示 Token；普通路径优先使用 `provision`。
 - Agent-wide revoke 同时撤销服务端凭据并尝试删除本机凭据；结果明确区分 `deleted`、`not_found`、`failed`。本地清理失败时 CLI 返回非零状态；服务端撤销仍是安全有效性的权威步骤。
+- 单 Token `revoke --token-id` 会先定位该 Token 所属 Agent，再读取当前 Credential Manager 条目；仅当 Vault 中 Token 的 ID 与被撤销 ID 完全匹配时才删除。若 Vault 保存的是同一 Agent 的另一枚凭据，返回 `credential_cleanup=not_current` 并保留它，防止撤销旧 Token 时误删当前凭据；Vault 条目缺失与读取失败分别报告。
 - Provisioning 通过 `AgentSecurityStore.issue_token(reject_if_active=True)` 在 SQLite `BEGIN IMMEDIATE` 事务内原子检查 Agent 是否已有活动凭据，避免并发 provision 为同一 Agent 创建多枚活动 Token；普通签发接口仍保留多凭据能力以支持后续受控轮换。
-- IPC Server 停止时先停止接收请求、等待活动 HTTP handler 完成、关闭 Server 并 join 服务线程，再关闭自身创建的 AgentSecurityStore；外部注入的 Store 仍由调用方负责关闭。桌面窗口关闭事件调用该停止流程，若无法安全停止则拒绝关闭。
-- HTTP 响应发送前先持久化本次请求审计记录，确保调用方收到响应时审计记录已可查询。
-- 新增测试覆盖 Windows Credential Manager 真实写入 / 读取 / 删除 round-trip、tokenless provisioning / 失败回滚 / 原子单活动凭据签发 / 撤销清理状态 / Store 所有权与关闭生命周期 / HTTP 审计时序。
+- IPC Server 停止时先停止接收请求并跟踪活动 HTTP handler；监听 socket 关闭后使用有界排空（默认 5 秒），再 join 服务线程并关闭自身创建的 AgentSecurityStore。Handler 使用 daemon thread，避免 `server_close()` 隐式无限 join；若排空超时则保留 Store、拒绝关闭 GUI，并允许请求完成后重试关闭。外部注入的 Store 仍由调用方负责关闭。
+- API 处理前先持久化 `admitted` 审计记录；Admission Audit 写入失败时请求在触及 Runtime 前以 503 拒绝。响应前再持久化最终结果；若最终审计写入失败，不返回原本的成功响应，而返回 `AGENT_AUDIT_FINALIZATION_FAILED` / HTTP 503，并将操作状态标记为 `unknown`，有 `request_id` 时要求先查询原请求、禁止盲目重提。
+- 新增测试覆盖 Windows Credential Manager 真实写入 / 读取 / 删除 round-trip、tokenless provisioning / 失败回滚 / 原子单活动凭据签发 / Agent 与单 Token 撤销清理状态 / Store 所有权 / 有界 Handler 排空 / Admission Audit 与 Final Audit 失败行为。
 - 当前 PR #14 HEAD 的 CI：M2.4 Agent Credential Provider Run #32、MCP Gateway Run #79、Agent Security Run #70、Capture Process Inventory Run #218、Runtime Session Run #119 均最终 PASS；Python 3.10 / 3.11 / 3.12 与 Windows Credential Manager 集成测试均通过。Agent Security Python 3.12 首次 HTTP 集成运行出现一次 3 秒请求超时，单独重跑该失败 Job 后通过。
-- 已新增 M2.4.1 Host A Credential Acceptance Runbook，描述 GitHub EXE artifact 构建、独立测试 Agent provision、Gateway Agent ID 只读验证和撤销步骤。当前仅为验收准备；尚未在 Host A 执行、尚未部署 EXE、尚未操作进程。
+- M2.4.1 Host A Runbook 已记录 2026-11-20 在源提交 `35dd48dd162bd47db882de9137c870b388a58601` 上完成的 EXE SHA-256、Stage C–E 凭据 / MCP 只读验收以及 Stage F 正常关闭和重启验收。随后新增的有界 Shutdown、Final Audit 失败保护和单 Token 撤销清理代码尚未包含在该 EXE 中；必须对最新 PR HEAD 重新构建、检查 Artifact，并在另行授权后对更新 EXE 重做 Stage F。
 - 尚未实现桌面管理 UI、自动生成 MCP Host 配置、自动轮换和现有配置迁移。
 
 - 建立凭据 Provider 接口和 Windows Credential Manager 后端；
