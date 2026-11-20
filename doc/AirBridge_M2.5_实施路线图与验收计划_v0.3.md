@@ -241,7 +241,7 @@ M2.5 不得破坏以下既有能力：
 
 在生产 Gateway HTTP 授权实现前，必须先完成一个可丢弃的 Windows 技术原型；该原型不进入正式 AirBridge 产品包，除非通过评审后合并。
 
-G-01 的 Windows 基础证书库测试优先由独立 GitHub Actions workflow 在 `windows-2025` Runner 执行（`.github/workflows/g01-windows-currentuser-ci.yml`）。它覆盖 CurrentUser Root 写入 / 回读、Windows X509Chain 正反向构建、LocalMachine Root 不变和精确清理；不需要 Host A / B 参与。Hosted Runner 的当前身份是 elevated `runneradmin`，所以该 CI 不等同于非管理员安装器上下文测试，也不替代 Antigravity / OpenCode 实际 TLS / OAuth / MCP 客户端验收。
+G-01 的 Windows 基础证书库测试优先由独立 GitHub Actions workflow 在 `windows-2025` Runner 执行（`.github/workflows/g01-windows-currentuser-ci.yml`）。它覆盖 CurrentUser Root 写入 / 回读、Windows X509Chain 正反向构建、LocalMachine Root 不变和精确清理；不需要 Host A / B 参与。Hosted Runner 父进程是 elevated `runneradmin`；当前 harness 会另外创建一次性普通本地用户并在该身份下执行 store / chain 检查。该标准用户子进程尚未在 Actions 中成功完成，G-01A 仍 PENDING；必须取得非管理员身份、CurrentUser Root 导入 / 回读、X509Chain 正反向结果、LocalMachine 不变和清理证据后才能 PASS。该 CI 仍不替代 Antigravity / OpenCode 实际 TLS / OAuth / MCP 客户端验收。
 
 研究范围：
 - MCP Authorization 规范要求的 HTTPS Authorization Server endpoints；
