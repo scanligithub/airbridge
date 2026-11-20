@@ -132,33 +132,15 @@ certutil.exe -dump $leafCer
 
 向目标 Windows 用户展示 Root Subject、Thumbprint、NotBefore / NotAfter、导入目标（Cert:\CurrentUser\Root）、CA 私钥用途、证书可被本用户信任链使用的影响，以及“拒绝后 AirBridge 仍安装成功但 Managed HTTPS 不可用”的结果，取得明确同意。用户未明确同意时不得运行导入命令。
 
-仅在模拟部署阶段、且用户明确同意后，才测试 Windows 证书存储写入。当前 CI 结果尚未确认一种可直接用于产品部署的无交互写入方法：
+GitHub-hosted Windows Actions 的 CurrentUser Root 写入测试揭示了一个重要的交互约束：
 
-- PowerShell `Import-Certificate` 在 GitHub 非交互 Runner 中报 `UI is not allowed in this operation`。
-- 标准 Windows 用户子进程成功打开 `CurrentUser\\Root`，但 `.NET X509Store.Add()` 没有返回；测试阶段文件停在 `currentuser-root-store-opened`，120 秒后被 wrapper 终止。不能把它记为成功，也不能据此断定交互式安装界面下同样失败。
-- 当前 CI 正在测试 `certutil -f -user -addstore Root` 作为诊断性导入路径。Microsoft 文档列明 `-user` 指向当前用户证书库，但同时明确不建议把 certutil 当作正式产品代码接口；因此即使该命令在 CI 通过，也不能直接冻结为 AirBridge 安装器 API。参考：[Microsoft certutil](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/certutil)。
+- PowerShell `Import-Certificate` 在 hosted Runner 中立即报 `UI is not allowed in this operation`。
+- 普通权限子进程中，`.NET X509Store.Add()` 和 `certutil -f -user -addstore Root` 都未返回；后者的最新证据停在 `before-certutil-currentuser-root-addstore`，120 秒后被 wrapper 终止。证据包只有公开 CER 和阶段标记，没有导入回读或链验证结果，因此均不是导入成功。
+- Microsoft 对 Windows 证书库的说明指出，Root 库受保护，用户界面会提醒用户只放置自己信任的根证书。CurrentUser Root 写入会触发 Windows 信任确认；GitHub-hosted Actions 的隐藏、非交互会话无法完成该确认。参考：[Microsoft：Managing Certificates with Certificate Stores](https://learn.microsoft.com/en-us/windows/win32/seccrypto/managing-certificates-with-certificate-stores)。
+- 因此，CI 不再尝试写入 CurrentUser Root，也不再调用 certutil。新的 CI 只在标准用户下执行只读 Store 范围检查、使用 `X509ChainPolicy.CustomTrustStore` 做正向 / 负向链验证，并确认 CurrentUser Root、LocalMachine Root 未改变。报告中的 `current_user_root_import` 明确保持 `NOT_RUN_INTERACTIVE_WINDOWS_CONSENT_REQUIRED`。这不是 G-01A 信任导入 PASS。
+- 真实 CurrentUser Root 导入必须在目标 Windows 用户的交互式桌面部署流程内进行：AirBridge 先展示并取得应用层明确 Consent，再调用 Windows 信任导入；Windows 自身的根证书确认也必须由用户实际批准。用户拒绝 / 取消或无法显示交互确认时，Managed HTTPS 保持不可用，安装仍可继续。禁止通过注册表直接写入、隐藏/自动点击确认、LocalMachine Root 或 TLS bypass 绕过保护。
 
-正式安装器必须在部署 UI 已取得明确 Consent 后调用经验证的 Windows 证书存储接口；Consent UI 由 AirBridge 部署界面负责。以下 `.NET X509Store` 代码仅作为当前待验证候选，不是已确认的产品实现：
-
-~~~powershell
-$rootPublic = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCer)
-if ($rootPublic.HasPrivateKey) {
-    throw 'Only the CA public certificate may be imported.'
-}
-
-$store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-    [System.Security.Cryptography.X509Certificates.StoreName]::Root,
-    [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
-)
-try {
-    $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-    $store.Add($rootPublic)
-}
-finally {
-    $store.Close()
-}
-~~~
-
+这几次 Actions 运行说明 hosted Runner 并不适合完成用户交互式 Root 授权；它仍可持续验证证书结构、链构建逻辑、账户隔离、只读信任范围和清理。下列 .NET X509Store 示例只有在交互式 Windows 用户会话中由实际部署 PoC 验证后，才能作为安装器候选，不是已确认产品实现：
 导入目标必须明确指定为 `StoreLocation.CurrentUser` + `StoreName.Root`；禁止改成 LocalMachine。Consent 必须在调用该 API 之前由用户明确完成，不能把 API 调用本身当成 Consent。拒绝时不导入，但模拟 AirBridge 安装仍应继续完成；只将 Managed HTTPS / OAuth 标记为不可用，Gateway 保持默认 OFF，AirBridge Core / Runtime / 串口功能不受影响。若以后需要补做，必须再次进入明确的部署 Repair 流程并重新 Consent，不能通过 Gateway ON 静默导入。
 
 ## 6. 验证信任范围
