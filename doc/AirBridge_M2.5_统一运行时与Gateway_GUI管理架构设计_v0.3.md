@@ -385,7 +385,7 @@ PyInstaller onefile 独立子进程如果需要独立于父 GUI 运行，应按 
 - 未验证 Antigravity App / IDE / CLI 和 OpenCode 当前安装版本的完整连接；
 - 未验证 PyInstaller frozen 单文件 Worker 的进程隔离和恢复；
 - OAuth Client registration 行为已冻结为 CIMD allowlist 优先 + DCR fallback；Broker 实现、重定向校验、实际目标版本行为和安全测试仍待 PoC；
-- 未定义最终端口范围、证书部署/更新方式和 OAuth Server 具体实现；
+- 默认 OAuth Broker / Worker 端口与候选端口池已按 D-06 冻结；本机 bind / excluded range 兼容性和冲突迁移仍待 PoC；证书部署 / 更新方式和 OAuth Server 具体实现仍待验证；
 - 本文仍为设计评审稿，不代表 M2.5 任何功能已实现。
 
 
