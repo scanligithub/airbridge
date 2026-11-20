@@ -27,6 +27,8 @@ M2.5 不改变 AirBridge 的产品定位：AirBridge 仍是通用、透明的双
 9. 冲突检测只在双方已经建立可交换状态的双机通信会话后进行。没有对端、链路未建立或对端不支持该能力时，不得误报冲突。
 10. AirBridge 不接管 Capture / Allegro 的启动、关闭、工程打开、保存、Tcl / SKILL 业务流程；这些流程仍由对应 Agent Skill 实现。
 11. **首次安装时 Gateway 总开关默认 OFF**；首次安装不得自动启动任何 Gateway Worker。
+12. `gateway.start_with_airbridge` 是独立启动策略，默认 ON；仅当 `gateway.enabled=true` 且 Agent 实例已启用时，GUI 启动才会拉起对应 Worker。首次安装的总开关 OFF 优先级更高。
+13. **M2.5 首版不配置 Windows 登录自动启动 AirBridge GUI**；这与 GUI 启动后的 Gateway Worker 启动策略分离，留待后续版本评估。
 
 ## 3. 当前基线与 M2.5 变化
 
