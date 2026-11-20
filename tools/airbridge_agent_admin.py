@@ -133,6 +133,7 @@ def _revoke_agent(store: AgentSecurityStore, agent_id: str) -> tuple[dict, int]:
         "credential_cleanup": "deleted" if deleted else "not_found",
     }, 0
 
+
 def main() -> int:
     args = build_parser().parse_args()
     store = AgentSecurityStore.from_env()
