@@ -383,6 +383,27 @@ class ClientAdapterTests(unittest.TestCase):
             jsonc_path,
         )
 
+    def test_opencode_global_path_respects_explicit_config_dir_over_xdg(self):
+        explicit_dir = self.root / "opencode-config-dir"
+        xdg_home = self.root / "xdg-home"
+        explicit_jsonc = explicit_dir / "opencode.jsonc"
+        xdg_jsonc = xdg_home / "opencode" / "opencode.jsonc"
+        explicit_dir.mkdir(parents=True)
+        xdg_jsonc.parent.mkdir(parents=True)
+        explicit_jsonc.write_text("{}", encoding="utf-8")
+        xdg_jsonc.write_text("{}", encoding="utf-8")
+
+        self.assertEqual(
+            OpenCodeAdapter.global_config(
+                home=self.root / "ignored-home",
+                environ={
+                    "XDG_CONFIG_HOME": str(xdg_home),
+                    "OPENCODE_CONFIG_DIR": str(explicit_dir),
+                },
+            ),
+            explicit_jsonc,
+        )
+
     def test_invalid_agent_id_is_rejected(self):
         path = self.root / "mcp_config.json"
         with self.assertRaises(ValueError):
