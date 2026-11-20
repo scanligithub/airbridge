@@ -36,6 +36,8 @@ class _Node:
     children: list["_Node"] = field(default_factory=list)
     close_pos: int = -1
     trailing_comma: bool = False
+    property_comma_positions: dict[str, int] = field(default_factory=dict)
+    trailing_comma_pos: int = -1
 
 
 class _JsoncParser:
@@ -126,6 +128,8 @@ class _JsoncParser:
         spans: dict[str, tuple[int, int]] = {}
         value: dict[str, Any] = {}
         trailing_comma = False
+        property_comma_positions: dict[str, int] = {}
+        trailing_comma_pos = -1
         self._skip()
         if self.index < len(self.source) and self.source[self.index] == "}":
             close = self.index
@@ -134,6 +138,7 @@ class _JsoncParser:
                 "object", value, start, self.index,
                 properties=properties, property_spans=spans,
                 close_pos=close, trailing_comma=False,
+                property_comma_positions=property_comma_positions,
             )
 
         while True:
@@ -163,21 +168,27 @@ class _JsoncParser:
                     "object", value, start, self.index,
                     properties=properties, property_spans=spans,
                     close_pos=close, trailing_comma=trailing_comma,
+                    property_comma_positions=property_comma_positions,
                 )
             if char != ",":
                 raise AdapterConfigurationError(
                     f"Expected ',' or '}}' at offset {self.index}"
                 )
+            comma_pos = self.index
+            property_comma_positions[key] = comma_pos
             self.index += 1
             self._skip()
             if self.index < len(self.source) and self.source[self.index] == "}":
                 trailing_comma = True
+                trailing_comma_pos = comma_pos
                 close = self.index
                 self.index += 1
                 return _Node(
                     "object", value, start, self.index,
                     properties=properties, property_spans=spans,
                     close_pos=close, trailing_comma=True,
+                    property_comma_positions=property_comma_positions,
+                    trailing_comma_pos=self.index - 1,
                 )
             trailing_comma = False
 
@@ -352,6 +363,48 @@ def _patch_jsonc_property(source: str, property_path: tuple[str, ...], value: An
     return _insert_property(source, parent, key, value)
 
 
+def _remove_jsonc_property(source: str, property_path: tuple[str, ...]) -> str:
+    """Remove one property span without rebuilding the parent JSONC object."""
+    root = _JsoncParser(source).parse()
+    parent = root
+    for segment in property_path[:-1]:
+        child = parent.properties.get(segment)
+        if child is None or child.kind != "object":
+            return source
+        parent = child
+    key = property_path[-1]
+    target = parent.properties.get(key)
+    if target is None:
+        return source
+
+    keys = list(parent.property_spans)
+    index = keys.index(key)
+    key_start = parent.property_spans[key][0]
+    target_end = target.end
+    if index < len(keys) - 1:
+        comma_pos = parent.property_comma_positions.get(key)
+        if comma_pos is None:
+            raise AdapterConfigurationError("JSONC property separator is missing")
+        start, end = key_start, comma_pos + 1
+    elif index > 0:
+        previous_key = keys[index - 1]
+        comma_pos = parent.property_comma_positions.get(previous_key)
+        if comma_pos is None:
+            raise AdapterConfigurationError("JSONC property separator is missing")
+        start, end = comma_pos, target_end
+        if parent.trailing_comma:
+            if parent.trailing_comma_pos < 0:
+                raise AdapterConfigurationError("JSONC trailing comma span is missing")
+            end = parent.trailing_comma_pos + 1
+    else:
+        start, end = key_start, target_end
+        if parent.trailing_comma:
+            if parent.trailing_comma_pos < 0:
+                raise AdapterConfigurationError("JSONC trailing comma span is missing")
+            end = parent.trailing_comma_pos + 1
+    return source[:start] + source[end:]
+
+
 class _BaseAdapter:
     server_name = ""
 
@@ -473,6 +526,45 @@ class _BaseAdapter:
             enabled=enabled,
         )
 
+    def remove_owned(self, path: str | os.PathLike[str], agent_id: str) -> AdapterResult:
+        """Remove only the exact managed AirBridge entry; reject user-owned collisions."""
+        normalized_id = _validate_agent_id(agent_id)
+        config_path, original_bytes, source, root = self._read(path)
+        source, _container = self._root_server_container(source, root)
+        root = _JsoncParser(source).parse()
+        container = self._find_container(root)
+        existing = container.properties.get(self.server_name)
+        if existing is None:
+            return AdapterResult(
+                changed=False,
+                config_path=str(config_path),
+                backup_path=None,
+                server_name=self.server_name,
+                enabled=False,
+            )
+        if not self._is_owned(existing.value, normalized_id):
+            raise AdapterConflictError(
+                f"Refusing to remove {self.server_name!r}: it is not an AirBridge entry owned by Agent {normalized_id!r}"
+            )
+        updated = _remove_jsonc_property(
+            source,
+            self._container_path() + (self.server_name,),
+        )
+        _JsoncParser(updated).parse()
+        has_bom = original_bytes.startswith(b"\xef\xbb\xbf")
+        updated_bytes = (b"\xef\xbb\xbf" if has_bom else b"") + updated.encode("utf-8")
+        backup = _backup_and_replace(config_path, original_bytes, updated_bytes)
+        return AdapterResult(
+            changed=(updated_bytes != original_bytes),
+            config_path=str(config_path),
+            backup_path=backup,
+            server_name=self.server_name,
+            enabled=False,
+        )
+
+    def _container_path(self) -> tuple[str, ...]:
+        raise NotImplementedError
+
     def _find_container(self, root: _Node) -> _Node:
         raise NotImplementedError
 
@@ -502,6 +594,9 @@ class AntigravityAdapter(_BaseAdapter):
 
     def _find_container(self, root: _Node) -> _Node:
         return self._require_object(root.properties["mcpServers"], "mcpServers")
+
+    def _container_path(self) -> tuple[str, ...]:
+        return ("mcpServers",)
 
     def _server_config(self, agent_id: str, enabled: bool) -> dict[str, Any]:
         return {
@@ -565,6 +660,9 @@ class OpenCodeAdapter(_BaseAdapter):
     def _find_container(self, root: _Node) -> _Node:
         mcp_node = self._require_object(root.properties["mcp"], "mcp")
         return self._require_object(mcp_node.properties["servers"], "mcp.servers")
+
+    def _container_path(self) -> tuple[str, ...]:
+        return ("mcp", "servers")
 
     def _server_config(self, agent_id: str, enabled: bool) -> dict[str, Any]:
         return {
