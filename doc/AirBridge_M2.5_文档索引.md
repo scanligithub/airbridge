@@ -57,7 +57,7 @@
 - Gateway 默认端口：OAuth Broker 38861、首个 Antigravity Worker 38862、首个 OpenCode Worker 38863；每个 Agent 实例使用独立持久化端口，冲突不随机改端口，端口变更触发 metadata / 客户端配置同步与重新授权。
 - 旧 stdio 暂时保留；不能因 OAuth HTTPS PoC 不通过而降级成无认证 HTTP。
 - Runtime Session 通过可选 `gateway.state.v1` 扩展交换状态；旧版缺失字段视为 UNKNOWN。
-- ON/ON、OFF/OFF 只弹窗提醒，不自动改配置或停止服务。
+- ON/ON、OFF/OFF 冲突按连接代次和状态变化去重弹窗；提供“稍后处理 / 打开 Gateway 设置”，总览持续显示非模态提示；首版无忽略按钮，不自动改配置或停止服务。
 - AirBridge 不接管 Capture / Allegro 的业务生命周期。
 
 ## 五、实施前置 Gate
