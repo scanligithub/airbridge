@@ -1,5 +1,8 @@
 # AirBridge M2.5 文档索引
 
+> **当前强制决策（2026-11-20）：** M2.5 首版只采用本机 STDIO；不使用证书、TLS、HTTP / HTTPS MCP endpoint、OAuth Broker、CIMD / DCR 或 G-01。Antigravity / OpenCode 分别启动统一 AirBridge.exe STDIO 子进程；子进程通过 M2.4 Credential Provider 取得对应 Agent Service Token。GUI 管理配置与授权凭据，MCP Host 管理子进程生命周期。权威规范：[ADR-013](ADR-013_M2.5_Stdio本机MCP接入与客户端托管生命周期.md)。以下 v0.3 文档为历史评审资料，冲突内容以 ADR-013 为准。
+
+
 - 当前评审版本：v0.3
 - 日期：2026-11-20
 - 状态：架构评审中；尚未进入产品代码实施
