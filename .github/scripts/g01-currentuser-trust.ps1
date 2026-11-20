@@ -295,13 +295,30 @@ try {
     }
 
     # Import only the public CA certificate into the runner identity's CurrentUser Root.
-    Import-Certificate -FilePath $rootCer -CertStoreLocation 'Cert:\CurrentUser\Root' -Confirm:$false -ErrorAction Stop | Out-Null
+    # The explicit consent UI is owned by the installer; CI validates the non-interactive
+    # Windows certificate-store operation that follows an already-approved consent.
+    $rootPublic = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCer)
+    if ($rootPublic.HasPrivateKey) {
+        throw 'The exported CA CER unexpectedly contains a private key.'
+    }
+    $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+        [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+        [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+    )
+    try {
+        $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $rootStore.Add($rootPublic)
+    }
+    finally {
+        $rootStore.Close()
+    }
 
     $trustedRoot = Get-Item -LiteralPath "Cert:\CurrentUser\Root\$rootThumb" -ErrorAction Stop
     if ($trustedRoot.HasPrivateKey) {
         throw 'The CurrentUser Root entry unexpectedly contains a private key. Only the public CA certificate may be imported.'
     }
     $results.current_user_root_import = 'PASS'
+    $results.current_user_root_import_method = '.NET X509Store CurrentUser Root Add'
 
     $certutilOutput = & certutil.exe -user -store Root $rootThumb 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -345,7 +362,21 @@ catch {
 finally {
     # Remove only certificates created by this run, using their exact thumbprints.
     if ($rootThumb) {
-        Remove-Item -LiteralPath "Cert:\CurrentUser\Root\$rootThumb" -ErrorAction SilentlyContinue
+        try {
+            $cleanupRootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+                [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+            )
+            $cleanupRootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            foreach ($trustedCert in @($cleanupRootStore.Certificates | Where-Object { $_.Thumbprint.ToUpperInvariant() -eq $rootThumb })) {
+                $cleanupRootStore.Remove($trustedCert)
+            }
+            $cleanupRootStore.Close()
+        }
+        catch {
+            if ($cleanupRootStore) { $cleanupRootStore.Close() }
+            throw
+        }
     }
     foreach ($thumb in $certsToRemove) {
         Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumb" -ErrorAction SilentlyContinue
