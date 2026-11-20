@@ -10,7 +10,7 @@
 
 ## 1. 目标
 
-M2.5 将 MCP Gateway 纳入 AirBridge 桌面产品的统一交付、运行时和 GUI 管理体系。用户在 AirBridge GUI 中即可完成 Gateway 的启用、配置、Agent 管理、启动/停止、运行状态查看、日志诊断，以及 Antigravity / OpenCode MCP 客户端配置。
+M2.5 将 MCP Gateway 纳入 AirBridge 桌面产品的统一交付、运行时和 GUI 管理体系。用户在 AirBridge GUI 中即可完成 Gateway 的启用、配置、Agent 实例管理、启动/停止、运行状态查看和日志诊断。M2.5 首批专用 MCP Client 配置 Adapter 仅覆盖 Antigravity / OpenCode；其他专用 Adapter 不属于首批范围。通用 MCP Client 手动接入是否纳入首版，仍是独立待决策项。
 
 M2.5 不改变 AirBridge 的产品定位：AirBridge 仍是通用、透明的双机通信与 Runtime 基础设施；Gateway 是其本机 MCP 接入层，不承担 Capture / Allegro 专业业务生命周期。
 
@@ -65,8 +65,8 @@ M2.5 不改变 AirBridge 的产品定位：AirBridge 仍是通用、透明的双
 │ AirBridge GUI                                                 │
 │  ├─ 通信与 Runtime 管理                                       │
 │  ├─ Gateway 管理与配置                                       │
-│  ├─ Agent / 凭据 / Scope 管理                                 │
-│  ├─ Antigravity / OpenCode MCP 配置                            │
+│  ├─ Agent 类型注册表 / 实例 / 凭据 / Scope 管理                 │
+│  ├─ 专用 MCP Client Adapter（首批：Antigravity / OpenCode）     │
 │  └─ 状态、日志与诊断                                          │
 ├──────────────────────────────────────────────────────────────┤
 │ AirBridge 本机服务                                            │
@@ -95,8 +95,7 @@ M2.5 不改变 AirBridge 的产品定位：AirBridge 仍是通用、透明的双
 为避免 Gateway 网络服务阻塞桌面 GUI，目标实现优先采用独立 Worker 进程。Worker 由同一个 AirBridge.exe 的内部启动入口运行，例如概念性命令：
 
 ```powershell
-AirBridge.exe --gateway-worker --agent-id antigravity
-AirBridge.exe --gateway-worker --agent-id opencode
+AirBridge.exe --gateway-worker --agent-instance-id <stable-id>
 ```
 
 以上参数只是内部入口设计示意，不是当前已存在的命令行接口。Worker 模式必须在 GUI 初始化之前分流，不能再次创建桌面窗口；不得使用另一个 Gateway 专用 EXE。是否采用多 Worker 进程或单进程多 Server，须通过可靠性、PyInstaller frozen 行为和故障隔离测试最终确认。
@@ -109,7 +108,7 @@ M2.5 目标建议增加可由 AirBridge 管理的持久 MCP 网络传输，优�
 - 每个 Agent 使用独立的 Gateway Worker / 服务实例；
 - 服务默认只监听本机 loopback，不监听 LAN 或公网；
 - 每个实例绑定固定 Agent ID，使用对应 Agent 的独立凭据和服务端 Scope；
-- Antigravity 与 OpenCode 分别连接各自的本机 MCP endpoint；
+- 首批由 Antigravity 与 OpenCode 分别连接各自的本机 MCP endpoint；其他 MCP Client 只有在相应接入方式通过兼容性与安全验证后才能纳入，通用手动接入是否属于 M2.5 首版仍待决策；
 - 端口和 endpoint 由 GUI 配置/展示，不在文档中提前固化未经验证的端口号；
 - 现有 stdio 模式在迁移期保留兼容，除非兼容性测试证明无法安全共存。托管 HTTP 模式的 OAuth Authorization Server 与 MCP Resource Server endpoint 均采用 HTTPS；HTTP 仅可用于规范允许的 loopback OAuth redirect URI，不用于携带 Bearer Access Token 的 MCP 请求。
 
@@ -131,17 +130,21 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
   "gateway": {
     "enabled": false,
     "start_with_airbridge": true,
-    "agents": {
-      "antigravity": {
-        "enabled": true,
+    "agent_instances": {
+      "<agent_instance_id_1>": {
+        "client_type_id": "antigravity",
+        "adapter_id": "antigravity.config.v1",
+        "enabled": false,
         "transport": "streamable-http",
         "listen_host": "localhost",
         "port": null
       },
-      "opencode": {
-        "enabled": true,
+      "<agent_instance_id_2>": {
+        "client_type_id": "opencode",
+        "adapter_id": "opencode.config.v1",
+        "enabled": false,
         "transport": "streamable-http",
-        "listen_host": "127.0.0.1",
+        "listen_host": "localhost",
         "port": null
       }
     }
@@ -154,7 +157,9 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 配置语义：
 - `gateway.enabled`：本机 Gateway 总开关；false 时不启动任何 Gateway Worker。
 - `gateway.start_with_airbridge`：Gateway 总开关为 true 时，是否随 AirBridge 主程序启动 Worker。
-- `agents.<agent_id>.enabled`：单个 Agent Gateway 是否启用。
+- `agent_instances.<agent_instance_id>.enabled`：单个已注册 Agent 实例的 Worker 是否启用。
+- `client_type_id`：客户端产品类型；`adapter_id`：配置适配器类型。两者都不作为 Agent 实例身份。
+- `agent_instance_id`：AirBridge 为每个本机注册实例生成的稳定唯一 ID；同一种客户端可注册多个实例。
 - `listen_host`：默认固定为 loopback；是否允许修改必须经过安全评审，初版不得开放公网监听。
 - `port`：由配置管理器分配并持久化；冲突时提示用户，不静默改用未知端口。
 
@@ -162,8 +167,9 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 
 ## 6. Agent 身份与权限
 
-- Antigravity、OpenCode 分别拥有独立稳定的 Agent ID、凭据和服务端 Scope。
-- 一个 Worker 固定绑定一个 Agent ID；MCP 请求不能通过参数切换 Agent ID。
+- 每个已注册 Agent 实例都拥有独立稳定的 `agent_instance_id`、Credential 和服务端 Scope；`client_type_id` / `adapter_id` 描述客户端与配置适配方式，不代替实例身份。
+- M2.5 首批专用 Adapter 仅为 Antigravity / OpenCode；通用手动接入是否纳入首版仍待产品决策。
+- 一个 Worker 固定绑定一个 `agent_instance_id`；MCP 请求不能通过参数切换 Agent 身份。
 - Gateway 从 M2.4 Credential Provider 获取对应 Token；Token 不进入 MCP JSON、普通配置文件、命令行参数、GUI 明文日志或模型上下文。
 - 默认只授予 M2.3 / M2.4 规定的只读 Scope：`runtime.read`、`eda.versions.read`、`request.read`。
 - `filesystem.write`、`shell.execute`、`eda.execute` 等敏感权限必须由用户明确授权；GUI 不得因 Agent 初始化而自动授予。
@@ -176,7 +182,7 @@ Gateway GUI 至少提供以下功能：
 2. **服务管理**：启动、停止、重启；显示启动中、运行中、停止中、已停止、失败、降级等状态；停止过程显示排空/关闭结果。
 3. **Gateway 配置**：总开关、随 AirBridge 启动选项、Agent 实例开关、传输类型、监听地址和端口。
 4. **Agent 管理**：添加/初始化、启用/停用、凭据状态、Scope 查看与授权、凭据轮换、撤销。
-5. **MCP 客户端管理**：检测 Antigravity / OpenCode 配置位置；展示发现结果；备份现有配置；合并而不是覆盖其他 MCP Server；写入后验证配置；提供恢复备份入口。
+5. **MCP 客户端管理**：首批专用 Adapter 仅检测和配置 Antigravity / OpenCode 当前 Windows 用户级配置；展示发现结果；备份现有配置；合并而不是覆盖其他 MCP Server；写入后验证配置；提供恢复备份入口。通用 MCP Client 手动接入若未获批准，不作为首版交付功能。
 6. **日志与诊断**：按 Agent / Worker 筛选日志；显示端口冲突、认证失败、客户端未连接、MCP initialize / tools/list 失败、健康检查失败等诊断信息。
 
 GUI 显示的“已启用配置”和“当前正在运行”必须是两个独立字段，不能把 enabled=true 错报为 running。
@@ -221,7 +227,8 @@ Gateway 状态扩展采用现有 SESSION_HELLO / SESSION_CAPABILITIES（0x15 / 0
 - AirBridge 启动：加载配置；Gateway enabled 且 start_with_airbridge=true 时启动已启用 Agent Worker。
 - 用户手动启动：只启动已启用且当前未运行的 Worker。
 - 用户停止：停止接受新请求，等待在途请求有界排空，完成 MCP Server shutdown，再退出 Worker。
-- GUI 关闭：初版默认请求所有受管 Worker 优雅停止；如后续需要托盘/后台常驻，作为单独产品决策。
+- GUI 关闭：按用户已确认的默认行为，对所有受管 Gateway Worker 停止接收新请求、进行有界排空并退出；首版不保留后台 Worker，不允许 Worker 成为孤儿进程。
+- OAuth Broker 等共享依赖由 Supervisor 在所有 Worker 退出后按依赖顺序关闭；这是相应的生命周期实现方案，不扩展为用户另行确认的 Worker 范围。
 - Worker 崩溃：GUI 标记 Failed，保留退出码和日志；是否自动重启必须有次数上限、退避和用户可见记录，不能无限重启。
 - AirBridge Runtime / 串口链路故障：Gateway 可继续运行并向客户端返回明确的依赖不可用错误；不得因此误报 Gateway 进程已停止。
 - 端口占用：启动失败并显示占用端口及解决建议，不自动绑定 LAN 地址。
@@ -259,7 +266,7 @@ AirBridge 继续作为透明通信通道。专业软件 API、版本兼容和领
 | D-03 | 本地访问认证 | 不依赖 loopback 作为唯一边界的 Agent 到 Worker 身份校验 |
 | D-04 | Antigravity / OpenCode 配置 | 官方支持的 transport、配置 schema、认证字段与配置路径 |
 | D-05 | Python / PyInstaller | Python 3.11+ 统一打包、frozen 子进程重入、依赖体积和升级策略 |
-| D-06 | GUI 关闭行为 | 初版 Worker 是否严格随 GUI 退出；后台常驻是否另列需求 |
+| D-06 | GUI 关闭行为 | **用户已确认：** GUI 关闭时有界排空并停止所有受管 Gateway Worker；首版不保留后台 Worker。共享依赖的关闭顺序由 Supervisor 管理 |
 | D-07 | 双机冲突策略 | 默认只警告，是否需要用户可选阻断 |
 | D-08 | 配置迁移 | 旧 stdio 配置、旧 Token 环境变量和 M2.4 凭据如何无损迁移 |
 
@@ -270,7 +277,7 @@ M2.5 架构只有在以下事实均可验证后，才能进入代码实施：
 - Python 3.11+ 统一运行时与打包方案明确；
 - Gateway 完全由 GUI 管理，GUI 能显示真实运行状态；
 - Worker 生命周期、端口、日志和异常恢复有可测试设计；
-- 每个 Agent 身份和凭据隔离；
+- 每个 Agent 实例身份和凭据隔离；
 - 本地 MCP HTTP 访问控制不是仅依赖 loopback；
 - MCP Host 配置格式和目标 transport 已由实际版本验证；
 - 双机 Gateway 状态交换向后兼容；
