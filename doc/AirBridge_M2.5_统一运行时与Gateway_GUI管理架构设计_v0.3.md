@@ -321,7 +321,7 @@ PyInstaller onefile 独立子进程如果需要独立于父 GUI 运行，应按 
 
 - Antigravity App：由客户端 UI 提供实际配置文件路径；CLI 有全局 `~/.gemini/config/mcp_config.json` 和工作区 `.agents/mcp_config.json`。远程配置使用 `mcpServers.<name>.serverUrl`。IDE CIMD 需 2.6.0+，可按官方机制评估 DCR 兼容。
 - OpenCode：V2 使用 `mcp.servers.<name>`，远程字段为 `type="remote"` 和 `url`，OAuth 默认启用。用户全局配置为 `~/.config/opencode/opencode.json(c)`，Windows 系统配置位于 `%ProgramData%\\opencode`，还可能存在项目配置。
-- Adapter 必须检测目标客户端版本、配置 schema 和路径；默认只写用户级/应用级配置，项目和系统配置不做静默修改。
+- 首批专用 Adapter 仅为 Antigravity / OpenCode。Adapter 必须检测目标客户端版本、配置 schema 和路径；自动配置只写当前 Windows 用户级 global / App 用户配置。项目级和系统级配置只检测并提示，绝不由 Adapter 自动修改。
 
 ### 14.5 决策状态更新
 
@@ -330,9 +330,9 @@ PyInstaller onefile 独立子进程如果需要独立于父 GUI 运行，应按 
 | D-01 Worker 进程模型 | 同 EXE、每 Agent 独立 Worker、Supervisor 管理；PyInstaller 独立解包 | 提议采用，待 Windows frozen 原型 |
 | D-02 MCP Transport | Streamable HTTP 为托管模式目标；保留 stdio | 官方文档兼容性已确认 |
 | D-03 本地访问认证 | MCP OAuth 2.1 / PKCE；M2.4 Service Token 不进入客户端配置 | 授权服务器 HTTPS 为阻断项 |
-| D-04 Host 配置 | Antigravity / OpenCode 分别实现 Adapter | 官方 schema 已核查，需目标版本验收 |
+| D-04 Host 配置 | M2.5 首批专用 Adapter 仅 Antigravity / OpenCode；自动配置仅限当前 Windows 用户级配置 | 用户已确认范围；官方 schema 已核查，目标版本验收待完成 |
 | D-05 Python / PyInstaller | 统一 Python 3.11+；PyInstaller 版本锁定 | 进程行为待 PoC |
-| D-06 GUI 退出 | GUI 正常退出时有界停止所有 Worker；异常退出后 Worker 自行有界收敛 | 提议采用 |
+| D-06 GUI 退出 | GUI 退出时有界排空并停止所有受管 Gateway Worker；不保留后台 Worker | 用户已确认；异常退出收敛仍需 PoC |
 | D-07 双机冲突 | ON/ON、OFF/OFF 仅提示，不自动改配置或停服务 | 已按用户确认作为默认要求 |
 | D-08 迁移 | 旧 stdio 暂时保留；客户端配置无明文 Service Token | 迁移策略待实施设计 |
 
