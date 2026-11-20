@@ -163,23 +163,94 @@ try {
     }
 
     # The installer must obtain explicit user consent before this write operation.
-    # Test the non-interactive Windows certutil -user path after consent is already given.
-    Set-G01Phase 'before-certutil-currentuser-root-addstore'
-    Write-Host 'Phase: certutil add public CA certificate to CurrentUser Root'
-    $addOutput = & certutil.exe -f -user -addstore Root $rootCer 2>&1
-    $addExitCode = $LASTEXITCODE
-    $addOutput | Set-Content -LiteralPath (Join-Path $evidenceDir 'certutil-addstore-output.txt') -Encoding UTF8
-    if ($addExitCode -ne 0) {
-        throw "certutil -f -user -addstore Root failed (exit $addExitCode): $($addOutput -join [Environment]::NewLine)"
+    # This CI-only probe uses the native CryptoAPI store API after simulating consent.
+    # It tests CurrentUser scope without relying on certutil or a certificate UI prompt.
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+namespace AirBridge.G01
+{
+    public static class CurrentUserRootStore
+    {
+        private const uint X509_ASN_ENCODING = 0x00000001;
+        private const uint PKCS_7_ASN_ENCODING = 0x00010000;
+        private const uint CERT_SYSTEM_STORE_CURRENT_USER = 0x00010000;
+        private const uint CERT_STORE_ADD_NEW = 1;
+        private const uint Encoding = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
+
+        [DllImport("crypt32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+        private static extern IntPtr CertOpenStore(
+            IntPtr storeProvider,
+            uint messageAndCertificateEncodingType,
+            IntPtr cryptographicProvider,
+            uint flags,
+            string storeName);
+
+        [DllImport("crypt32.dll", ExactSpelling = true, SetLastError = true)]
+        private static extern bool CertAddEncodedCertificateToStore(
+            IntPtr certificateStore,
+            uint certificateEncodingType,
+            byte[] encodedCertificate,
+            uint encodedCertificateLength,
+            uint addDisposition,
+            out IntPtr certificateContext);
+
+        [DllImport("crypt32.dll", ExactSpelling = true, SetLastError = true)]
+        private static extern bool CertFreeCertificateContext(IntPtr certificateContext);
+
+        [DllImport("crypt32.dll", ExactSpelling = true, SetLastError = true)]
+        private static extern bool CertCloseStore(IntPtr certificateStore, uint flags);
+
+        public static void AddRoot(byte[] encodedCertificate)
+        {
+            if (encodedCertificate == null || encodedCertificate.Length == 0)
+                throw new ArgumentException("The public CA certificate is empty.", "encodedCertificate");
+
+            // CERT_STORE_PROV_SYSTEM_W is MAKEINTRESOURCEW(10); ROOT is the system store name.
+            IntPtr store = CertOpenStore(
+                new IntPtr(10), Encoding, IntPtr.Zero, CERT_SYSTEM_STORE_CURRENT_USER, "ROOT");
+            if (store == IntPtr.Zero)
+            {
+                int error = Marshal.GetLastWin32Error();
+                throw new Win32Exception(error, "CertOpenStore(CurrentUser\\ROOT) failed.");
+            }
+
+            IntPtr context = IntPtr.Zero;
+            try
+            {
+                if (!CertAddEncodedCertificateToStore(
+                    store, Encoding, encodedCertificate, (uint)encodedCertificate.Length,
+                    CERT_STORE_ADD_NEW, out context))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    throw new Win32Exception(error, "CertAddEncodedCertificateToStore failed.");
+                }
+            }
+            finally
+            {
+                if (context != IntPtr.Zero)
+                    CertFreeCertificateContext(context);
+                CertCloseStore(store, 0);
+            }
+        }
     }
-    Set-G01Phase 'certutil-currentuser-root-addstore-returned'
+}
+'@ -Language CSharp
+
+    Set-G01Phase 'before-cryptapi-currentuser-root-add'
+    Write-Host 'Phase: crypt32 CertAddEncodedCertificateToStore into CurrentUser Root'
+    [AirBridge.G01.CurrentUserRootStore]::AddRoot($rootPublic.RawData)
+    Set-G01Phase 'cryptapi-currentuser-root-add-returned'
+    $rootPublic.Dispose()
 
     $trustedRoot = Get-Item -LiteralPath "Cert:\CurrentUser\Root\$rootThumb" -ErrorAction Stop
     if ($trustedRoot.HasPrivateKey) {
         throw 'CurrentUser Root unexpectedly contains a private key; only public CA material may be imported.'
     }
     $results.current_user_root_import = 'PASS'
-    $results.current_user_root_import_method = 'certutil.exe -f -user -addstore Root'
+    $results.current_user_root_import_method = 'crypt32.dll CertAddEncodedCertificateToStore (CurrentUser ROOT)'
 
     $results.current_user_root_readback = 'PASS (exact CurrentUser provider path)'
 
