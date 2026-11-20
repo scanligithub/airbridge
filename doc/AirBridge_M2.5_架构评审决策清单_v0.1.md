@@ -214,7 +214,10 @@
 
 ### 4.2 G-01 必须执行的 Windows PoC 矩阵
 
-**可执行操作手册：** [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。当前仅完成操作规范，未在 Host A 执行；G-01 状态继续保持 Partial Research / NOT PASS。
+**主机范围澄清：** G-01 不绑定 Host A / Host B 角色。Managed HTTPS endpoints 只监听 loopback，`localhost` 指向 MCP Client 所在的本机，因此 Gateway 与 MCP Client 必须位于同一台 Windows 主机。每台计划启用 Managed HTTPS 的主机独立持有本机 CA / Leaf 证书；CurrentUser Root 是该机当前 Windows 用户的信任库，不跨机器共享。不得从另一台主机导入 CA 私钥或依赖对端主机签发。若 A、B 都要启用 Managed HTTPS，应分别建立本机证书信任并分别测试；Gateway OFF 且无本机客户端需求的主机不需要导入。
+
+
+**可执行操作手册：** [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。当前仅完成操作规范，未在任何目标 Windows 主机执行；PoC 应在每台计划启用 Managed HTTPS Gateway 的主机独立进行，G-01 状态继续保持 Partial Research / NOT PASS。
 
 1. 建立一次性本机测试 CA 与 server leaf certificate：leaf 必须包含 DNS SAN `localhost`、Server Authentication EKU、有效期和完整链；服务监听 loopback TCP。不要使用无 SAN 证书或忽略证书错误。
 2. 用户明确同意后，只把 CA 公证书导入 `Cert:\CurrentUser\Root`；私钥留在当前用户受保护密钥容器。记录导入前后 CurrentUser / LocalMachine 的证书 thumbprint，确认未修改 LocalMachine。
