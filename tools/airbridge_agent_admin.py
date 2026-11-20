@@ -77,6 +77,7 @@ def _provision_agent(store: AgentSecurityStore, args: argparse.Namespace) -> dic
         scopes,
         label=args.label,
         expires_in_days=args.expires_days,
+        reject_if_active=True,
     )
     try:
         credentials.store(issued["agent_id"], issued["token"])
