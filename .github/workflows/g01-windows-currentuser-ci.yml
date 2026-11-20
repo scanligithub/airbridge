@@ -84,7 +84,7 @@ jobs:
           }
           "PowerShell syntax, native API declarations, documented flags, and production UI-mode checks: PASS."
 
-      - name: Run noninteractive-safe trust-scope and custom-chain checks
+      - name: Run standard-user store-scope, custom-chain, and CryptUI API checks
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
