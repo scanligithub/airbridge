@@ -21,8 +21,11 @@ import airbridge_app
 
 
 class _CredentialStoreProbe:
+    def __init__(self):
+        self.present = False
+
     def exists(self, _agent_id: str) -> bool:
-        return False
+        return self.present
 
     def load(self, _agent_id: str) -> str:
         raise AssertionError("GUI status inspection must not load credential secrets")
@@ -96,6 +99,26 @@ class GatewayGuiSmokeTests(unittest.TestCase):
                     self.assertFalse(window.gateway_adapter_actions_enabled)
                     self.assertFalse(window.btn_gateway_antigravity_install.isEnabled())
                     self.assertFalse(window.btn_gateway_opencode_install.isEnabled())
+
+                    # Unsaved GUI checkboxes must not enable a client entry.
+                    window.chk_gateway_enabled.setChecked(True)
+                    window.chk_gateway_antigravity.setChecked(True)
+                    self.assertFalse(
+                        window._gateway_adapter_enabled_target("antigravity")
+                    )
+
+                    # The durable policy plus a present credential is the
+                    # sole source of truth for the client disabled flag.
+                    window.gateway_policy_store.write(
+                        enabled=True,
+                        agents={"antigravity": True, "opencode": False},
+                    )
+                    window.gateway_credential_store.present = True
+                    window.chk_gateway_enabled.setChecked(False)
+                    window.chk_gateway_antigravity.setChecked(False)
+                    self.assertTrue(
+                        window._gateway_adapter_enabled_target("antigravity")
+                    )
                 finally:
                     window.close()
 
