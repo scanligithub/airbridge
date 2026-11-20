@@ -94,7 +94,8 @@ class GatewayPolicyStore:
                 "Gateway policy is malformed; access is denied until it is repaired.",
             )
 
-        if not isinstance(payload, dict) or payload.get("schema_version") != POLICY_SCHEMA_VERSION:
+        schema_version = payload.get("schema_version") if isinstance(payload, dict) else None
+        if type(schema_version) is not int or schema_version != POLICY_SCHEMA_VERSION:
             return PolicyDecision(
                 False,
                 "GATEWAY_POLICY_INVALID",
