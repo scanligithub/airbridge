@@ -1,0 +1,57 @@
+name: G-01 Windows CurrentUser HTTPS Trust
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/scripts/g01-currentuser-trust.ps1"
+      - ".github/workflows/g01-windows-currentuser-ci.yml"
+  push:
+    branches:
+      - docs/m2.5-architecture
+    paths:
+      - ".github/scripts/g01-currentuser-trust.ps1"
+      - ".github/workflows/g01-windows-currentuser-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  currentuser-https-trust:
+    name: CurrentUser CA import + loopback TLS (Windows)
+    runs-on: windows-2025
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+
+      - name: Record runner user context
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          whoami
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          "identity=$($identity.Name)"
+          "is_elevated_admin=$($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
+          "powershell=$($PSVersionTable.PSVersion)"
+          "runner_image=$env:ImageOS"
+          "runner_version=$env:ImageVersion"
+
+      - name: Test CurrentUser Root import and HTTPS validation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          pwsh -NoLogo -NoProfile -NonInteractive -File ".github/scripts/g01-currentuser-trust.ps1"
+
+      - name: Upload sanitized G-01 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: G01-Windows-CurrentUser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/airbridge-g01-*/*
+          if-no-files-found: warn
+          retention-days: 14
