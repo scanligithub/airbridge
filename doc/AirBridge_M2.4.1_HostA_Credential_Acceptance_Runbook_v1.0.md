@@ -333,3 +333,96 @@ No new artifact deployment is authorized by this runbook update. PR #14 remains 
 The current PR branch additionally serializes local Agent credential mutations with a Windows named mutex scoped to the current interactive session. The mutex name is derived from SHA-256 of the normalized Agent ID and does not expose the Agent ID. The legacy explicit-reveal issue command, tokenless provision command, single-token revoke, and Agent-wide revoke all use the same per-Agent lock, preventing cooperating administrator CLI processes from interleaving server credential changes and Credential Manager writes/deletes.
 
 A Windows thread-level mutex integration test verifies that two operations for the same Agent cannot hold the lock simultaneously. This code is newer than the Stage A/B/F Host A executable recorded in Section 11; the updated EXE and Host A lifecycle still require a fresh build and separately authorized retest.
+
+
+## 14. Updated exact-head Host A acceptance — 2026-11-20
+
+This section supersedes the earlier Stage A / B / F status statements in Sections 11–12 for the newer exact source revision below. The earlier Section 11 results remain valid only for their original source commit.
+
+### Stage A — exact-revision EXE build
+
+- Workflow: **AirBridge Windows EXE Build**.
+- Run: https://github.com/scanligithub/airbridge/actions/runs/44666886779
+- Event: `workflow_dispatch`.
+- Branch: `feature/m2-4-zero-touch-agent-auth`.
+- Exact source commit: `5dcdd572c083602a58416655ef282286af5229c3`.
+- Result: **PASS**.
+- Artifact: `AirBridge-Windows-x64-5dcdd572c083602a58416655ef282286af5229c3`.
+- Artifact ID: `14598635606`.
+- Artifact ZIP size: `48,913,711` bytes.
+- GitHub artifact digest: `sha256:f80e40de4303b3f74f07935f244a8d49fd496ace91e0fad0a028fcfa6ea002d8`.
+
+### Stage B — independent artifact verification
+
+The artifact was downloaded and inspected independently.
+
+- `BUILD_INFO.txt` source commit: `5dcdd572c083602a58416655ef282286af5229c3`.
+- Python: `3.10.11`.
+- PyInstaller: `6.22.3`.
+- Platform: `Windows x64`.
+- Executable size: `49,247,236` bytes.
+- Executable SHA-256: `272a98a09e37bf52ee788c68496199974e82176fda2879462157918a03926135`.
+- Independently downloaded artifact ZIP SHA-256: `f80e40de4303b3f74f07935f244a8d49fd496ace91e0fad0a028fcfa6ea002d8`, matching the GitHub artifact digest.
+- The independently verified EXE size and SHA-256 matched `BUILD_INFO.txt`.
+- Result: **PASS**.
+
+### Stage F — Host A deployment and graceful lifecycle acceptance
+
+The user confirmed that the exact verified EXE had been deployed to Host A and explicitly authorized both graceful close / restart cycles. All Host A interaction was performed through MCPSuperAssistant.
+
+**Initial deployed process identity**
+
+- EXE path: `E:\\download\\AirBridge-Windows-x64-5dcdd572c083602a58416655ef282286af5229c3\\AirBridge.exe`.
+- SHA-256: `272a98a09e37bf52ee788c68496199974e82176fda2879462157918a03926135`.
+- Launcher PID: `12112`.
+- GUI / HTTP PID: `11584`.
+- Listener: `127.0.0.1:8888`, owned by GUI PID `11584`.
+- GUI reported `Responding=True`.
+- Unauthenticated `GET /api/v1/runtime/capabilities`: HTTP 401.
+- Result: the deployed binary identity and initial service state matched the Stage B artifact.
+
+**First graceful close and restart**
+
+- Revalidated the EXE path and SHA-256 before sending `WM_CLOSE` to GUI PID `11584`.
+- `WM_CLOSE_POSTED=True`; GUI PID `11584` exited; launcher PID `12112` exited; TCP port `8888` was released.
+- No forced termination was used.
+- Relaunched the same verified EXE. New launcher PID: `19272`; new GUI / HTTP PID: `19364`.
+- Port `127.0.0.1:8888` returned and was owned by GUI PID `19364`.
+- An early startup sample reported `Responding=False`. After an additional 15-second stabilization interval, GUI `Responding=True` and a bounded, non-mutating `WM_NULL` window probe responded successfully.
+- Unauthenticated capabilities request returned HTTP 401.
+- Result: **PASS**; the early GUI non-response was transient and cleared without restarting or terminating the process.
+
+**Second graceful close — testing the new EXE lifecycle**
+
+- Revalidated GUI PID `19364`, launcher PID `19272`, executable path, SHA-256, window handle and ownership of port `8888`.
+- Sent `WM_CLOSE` to the GUI. `WM_CLOSE_POSTED=True`.
+- GUI PID `19364` exited; launcher PID `19272` exited; port `8888` was released.
+- Result: **PASS**.
+- No `Stop-Process`, `taskkill`, or other forced process termination was used.
+
+**Final restart and recovery — current Host A state**
+
+- Relaunched the same verified EXE after confirming no existing instance and no listener on port `8888`.
+- Launcher PID: `18268`.
+- GUI / HTTP PID: `2484`.
+- GUI window handle: `3016688`.
+- GUI `Responding=True`; bounded `WM_NULL` probe returned successfully.
+- EXE SHA-256: `272a98a09e37bf52ee788c68496199974e82176fda2879462157918a03926135`.
+- Listener: `127.0.0.1:8888`, owned by GUI PID `2484`, with the expected EXE path.
+- Unauthenticated `GET /api/v1/runtime/capabilities`: HTTP 401.
+- Final restart result: **PASS**.
+- Host A was left running with launcher PID `18268`, GUI / HTTP PID `2484`, and listener `127.0.0.1:8888`.
+
+### Stage F evidence boundary
+
+The Host A tests verified normal GUI close messages, GUI and launcher process exit, release and recovery of the HTTP listener, exact executable identity, stable GUI responsiveness after startup, and continued HTTP authentication enforcement. They did not separately instrument an OS-level SQLite file handle during desktop shutdown. SQLite Store ownership / bounded handler-drain behavior remains covered by the Agent Security CI and implementation regression tests; do not describe the OS-level SQLite handle as independently measured during this Host A run.
+
+No Shell execution, EDA Execute, Capture, Allegro, design modification, manual Host B operation, or formal MCP Host migration was performed.
+
+### Updated acceptance conclusion
+
+- **Stage A: PASS** for exact source commit `5dcdd572c083602a58416655ef282286af5229c3`.
+- **Stage B: PASS** for the matching artifact, independently verified.
+- **Stage F: PASS** for the deployed exact-head EXE on Host A, including two graceful close / restart cycles and final recovery.
+- The earlier Host A Stages C–E evidence remains scoped to the isolated test-Agent acceptance described in Section 10; it is not being re-labelled as a new test against this exact-head EXE.
+- PR #14 remains Draft / Open / unmerged and still requires a separate merge decision.
