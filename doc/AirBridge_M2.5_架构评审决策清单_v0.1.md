@@ -3,7 +3,7 @@
 - 文档编号：AB-M2.5-REVIEW-001
 - 版本：0.1
 - 日期：2026-11-20
-- 状态：待评审
+- 状态：产品决策 D-01 至 D-09 已确认；技术 PoC G-01 至 G-11 仍待完成
 - 关联：M2.5 v0.3 主文档、ADR-007 至 ADR-012
 - 目的：把用户已确认的产品约束、当前建议方案和仍需产品决策的项目区分开
 
@@ -183,7 +183,7 @@
 
 | 编号 | PoC 项目 | 通过条件 |
 |---|---|---|
-| G-01 | Windows 本机 OAuth Broker HTTPS | CurrentUser 证书信任仅经用户明确同意写入；Antigravity / OpenCode / 系统浏览器正常验证证书链；issuer 稳定、客户端 discovery 成功；拒绝 / 撤销时 fail-closed |
+| G-01 | Windows 本机 OAuth Broker HTTPS | CurrentUser 证书信任仅经用户明确同意写入；分别在 Antigravity App / IDE、OpenCode Desktop、OpenCode CLI（如纳入支持范围）和系统 Chrome 中完成 TLS / OAuth 实测；issuer 稳定、客户端 discovery 成功；拒绝 / 撤销时 fail-closed；不得通过 LocalMachine Root 或关闭校验实现通过 |
 | G-02 | Antigravity OAuth | 当前目标 App / IDE 完成 Authenticate、Token 获取和只读 MCP 调用 |
 | G-03 | OpenCode OAuth | 当前目标版本完成 /mcps 或 CLI auth，并成功调用只读 MCP Tool |
 | G-04 | Worker HTTPS | 两个 Agent Resource Server 均能被目标客户端正常验证 TLS |
@@ -194,6 +194,34 @@
 | G-09 | Python 3.11+ | GUI、Gateway、Credential Provider、CI 和最终 EXE 统一运行时 |
 | G-10 | Gateway 端口管理 | 默认端口正确；每实例唯一持久化；loopback-only；真实 bind / excluded port 检查；冲突隔离；端口变更同步 metadata / 客户端配置并完成重新授权或回滚 |
 | G-11 | 升级配置与授权状态保留 | 首次安装默认 OFF；升级保留 Gateway / Agent / Credential / Broker Grant 与 Revocation / CurrentUser 证书 / 当前用户 MCP 配置；Token Vault 不读取；版本化幂等迁移、备份、原子提交、回滚及损坏恢复测试通过 |
+
+### 4.1 G-01 公开资料研究结果（2026-11-20；不是 PoC PASS）
+
+**已有公开证据：**
+- Windows 将 Current User 与 Local Machine 证书存储分开；Current User 存储属于当前 Windows 用户上下文（HKCU）。Microsoft 文档：https://learn.microsoft.com/en-us/windows-hardware/drivers/install/local-machine-and-current-user-certificate-stores
+- Chromium Certificate Verifier 在 Windows 上明确读取 Current User 的 Trusted Root Certification Authorities，用于本地 TLS 信任决策；本项目使用 TCP loopback HTTPS，与其 TCP 本地信任场景相符。Chromium 文档：https://chromium.googlesource.com/chromium/src/+/main/net/data/ssl/chrome_root_store/faq.md
+- OpenCode 官方 Network 文档为私有 CA 提供 `NODE_EXTRA_CA_CERTS` 配置。Bun 文档另提供 `NODE_USE_SYSTEM_CA=1` / `--use-system-ca`，使运行时把系统 CA 加入信任集合；Bun v1.3.14 Windows 发布说明进一步列明该模式会读取 CurrentUser / LocalMachine 的 ROOT、CA、TrustedPeople 存储。资料：https://opencode.ai/docs/network、https://bun.com/docs/runtime/environment-variables、https://bun.com/blog/release-notes/bun-v1.3.14
+- OpenCode 项目在 Windows Desktop V2 证书问题讨论中说明 V2 Desktop 使用操作系统证书存储；同一讨论对 CLI 提供了额外 CA 文件方式。该回复是项目支持讨论，不替代当前正式版本实测：https://github.com/anomalyco/opencode/issues/54095
+- Antigravity 官方 MCP 文档定义了 OAuth / PKCE / CIMD / DCR 行为，但没有说明 Antigravity App / IDE / CLI 的 HTTPS 信任库来源，也没有承诺 CurrentUser Root 一定生效：https://antigravity.google/docs/mcp
+
+**当前判断：**
+- Windows CurrentUser Root + Chrome TCP TLS：公开资料支持，仍需在目标 Windows 环境实测 localhost SAN 和实际链验证。
+- OpenCode Desktop V2：有项目方关于 OS certificate store 的支持说明，技术上有希望；必须在 M2.5 目标 Desktop 版本实测 OAuth discovery 与 Resource Server 请求。
+- OpenCode CLI：运行时存在使用系统 CA 的配置能力，但是否由目标打包版本默认启用、是否识别 CurrentUser Root、是否需要额外环境变量，必须单独验证；不能把 Desktop 结果外推到 CLI。
+- Antigravity App / IDE：证书信任来源尚无足够公开证据，必须实测。
+
+**因此 G-01 当前状态为 Partial Research / NOT PASS。** 不得因 Chrome 成功或证书导入成功就判定目标 MCP 客户端兼容；不得扩大到 LocalMachine Root、要求管理员权限、设置 TLS bypass 或降级为无认证 HTTP。
+
+### 4.2 G-01 必须执行的 Windows PoC 矩阵
+
+1. 建立一次性本机测试 CA 与 server leaf certificate：leaf 必须包含 DNS SAN `localhost`、Server Authentication EKU、有效期和完整链；服务监听 loopback TCP。不要使用无 SAN 证书或忽略证书错误。
+2. 用户明确同意后，只把 CA 公证书导入 `Cert:\CurrentUser\Root`；私钥留在当前用户受保护密钥容器。记录导入前后 CurrentUser / LocalMachine 的证书 thumbprint，确认未修改 LocalMachine。
+3. 用 Chrome 打开同一 `https://localhost:<port>/health`，确认无证书警告且链 / hostname 正确；再分别测试 Antigravity App / IDE 与 OpenCode Desktop 的 OAuth discovery、Authenticate、MCP initialize、tools/list 和只读 Tool 调用。
+4. OpenCode CLI 单独测试默认环境及目标版本实际支持的 system-CA 配置；若必须设置 `NODE_USE_SYSTEM_CA=1` 或等效官方方式，记录是否属于首版支持前提，不能通过 `NODE_TLS_REJECT_UNAUTHORIZED=0` 或其它跳过校验方式通过。
+5. 在同一客户端执行负向测试：移除 / 撤销测试 CA 信任、证书过期、SAN 不匹配、缺失中间证书；所有场景都必须拒绝连接。恢复用户信任后应能重新连接。
+6. 分别记录客户端产品 / 版本 / 安装形态、TLS 栈 / system-CA 配置、证书 thumbprint、issuer、Resource URL、错误日志（脱敏）和测试结果；按 Desktop / CLI 分开出结论。
+
+只有首批实际承诺支持的客户端形态都在 CurrentUser 信任范围内通过真实 TLS + OAuth + MCP 调用，且所有负向测试 fail-closed，G-01 才能 PASS。若某一客户端形态不通过，应缩小该形态支持范围并重新评审，不能突破既有 CurrentUser 产品决策。
 
 任一关键安全 PoC 不通过，不允许以无认证 HTTP 或明文 Service Token 作为临时上线方案。
 
