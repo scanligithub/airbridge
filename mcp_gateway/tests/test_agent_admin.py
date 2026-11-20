@@ -36,6 +36,12 @@ class _FakeSecurityStore:
             raise RuntimeError("security store unavailable")
         return True
 
+    def revoke_agent(self, agent_id):
+        self.revoked.append(agent_id)
+        if self.fail_revoke:
+            raise RuntimeError("security store unavailable")
+        return True
+
 
 class _FakeCredentialStore:
     def __init__(self, *, fail_store=False, fail_load=False, fail_delete=False):
@@ -154,6 +160,42 @@ class AgentProvisioningTests(unittest.TestCase):
             ):
                 airbridge_agent_admin._provision_agent(security, self._args())
         self.assertIsNone(security.issued)
+
+    def test_agent_revoke_reports_deleted_local_credential(self):
+        security = _FakeSecurityStore()
+        credentials = _FakeCredentialStore()
+        credentials.values["opencode"] = "old-token"
+        with patch.object(airbridge_agent_admin.os, "name", "nt"), patch.object(
+            airbridge_agent_admin, "WindowsCredentialStore", return_value=credentials
+        ):
+            result, exit_code = airbridge_agent_admin._revoke_agent(security, "opencode")
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(result["revoked"])
+        self.assertTrue(result["credential_deleted"])
+        self.assertEqual(result["credential_cleanup"], "deleted")
+
+    def test_agent_revoke_treats_missing_local_credential_as_clean(self):
+        security = _FakeSecurityStore()
+        credentials = _FakeCredentialStore()
+        with patch.object(airbridge_agent_admin.os, "name", "nt"), patch.object(
+            airbridge_agent_admin, "WindowsCredentialStore", return_value=credentials
+        ):
+            result, exit_code = airbridge_agent_admin._revoke_agent(security, "opencode")
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(result["credential_deleted"])
+        self.assertEqual(result["credential_cleanup"], "not_found")
+
+    def test_agent_revoke_returns_failure_when_local_cleanup_fails(self):
+        security = _FakeSecurityStore()
+        credentials = _FakeCredentialStore(fail_delete=True)
+        with patch.object(airbridge_agent_admin.os, "name", "nt"), patch.object(
+            airbridge_agent_admin, "WindowsCredentialStore", return_value=credentials
+        ):
+            result, exit_code = airbridge_agent_admin._revoke_agent(security, "opencode")
+        self.assertEqual(exit_code, 1)
+        self.assertTrue(result["revoked"])
+        self.assertFalse(result["credential_deleted"])
+        self.assertEqual(result["credential_cleanup"], "failed")
 
 
 if __name__ == "__main__":
