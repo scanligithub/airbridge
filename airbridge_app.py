@@ -1743,7 +1743,9 @@ class AntigravityIPCServer:
   ):
     self.worker = worker
     self.port = port
+    self._owns_security_store = security_store is None
     self.security_store = security_store or AgentSecurityStore.from_env()
+    self._stop_lock = threading.Lock()
     if allow_eda_execute is None:
       allow_eda_execute = os.environ.get("AIRBRIDGE_ALLOW_EDA_EXECUTE", "0").strip().lower() in ("1", "true", "yes", "on")
     self.allow_eda_execute = bool(allow_eda_execute)
@@ -2566,7 +2568,9 @@ class AntigravityIPCServer:
     def serve():
       try:
         server = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
-        server.daemon_threads = True
+        # Wait for in-flight request handlers before closing the shared SQLite store.
+        server.daemon_threads = False
+        server.block_on_close = True
         self._server = server
         self.port = server.server_address[1]
         self._server_ready.set()
@@ -2585,11 +2589,21 @@ class AntigravityIPCServer:
       raise RuntimeError(f"AirBridge HTTP server failed to start: {self._server_error}")
 
   def stop(self):
-    server = self._server
-    if server is not None:
-      server.shutdown()
-      server.server_close()
-      self._server = None
+    with self._stop_lock:
+      server = self._server
+      if server is not None:
+        server.shutdown()
+        server.server_close()
+        self._server = None
+      thread = self._server_thread
+      if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout=5.0)
+        if thread.is_alive():
+          raise RuntimeError("AirBridge HTTP server thread did not stop")
+        self._server_thread = None
+      if self._owns_security_store and self.security_store is not None:
+        self.security_store.close()
+        self.security_store = None
 
 
 # ==============================================================================
@@ -2642,6 +2656,19 @@ class AirBridgeMainWindow(QMainWindow):
     self.scan_ports()
     # Auto-connect to host B: prefer the USB/FTDI gateway and verify the link with a probe request
     QTimer.singleShot(100, self.auto_connect_serial)
+
+  def closeEvent(self, event):
+    try:
+      self.ipc.stop()
+    except Exception as exc:
+      QMessageBox.critical(
+          self,
+          "AirBridge shutdown failed",
+          f"The local API server could not shut down safely. The window will remain open.\\n{exc}",
+      )
+      event.ignore()
+      return
+    event.accept()
 
   def auto_connect_serial(self):
     candidates = []
