@@ -6,6 +6,8 @@
 
 M2.5 首版已明确改为本机 **STDIO-only** MCP 接入：Antigravity / OpenCode 启动统一 AirBridge.exe 子进程；不使用证书、TLS、HTTP / HTTPS MCP endpoint 或 OAuth Broker。MCP Host 管理子进程生命周期，AirBridge GUI 管理 Adapter 配置、Agent、M2.4 Credential / Scope 和审计。
 
+当前 main 已有 M2.1 / M2.2 的 STDIO MCP Gateway 和 Windows Credential Manager Agent Token 读取实现；M2.5 复用这条路径并整合到统一 AirBridge.exe / Python 3.11+，而不是从零重写。
+
 权威规范：[ADR-013：M2.5 STDIO 本机 MCP 接入与客户端托管生命周期](ADR-013_M2.5_Stdio本机MCP接入与客户端托管生命周期.md)。此前 M2.5 v0.3 的 HTTP / OAuth / CA 设计文档为历史评审资料，冲突内容以 ADR-013 为准。Host A ↔ Host B 仍使用原有 ABFP / 串口通信。
 
 ## 当前设计基线
