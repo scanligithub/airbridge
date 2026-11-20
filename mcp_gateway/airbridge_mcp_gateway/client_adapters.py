@@ -239,6 +239,16 @@ class AdapterResult:
     enabled: bool
 
 
+@dataclass(frozen=True, slots=True)
+class AdapterStatus:
+    config_path: str
+    server_name: str
+    agent_id: str
+    present: bool
+    owned: bool
+    enabled: bool | None
+
+
 def _line_indent(source: str, offset: int) -> str:
     line_start = source.rfind("\n", 0, offset) + 1
     prefix = source[line_start:offset]
@@ -482,8 +492,44 @@ class _BaseAdapter:
     def _root_server_container(self, source: str, root: _Node) -> tuple[str, _Node]:
         raise NotImplementedError
 
+    def _existing_server_container(self, root: _Node) -> _Node | None:
+        raise NotImplementedError
+
     def _is_owned(self, config: Any, agent_id: str) -> bool:
         raise NotImplementedError
+
+    def inspect(
+        self, path: str | os.PathLike[str], agent_id: str
+    ) -> AdapterStatus:
+        """Read status without creating files, modifying config, or touching other entries."""
+        normalized_id = _validate_agent_id(agent_id)
+        config_path, _raw, _source, root = self._read(path)
+        if root.kind != "object":
+            raise AdapterConfigurationError("MCP configuration root must be an object")
+        container = self._existing_server_container(root)
+        if container is None:
+            return AdapterStatus(
+                str(config_path), self.server_name, normalized_id,
+                present=False, owned=False, enabled=None,
+            )
+        entry = container.properties.get(self.server_name)
+        if entry is None:
+            return AdapterStatus(
+                str(config_path), self.server_name, normalized_id,
+                present=False, owned=False, enabled=None,
+            )
+        if not self._is_owned(entry.value, normalized_id):
+            return AdapterStatus(
+                str(config_path), self.server_name, normalized_id,
+                present=True, owned=False, enabled=None,
+            )
+        disabled = entry.value.get("disabled", False)
+        return AdapterStatus(
+            str(config_path), self.server_name, normalized_id,
+            present=True,
+            owned=True,
+            enabled=(not disabled) if isinstance(disabled, bool) else None,
+        )
 
     def install_or_update(
         self, path: str | os.PathLike[str], agent_id: str, *, enabled: bool
@@ -595,6 +641,12 @@ class AntigravityAdapter(_BaseAdapter):
     def _find_container(self, root: _Node) -> _Node:
         return self._require_object(root.properties["mcpServers"], "mcpServers")
 
+    def _existing_server_container(self, root: _Node) -> _Node | None:
+        node = root.properties.get("mcpServers")
+        if node is None:
+            return None
+        return self._require_object(node, "mcpServers")
+
     def _container_path(self) -> tuple[str, ...]:
         return ("mcpServers",)
 
@@ -660,6 +712,16 @@ class OpenCodeAdapter(_BaseAdapter):
     def _find_container(self, root: _Node) -> _Node:
         mcp_node = self._require_object(root.properties["mcp"], "mcp")
         return self._require_object(mcp_node.properties["servers"], "mcp.servers")
+
+    def _existing_server_container(self, root: _Node) -> _Node | None:
+        mcp_node = root.properties.get("mcp")
+        if mcp_node is None:
+            return None
+        mcp_object = self._require_object(mcp_node, "mcp")
+        servers_node = mcp_object.properties.get("servers")
+        if servers_node is None:
+            return None
+        return self._require_object(servers_node, "mcp.servers")
 
     def _container_path(self) -> tuple[str, ...]:
         return ("mcp", "servers")
