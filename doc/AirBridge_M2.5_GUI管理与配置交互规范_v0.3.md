@@ -133,8 +133,8 @@ Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭�
 
 **CA 信任建立属于 AirBridge 部署流程，不属于 Gateway 启动流程。** 每台实际部署 M2.5 AirBridge 的 Windows 主机，在安装 / 部署阶段都应完成本机 CA 准备与用户信任引导；即使该机首次安装后 Gateway 总开关默认 OFF，也不跳过部署阶段的 CA 信任准备。
 
-- 部署程序在目标 Windows 用户上下文中为本机创建并持久化独立 CA 私钥 / CA 公证书，以及 localhost Server Certificate。每台主机独立生成自己的 CA 身份和服务器证书；A / B 不共享 CA 私钥、CA 文件或 Root Thumbprint，不指定固定签发主机。
-- 部署界面必须展示 CA Subject、Thumbprint、有效期、用途、信任范围（仅当前 Windows 用户）和影响。用户明确同意后，部署流程只把 CA **公钥证书**导入该目标用户的 `Cert:\CurrentUser\Root`；CA 私钥留在本机受保护密钥容器，服务器私钥也不得写入普通配置或日志。
+- 部署程序在目标 Windows 用户上下文中准备适用于该机 localhost 的 CA 公钥信任材料和服务器证书关联；具体 CA 签发 / 供应方式由 G-01 技术验证确定，不从固定 Host A / Host B 手工导入，也不把 CA 私钥放入普通安装包或经 AirBridge Runtime 跨机传输。各部署 Root Thumbprint 是否相同取决于最终供应模型。
+- 部署界面必须展示 CA Subject、Thumbprint、有效期、用途、信任范围（仅当前 Windows 用户）和影响。用户明确同意后，部署流程只把 CA **公钥证书**导入该目标用户的 `Cert:\CurrentUser\Root`；任何本机持有的 CA / 服务器私钥均必须使用受保护密钥容器，服务器私钥不得写入普通配置或日志。
 - 证书信任只写入实际运行 AirBridge / MCP Client 的目标 Windows 用户 CurrentUser 范围；不要求管理员权限，不修改 LocalMachine 证书存储区或 LocalMachine Root。若安装器需要提升权限，CurrentUser 信任引导必须切换到目标用户的非提升上下文执行，不能误导入提升后管理员账户的 CurrentUser。
 - **CA 部署与 Gateway enabled 是两个独立状态。** 首次安装仍将 `gateway.enabled=false`，不启动 Broker 或任何 Worker；CA 信任准备成功不代表开启 Gateway。
 - 用户拒绝 CA 信任时，AirBridge 安装及 Core / Runtime / 串口通信可继续，但 Managed HTTPS / OAuth Gateway 标记为不可用；不得静默导入。之后如需补做或修复，应通过明确的安装 / 部署 Repair 流程重新展示 Consent，不得在用户点击 Gateway ON 或普通程序启动时静默导入。
@@ -147,7 +147,7 @@ Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭�
 
 升级安装时，GUI / Supervisor 必须显示正在执行的配置迁移、备份、验证或恢复状态，不得把升级配置重置成首次安装状态。
 
-必须保留：Gateway 总开关和启动策略；Agent 实例 ID、类型、Adapter、enabled、Scope、端口与 endpoint；M2.4 Credential Manager 凭据；OAuth Broker 客户端注册、Grant / Revocation、issuer / Resource Audience 与所需密钥材料；有效的本机 CA 私钥关联、服务器证书和 AirBridge CurrentUser 证书信任；Adapter 管理的当前用户级 MCP 配置条目。
+必须保留：Gateway 总开关和启动策略；Agent 实例 ID、类型、Adapter、enabled、Scope、端口与 endpoint；M2.4 Credential Manager 凭据；OAuth Broker 客户端注册、Grant / Revocation、issuer / Resource Audience 与所需密钥材料；有效的本机 CA / 服务器证书关联和 AirBridge CurrentUser 证书信任；Adapter 管理的当前用户级 MCP 配置条目。
 
 迁移安全要求：
 - 使用版本化、幂等的 schema migration；只为旧 schema 中确实缺失的字段应用已记录默认值，绝不覆盖已有用户值或未知字段。
@@ -318,7 +318,7 @@ Cursor、VS Code / Copilot、Cline 等不属于首批专用 Adapter 范围。Gen
 - [ ] 证书部署成功不启动 OAuth Broker / Worker；首次安装 Gateway 总开关仍为 OFF。
 - [ ] 安装器若需要提升权限，CurrentUser Root 导入仍由实际目标用户上下文完成，不误写入提升后管理员账户。
 - [ ] 用户拒绝 CA Consent 时 AirBridge 安装可继续，Core / Runtime 正常，Managed HTTPS 明确不可用；Gateway ON 不触发静默导入。
-- [ ] 升级保留有效本机 CA / 私钥 / Leaf / CurrentUser trust，不重复导入或无故轮换；缺失或需要轮换时通过显式部署 / Repair 再次 Consent。
+- [ ] 升级保留有效本机 CA 信任 / Leaf / 所需私钥关联，不重复导入或无故轮换；缺失或需要轮换时通过显式部署 / Repair 再次 Consent。
 - [ ] 升级安装保留已有 Gateway 总开关配置。
 - [ ] Gateway OFF 时所有管理页面仍可访问，AirBridge Runtime 正常。
 - [ ] 总开关、Agent 开关和随 AirBridge 启动配置正确持久化。
