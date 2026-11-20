@@ -127,6 +127,11 @@ try {
         NotAfter = (Get-Date).AddDays(2)
         CertStoreLocation = 'Cert:\CurrentUser\My'
     }
+    # Record the Root thumbprint immediately so finally can always clean it,
+    # even if Leaf creation or any later step fails.
+    $rootThumb = $root.Thumbprint.ToUpperInvariant()
+    $results.root_thumbprint = $rootThumb
+
     $leaf = New-SelfSignedCertificate @{
         Type = 'Custom'
         Subject = 'CN=localhost'
@@ -147,9 +152,7 @@ try {
         CertStoreLocation = 'Cert:\CurrentUser\My'
     }
 
-    $rootThumb = $root.Thumbprint.ToUpperInvariant()
     $leafThumb = $leaf.Thumbprint.ToUpperInvariant()
-    $results.root_thumbprint = $rootThumb
     $results.leaf_thumbprint = $leafThumb
     $results.root_private_key_present = $root.HasPrivateKey
     $results.leaf_private_key_present = $leaf.HasPrivateKey
@@ -239,63 +242,107 @@ catch {
     Write-Error -Message $_.Exception.Message -ErrorAction Continue
 }
 finally {
-    try {
-        if ($destStore -ne [IntPtr]::Zero) {
+    # Attempt every cleanup action independently. A failure removing one
+    # artifact must not prevent cleanup of the remaining exact thumbprints.
+    $cleanupFailures = [System.Collections.Generic.List[string]]::new()
+
+    if ($destStore -ne [IntPtr]::Zero) {
+        try {
             Close-G01CertificateStore -Handle $destStore
             $destStore = [IntPtr]::Zero
         }
-
-        # Remove only this run's exact thumbprints, and only if absent at baseline.
-        if ($baselineCaptured -and $rootThumb -and $currentUserRootBefore -notcontains $rootThumb) {
-            $rootPath = "Cert:\CurrentUser\Root\$rootThumb"
-            if (Test-Path -LiteralPath $rootPath) {
-                Remove-Item -LiteralPath $rootPath -Force -ErrorAction Stop
-            }
+        catch {
+            $cleanupFailures.Add("Close destination store: $($_.Exception.Message)")
         }
-        foreach ($thumb in @($rootThumb, $leafThumb) | Where-Object { $_ }) {
-            $myPath = "Cert:\CurrentUser\My\$thumb"
-            if (Test-Path -LiteralPath $myPath) {
-                Remove-Item -LiteralPath $myPath -Force -ErrorAction Stop
-            }
-        }
+    }
 
-        if ($rootPublic) { $rootPublic.Dispose() }
-        if ($leaf) { $leaf.Dispose() }
-        if ($root) { $root.Dispose() }
-        if (Test-Path -LiteralPath $rootCerPath) {
-            Remove-Item -LiteralPath $rootCerPath -Force -ErrorAction Stop
+    # Remove only this run's exact Root thumbprint, and only if it was absent
+    # from the baseline. Do not remove any pre-existing trust.
+    if ($baselineCaptured -and $rootThumb -and $currentUserRootBefore -notcontains $rootThumb) {
+        $rootPath = "Cert:\CurrentUser\Root\$rootThumb"
+        if (Test-Path -LiteralPath $rootPath) {
+            try { Remove-Item -LiteralPath $rootPath -Force -ErrorAction Stop }
+            catch { $cleanupFailures.Add("Remove test Root trust: $($_.Exception.Message)") }
         }
+    }
 
-        if ($baselineCaptured) {
+    foreach ($thumb in @($rootThumb, $leafThumb) | Where-Object { $_ }) {
+        $myPath = "Cert:\CurrentUser\My\$thumb"
+        if (Test-Path -LiteralPath $myPath) {
+            try { Remove-Item -LiteralPath $myPath -Force -ErrorAction Stop }
+            catch { $cleanupFailures.Add("Remove CurrentUser My certificate $thumb: $($_.Exception.Message)") }
+        }
+    }
+
+    foreach ($certObject in @($rootPublic, $leaf, $root)) {
+        if ($null -ne $certObject) {
+            try { $certObject.Dispose() }
+            catch { $cleanupFailures.Add("Dispose certificate object: $($_.Exception.Message)") }
+        }
+    }
+
+    if (Test-Path -LiteralPath $rootCerPath) {
+        try { Remove-Item -LiteralPath $rootCerPath -Force -ErrorAction Stop }
+        catch { $cleanupFailures.Add("Remove public Root CER: $($_.Exception.Message)") }
+    }
+
+    if ($baselineCaptured) {
+        try {
             $currentUserRootAfterCleanup = Get-G01BThumbprints -StorePath 'Cert:\CurrentUser\Root'
+            $results.current_user_root_restored_after_cleanup =
+                if (Test-G01BSameSet -Before $currentUserRootBefore -After $currentUserRootAfterCleanup) { 'PASS' } else { 'FAIL' }
+            $results.current_user_root_after_cleanup_count = $currentUserRootAfterCleanup.Count
+            if ($results.current_user_root_restored_after_cleanup -ne 'PASS') {
+                $cleanupFailures.Add('CurrentUser Root thumbprint set did not return to its baseline.')
+            }
+        }
+        catch {
+            $results.current_user_root_restored_after_cleanup = 'NOT_VERIFIED'
+            $cleanupFailures.Add("Verify CurrentUser Root baseline: $($_.Exception.Message)")
+        }
+
+        try {
             $localMachineRootAfterCleanup = Get-G01BThumbprints -StorePath 'Cert:\LocalMachine\Root'
+            $results.local_machine_root_unchanged =
+                if (Test-G01BSameSet -Before $localMachineBefore -After $localMachineRootAfterCleanup) { 'PASS' } else { 'FAIL' }
+            $results.local_machine_root_after_cleanup_count = $localMachineRootAfterCleanup.Count
+            if ($results.local_machine_root_unchanged -ne 'PASS') {
+                $cleanupFailures.Add('LocalMachine Root thumbprint set changed during the test.')
+            }
+        }
+        catch {
+            $results.local_machine_root_unchanged = 'NOT_VERIFIED'
+            $cleanupFailures.Add("Verify LocalMachine Root baseline: $($_.Exception.Message)")
+        }
+
+        try {
             $currentUserMyAfterCleanup = @(
                 Get-ChildItem -LiteralPath 'Cert:\CurrentUser\My' |
                     ForEach-Object { $_.Thumbprint.ToUpperInvariant() }
             )
-
-            $results.current_user_root_restored_after_cleanup =
-                if (Test-G01BSameSet -Before $currentUserRootBefore -After $currentUserRootAfterCleanup) { 'PASS' } else { 'FAIL' }
-            $results.local_machine_root_unchanged =
-                if (Test-G01BSameSet -Before $localMachineBefore -After $localMachineRootAfterCleanup) { 'PASS' } else { 'FAIL' }
             $leftovers = @(@($rootThumb, $leafThumb) | Where-Object { $_ -and $currentUserMyAfterCleanup -contains $_ })
-            $results.current_user_my_cleanup = if ($leftovers.Count -eq 0) { 'PASS' } else { 'FAIL' }
             $results.remaining_current_user_my_thumbprints = $leftovers
-            $results.current_user_root_after_cleanup_count = $currentUserRootAfterCleanup.Count
-            $results.local_machine_root_after_cleanup_count = $localMachineRootAfterCleanup.Count
-            $results.cleanup = if (
-                $results.current_user_root_restored_after_cleanup -eq 'PASS' -and
-                $results.local_machine_root_unchanged -eq 'PASS' -and
-                $results.current_user_my_cleanup -eq 'PASS'
-            ) { 'PASS' } else { 'FAIL' }
+            $results.current_user_my_cleanup = if ($leftovers.Count -eq 0) { 'PASS' } else { 'FAIL' }
+            if ($results.current_user_my_cleanup -ne 'PASS') {
+                $cleanupFailures.Add("Temporary CurrentUser My certificates remain: $($leftovers -join ', ')")
+            }
         }
-        else {
-            $results.cleanup = 'NOT_VERIFIED_BASELINE_MISSING'
+        catch {
+            $results.current_user_my_cleanup = 'NOT_VERIFIED'
+            $cleanupFailures.Add("Verify CurrentUser My cleanup: $($_.Exception.Message)")
         }
     }
-    catch {
+    else {
+        $results.cleanup = 'NOT_VERIFIED_BASELINE_MISSING'
+        $cleanupFailures.Add('Store baseline was not captured; cleanup scope cannot be verified.')
+    }
+
+    if ($cleanupFailures.Count -gt 0) {
         $results.cleanup = 'FAIL'
-        $results.cleanup_failure = $_.Exception.ToString()
+        $results.cleanup_failures = @($cleanupFailures.ToArray())
+    }
+    else {
+        $results.cleanup = 'PASS'
     }
 
     $results.completed_at_utc = [DateTime]::UtcNow.ToString('o')
