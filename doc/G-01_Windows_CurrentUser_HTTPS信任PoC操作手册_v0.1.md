@@ -298,13 +298,13 @@ G-01 未通过时保留现有 stdio 兼容路径；Managed HTTPS 不上线。不
 **当前执行状态：NOT RUN。** 本文尚未在任何目标 Windows 主机创建或导入证书、启动监听服务、运行客户端测试或清理证书。实际产品必须在每台安装部署期间执行 CA trust bootstrap；本手册仅模拟部署动作。PoC 结果必须注明具体主机标识和目标 Windows 用户上下文；如 A / B 都部署 M2.5，则分别验证其独立部署流程。
 
 
-## 13. G-01B：交互式 CurrentUser Root 导入 PoC 脚本
+## 13. G-01B：CryptUIWizImport 交互式 CurrentUser Root 导入 PoC
 
 仓库提供一次性测试脚本：
 
 `.github/scripts/g01-interactive-currentuser-import.ps1`
 
-该脚本仅用于验证**当前 Windows 用户的交互式会话能否完成 CurrentUser Root 导入和系统默认证书链验证**。它生成短期、一次性的测试 CA / localhost Leaf；不是正式 AirBridge CA 供应方案，也不验证安装器、Antigravity、OpenCode 或 OAuth / MCP。
+该脚本用于验证**当前 Windows 用户的交互式会话能否通过 Windows 原生导入向导完成 CurrentUser Root 导入和系统默认证书链验证**。它生成短期、一次性的测试 CA / localhost Leaf；不是正式 AirBridge CA 供应方案，也不验证安装器、Antigravity、OpenCode 或 OAuth / MCP。核心 API 为 CryptUIWizImport，P/Invoke 包装位于 .github/scripts/g01-cryptui-native.ps1。
 
 ### 执行前提
 
@@ -326,18 +326,34 @@ G-01 未通过时保留现有 stdio 兼容路径；Managed HTTPS 不上线。不
 
 1. 仔细核对 Subject、Thumbprint、有效期和用途。
 2. 只有明确同意信任这个一次性测试 Root，才输入完整 Thumbprint。输入不匹配或直接取消时，不执行 Root 导入。
-3. 脚本调用 Windows `Import-Certificate`，目标明确限定为 `Cert:\CurrentUser\Root`。若 Windows 显示 Root 信任确认，必须由操作者亲自核对并批准；不得隐藏、自动点击或绕过系统确认。
+3. 脚本先用 CertOpenStore 打开 CERT_STORE_PROV_SYSTEM_W + CERT_SYSTEM_STORE_CURRENT_USER + Root 句柄，再调用 CryptUIWizImport。生产交互模式设置 ALLOW_CERT (0x00020000) 和 NO_CHANGE_DEST_STORE (0x00010000)，不设置 NO_UI (0x00000001)，因此显示 Windows 原生导入向导；目标 Store 由传入的句柄固定，不能切换到 LocalMachine。用户必须亲自核对并完成 Windows 向导；不得隐藏、自动点击或绕过系统确认。
 4. 导入后，脚本按精确 Thumbprint 回读 CurrentUser Root，并用 Windows 默认 X509Chain 构建器验证 localhost Leaf 链。
-5. 操作者还需如实确认 Windows Root 系统提示确实出现且已获批准。最终 PASS 要求导入回读和默认链验证同时成功。
+5. CryptUIWizImport 成功返回表示原生向导完成导入；最终 PASS 还要求精确 Thumbprint 回读和 Windows 默认链验证成功。不得把仅运行浏览器或 CustomTrustStore 自定义链验证记为系统 Root 验收。
 6. 脚本在 finally 阶段只按本次唯一 Thumbprint 删除本次导入的测试 Root、Leaf 和本次 Root 私钥关联，并比较 CurrentUser Root 回到基线、LocalMachine Root 完全不变。输出 `g01b-result.json` 作为证据。
 
-若用户拒绝应用层同意、拒绝 / 取消 Windows 系统确认、导入没有回读、链验证失败或清理不完整，脚本返回非零，不能记为 PASS。若脚本意外中断，必须先检查 JSON / 当前证书库快照，再由操作者按本次记录的 Thumbprint 决定如何清理；不得按 Subject 通配删除证书。
+若用户拒绝应用层 Consent、取消 Windows 导入向导、API 调用失败、导入没有回读、链验证失败或清理不完整，脚本返回非零，不能记为 PASS。若脚本意外中断，必须先检查 JSON / 当前证书库快照，再由操作者按本次记录的 Thumbprint 决定如何清理；不得按 Subject 通配删除证书。
 
 ### G-01B 的结论边界
 
 - G-01B PASS 只证明：当前被测 Windows 用户上下文中，交互式导入和 Windows 默认链验证可行，且本次测试没有修改 LocalMachine Root、清理后 CurrentUser Root 恢复原状。
 - G-01B 不证明生产安装器的 CA 生成 / 交付、升级 / Repair、Antigravity 或 OpenCode 的 TLS 信任行为，也不证明真实 OAuth / MCP 连通。
 - G-01B 测试的 CA 是短期 disposable CA，不能把其私钥、CER 或 Thumbprint 当作生产部署材料。
-- 现有 G-01A Windows Actions 子 Gate 与 G-01B 互补：G-01A 是非交互存储范围 / CustomTrustStore CI；G-01B 是真实用户交互导入。G-01 总体仍需完成所有目标 MCP 客户端 TLS + OAuth + MCP 正向和负向测试。
+- G-01A Windows Actions 验证非交互 Store-scope / CustomTrustStore 链；新增 G-01A2 在一次性标准用户 Profile 内使用同一个 CryptUIWizImport API 的 NO_UI 模式，验证 CurrentUser Root 目标句柄、导入回读、Windows 默认链和清理；G-01B 则在真实目标用户桌面运行同一 API 的交互模式。G-01A2 不验证交互 UI，也不代表用户授权。G-01 总体仍需完成所有目标 MCP 客户端 TLS + OAuth + MCP 正向和负向测试。
 
-**当前执行状态：NOT RUN。** GitHub Actions 只对该脚本做 PowerShell 语法 / 目标存储路径静态检查，不会执行脚本或触碰 Runner 的 Root 存储。
+**当前执行状态：G-01B NOT RUN。** GitHub Actions 会在一次性标准用户 Profile 中执行 G-01A2 的 NO_UI API test，但不会执行交互脚本或显示 Windows 导入向导。
+
+### 13.5 G-01A2：GitHub Actions 的无 UI API 验证
+
+Hosted Actions 无法由操作员完成 Windows 原生证书导入向导，因此 CI 不运行 G-01B。CI 会创建一次性普通用户及独立 Profile，在该隔离 Profile 中调用同一个 CryptUIWizImport API，但仅在 CI 模式设置 CRYPTUI_WIZ_NO_UI。验证项目包括：
+
+- P/Invoke 对 crypt32.dll / cryptui.dll 的声明能加载；
+- CRYPTUI_WIZ_IMPORT_SRC_INFO 结构体可正确构造；
+- CertOpenStore 打开 CERT_SYSTEM_STORE_CURRENT_USER 下的 Root Store；
+- ALLOW_CERT + NO_CHANGE_DEST_STORE + NO_UI 调用成功；
+- CryptUIWizImport 返回成功，CurrentUser Root 按 Thumbprint 回读；
+- Windows 默认 X509Chain 对 localhost Leaf 正向验证成功；
+- LocalMachine Root 前后 Thumbprint 集合不变；
+- 清理后 CurrentUser Root 恢复原集合、CurrentUser My 精确临时证书已删除；
+- 最后按 SID 删除整个 disposable Profile。
+
+该 CI 只验证 API / 结构体 / 句柄 / flags / 导入与清理路径。NO_UI 模式不显示 Windows 向导，不证明用户授权，也不能代替 G-01B。
