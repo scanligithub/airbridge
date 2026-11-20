@@ -135,7 +135,8 @@ certutil.exe -dump $leafCer
 GitHub-hosted Windows Actions 的 CurrentUser Root 写入测试揭示了一个重要的交互约束：
 
 - PowerShell `Import-Certificate` 在 hosted Runner 中立即报 `UI is not allowed in this operation`。
-- 普通权限子进程中，`.NET X509Store.Add()` 和 `certutil -f -user -addstore Root` 都未返回；后者的最新证据停在 `before-certutil-currentuser-root-addstore`，120 秒后被 wrapper 终止。证据包只有公开 CER 和阶段标记，没有导入回读或链验证结果，因此均不是导入成功。
+- 普通权限子进程中，`.NET X509Store.Add()` 和 `certutil -f -user -addstore Root` 都未返回；后者停在 `before-certutil-currentuser-root-addstore`，120 秒后被 wrapper 终止。
+- 后续一次 CI-only `crypt32.dll` 探针也未在 120 秒内返回。它把 `CertOpenStore` 与 `CertAddEncodedCertificateToStore` 放在同一个包装方法内，最后阶段标记为 `before-cryptapi-currentuser-root-add`，所以不能判定究竟是哪一个 Win32 调用阻塞。其证据包同样只有公开 CER 和阶段标记，没有 Root 回读、链验证结果或成功导入 JSON；不能记为导入成功。随后曾提交拆分 native open / add 阶段的测试版本，但该运行在进入测试步骤前被新版本取消，没有得到结果。
 - Microsoft 对 Windows 证书库的说明指出，Root 库受保护，用户界面会提醒用户只放置自己信任的根证书。CurrentUser Root 写入会触发 Windows 信任确认；无人值守的 GitHub-hosted Actions 执行无法由操作员完成该确认；子进程即使报告 `Environment.UserInteractive=True`，也没有人工批准 Windows 安全确认的操作员。参考：[Microsoft：Managing Certificates with Certificate Stores](https://learn.microsoft.com/en-us/windows/win32/seccrypto/managing-certificates-with-certificate-stores)。
 - 因此，CI 不再尝试写入 CurrentUser Root，也不再调用 certutil。新的 CI 只在标准用户下执行只读 Store 范围检查、使用 `X509ChainPolicy.CustomTrustStore` 做正向 / 负向链验证，并确认 CurrentUser Root、LocalMachine Root 未改变。报告中的 `current_user_root_import` 明确保持 `NOT_RUN_INTERACTIVE_WINDOWS_CONSENT_REQUIRED`。这不是 G-01A 信任导入 PASS。
 - 真实 CurrentUser Root 导入必须在目标 Windows 用户的交互式桌面部署流程内进行：AirBridge 先展示并取得应用层明确 Consent，再调用 Windows 信任导入；Windows 自身的根证书确认也必须由用户实际批准。用户拒绝 / 取消或无法显示交互确认时，Managed HTTPS 保持不可用，安装仍可继续。禁止通过注册表直接写入、隐藏/自动点击确认、LocalMachine Root 或 TLS bypass 绕过保护。
