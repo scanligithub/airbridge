@@ -366,8 +366,8 @@ class ClientAdapterTests(unittest.TestCase):
 
         jsonc_file = opencode_dir / "opencode.jsonc"
         jsonc_file.write_text("{}", encoding="utf-8")
-        self.assertEqual(OpenCodeAdapter.global_config(home), jsonc_file)
-        self.assertNotEqual(OpenCodeAdapter.global_config(home), project_file)
+        self.assertEqual(OpenCodeAdapter.global_config(home, environ={}), jsonc_file)
+        self.assertNotEqual(OpenCodeAdapter.global_config(home, environ={}), project_file)
 
     def test_opencode_global_path_respects_xdg_config_home(self):
         xdg_home = self.root / "custom-xdg"
