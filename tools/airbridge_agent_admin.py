@@ -234,12 +234,13 @@ def main() -> int:
                 raise CredentialStoreError(
                     "Token display is disabled by default; use 'provision' or explicitly pass --reveal-token"
                 )
-            result = store.issue_token(
-                args.agent_id,
-                args.scope,
-                label=args.label,
-                expires_in_days=args.expires_days,
-            )
+            with _agent_credential_lock(args.agent_id):
+                result = store.issue_token(
+                    args.agent_id,
+                    args.scope,
+                    label=args.label,
+                    expires_in_days=args.expires_days,
+                )
             print(json.dumps(result, ensure_ascii=False, indent=2))
             print(
                 "\nIMPORTANT: copy the token into this Agent's MCP Host environment now. "

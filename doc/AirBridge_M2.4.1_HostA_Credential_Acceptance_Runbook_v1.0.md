@@ -326,3 +326,10 @@ These source changes are newer than the Host A binary tested in Section 11. The 
 4. Repeat Stage F and record the new parent / child PIDs, listener release and recovery, GUI responsiveness, and HTTP 401 behavior.
 
 No new artifact deployment is authorized by this runbook update. PR #14 remains Draft / Open and unmerged.
+
+
+## 13. Per-Agent credential lifecycle serialization
+
+The current PR branch additionally serializes local Agent credential mutations with a Windows named mutex scoped to the current interactive session. The mutex name is derived from SHA-256 of the normalized Agent ID and does not expose the Agent ID. The legacy explicit-reveal issue command, tokenless provision command, single-token revoke, and Agent-wide revoke all use the same per-Agent lock, preventing cooperating administrator CLI processes from interleaving server credential changes and Credential Manager writes/deletes.
+
+A Windows thread-level mutex integration test verifies that two operations for the same Agent cannot hold the lock simultaneously. This code is newer than the Stage A/B/F Host A executable recorded in Section 11; the updated EXE and Host A lifecycle still require a fresh build and separately authorized retest.

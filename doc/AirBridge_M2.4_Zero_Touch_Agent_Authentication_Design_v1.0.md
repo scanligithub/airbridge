@@ -149,10 +149,11 @@ Windows Credential Manager 可以避免明文 Token 出现在普通配置文件�
 - 旧 `issue` 命令现在必须显式提供 `--reveal-token` 才显示 Token；普通路径优先使用 `provision`。
 - Agent-wide revoke 同时撤销服务端凭据并尝试删除本机凭据；结果明确区分 `deleted`、`not_found`、`failed`。本地清理失败时 CLI 返回非零状态；服务端撤销仍是安全有效性的权威步骤。
 - 单 Token `revoke --token-id` 会先定位该 Token 所属 Agent，再读取当前 Credential Manager 条目；仅当 Vault 中 Token 的 ID 与被撤销 ID 完全匹配时才删除。若 Vault 保存的是同一 Agent 的另一枚凭据，返回 `credential_cleanup=not_current` 并保留它，防止撤销旧 Token 时误删当前凭据；Vault 条目缺失与读取失败分别报告。
+- provision、legacy issue、单 Token revoke、Agent-wide revoke 均通过当前 Windows 会话中按 Agent ID 哈希命名的本机 Mutex 串行化，避免并发签发 / 撤销交错导致新凭据被旧撤销流程清理。Mutex 对象名不包含 Agent ID 明文。
 - Provisioning 通过 `AgentSecurityStore.issue_token(reject_if_active=True)` 在 SQLite `BEGIN IMMEDIATE` 事务内原子检查 Agent 是否已有活动凭据，避免并发 provision 为同一 Agent 创建多枚活动 Token；普通签发接口仍保留多凭据能力以支持后续受控轮换。
 - IPC Server 停止时先进入排空态并跟踪活动 HTTP handler；排空期间新接受的连接会被立即关闭。使用默认 5 秒有界排空；若超时则恢复正常接纳请求、保留监听器和 Store、拒绝关闭 GUI。只有排空成功才停止 serve loop、关闭监听器、join 服务线程并关闭自身创建的 AgentSecurityStore。Handler 使用 daemon thread，避免 `server_close()` 隐式无限 join；外部注入的 Store 仍由调用方负责关闭。
 - API 处理前先持久化 `admitted` 审计记录；Admission Audit 写入失败时请求在触及 Runtime 前以 503 拒绝。响应前再持久化最终结果；若最终审计写入失败，不返回原本的成功响应，而返回 `AGENT_AUDIT_FINALIZATION_FAILED` / HTTP 503，并将操作状态标记为 `unknown`，有 `request_id` 时要求先查询原请求、禁止盲目重提。
-- 新增测试覆盖 Windows Credential Manager 真实写入 / 读取 / 删除 round-trip、tokenless provisioning / 失败回滚 / 原子单活动凭据签发 / Agent 与单 Token 撤销清理状态 / Store 所有权 / 有界 Handler 排空 / Admission Audit 与 Final Audit 失败行为。
+- 新增测试覆盖 Windows Credential Manager 真实写入 / 读取 / 删除 round-trip、Windows per-Agent Mutex 并发串行化、tokenless provisioning / 失败回滚 / 原子单活动凭据签发 / Agent 与单 Token 撤销清理状态 / Store 所有权 / 有界 Handler 排空 / Admission Audit 与 Final Audit 失败行为。
 - 当前 PR #14 HEAD 的 CI：M2.4 Agent Credential Provider Run #32、MCP Gateway Run #79、Agent Security Run #70、Capture Process Inventory Run #218、Runtime Session Run #119 均最终 PASS；Python 3.10 / 3.11 / 3.12 与 Windows Credential Manager 集成测试均通过。Agent Security Python 3.12 首次 HTTP 集成运行出现一次 3 秒请求超时，单独重跑该失败 Job 后通过。
 - M2.4.1 Host A Runbook 已记录 2026-11-20 在源提交 `35dd48dd162bd47db882de9137c870b388a58601` 上完成的 EXE SHA-256、Stage C–E 凭据 / MCP 只读验收以及 Stage F 正常关闭和重启验收。随后新增的有界 Shutdown、Final Audit 失败保护和单 Token 撤销清理代码尚未包含在该 EXE 中；必须对最新 PR HEAD 重新构建、检查 Artifact，并在另行授权后对更新 EXE 重做 Stage F。
 - 尚未实现桌面管理 UI、自动生成 MCP Host 配置、自动轮换和现有配置迁移。
