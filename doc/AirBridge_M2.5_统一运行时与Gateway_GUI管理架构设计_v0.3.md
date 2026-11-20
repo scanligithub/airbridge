@@ -362,6 +362,8 @@ PyInstaller onefile 独立子进程如果需要独立于父 GUI 运行，应按 
 - Antigravity App：由客户端 UI 提供实际配置文件路径；CLI 有全局 `~/.gemini/config/mcp_config.json` 和工作区 `.agents/mcp_config.json`。远程配置使用 `mcpServers.<name>.serverUrl`。IDE CIMD 需 2.6.0+，可按官方机制评估 DCR 兼容。
 - OpenCode：V2 使用 `mcp.servers.<name>`，远程字段为 `type="remote"` 和 `url`，OAuth 默认启用。用户全局配置为 `~/.config/opencode/opencode.json(c)`，Windows 系统配置位于 `%ProgramData%\\opencode`，还可能存在项目配置。
 - 首批专用 Adapter 仅为 Antigravity / OpenCode。Adapter 必须检测目标客户端版本、配置 schema 和路径；自动配置只写当前 Windows 用户级 global / App 用户配置。项目级和系统级配置只检测并提示，绝不由 Adapter 自动修改。
+- OAuth Client 注册遵循 D-07：Antigravity `https://antigravity.google/oauth/client-metadata.json` 与 OpenCode `https://opencode.ai/oauth/opencode/client.json` 两个官方 CIMD URL 精确白名单优先；受支持客户端不支持 / 未采用 CIMD 时 DCR 兼容回退。托管配置不得写预注册 client credentials 或自定义 redirect_uri。
+- CIMD / DCR registration 不等于 Grant。用户必须对每个 Agent / Resource 单独 Consent；Grant 精确绑定 OAuth Client ID、Agent instance ID、Resource Audience 和 Scope。DCR 提供的 Client Metadata 不是身份真实性证明，GUI 显示未经验证的客户端声明。禁止任意 CIMD URL fetch。
 
 ### 14.5 决策状态更新
 
@@ -375,12 +377,14 @@ PyInstaller onefile 独立子进程如果需要独立于父 GUI 运行，应按 
 | D-06 GUI 退出 | GUI 退出时有界排空并停止所有受管 Gateway Worker；不保留后台 Worker | 用户已确认；异常退出收敛仍需 PoC |
 | D-07 双机冲突 | ON/ON、OFF/OFF 仅提示，不自动改配置或停服务 | 已按用户确认作为默认要求 |
 | D-08 迁移 | 旧 stdio 暂时保留；客户端配置无明文 Service Token | 迁移策略待实施设计 |
+| D-09 OAuth Client 注册 | 官方 Antigravity / OpenCode CIMD URL 白名单优先；DCR 兼容回退；每 Grant 独立 Consent 并绑定 Agent / Resource / Scope | 用户已确认策略；真实客户端 OAuth / Broker 安全 PoC 待完成 |
 
 ### 14.6 本版本仍未完成的工作
 
 - 未验证本机 OAuth Authorization Server HTTPS 在两种真实客户端中的兼容性；
 - 未验证 Antigravity App / IDE / CLI 和 OpenCode 当前安装版本的完整连接；
 - 未验证 PyInstaller frozen 单文件 Worker 的进程隔离和恢复；
+- OAuth Client registration 行为已冻结为 CIMD allowlist 优先 + DCR fallback；Broker 实现、重定向校验、实际目标版本行为和安全测试仍待 PoC；
 - 未定义最终端口范围、证书部署/更新方式和 OAuth Server 具体实现；
 - 本文仍为设计评审稿，不代表 M2.5 任何功能已实现。
 
