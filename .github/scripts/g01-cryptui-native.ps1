@@ -32,6 +32,14 @@ namespace AirBridge.G01
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool CertCloseStore(IntPtr hCertStore, UInt32 dwFlags);
 
+        [DllImport("crypt32.dll", EntryPoint = "CertGetStoreProperty", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool CertGetStoreProperty(
+            IntPtr hCertStore,
+            UInt32 dwPropId,
+            IntPtr pvData,
+            ref UInt32 pcbData);
+
         [DllImport("cryptui.dll", EntryPoint = "CryptUIWizImport",
             CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -48,15 +56,24 @@ namespace AirBridge.G01
 
 function Open-G01CurrentUserStore {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$StoreName)
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$StoreName,
+        [switch]$SetLocalizedName
+    )
 
     $storeNamePointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($StoreName)
     try {
+        [uint32]$storeFlags = 0x00010000 # CERT_SYSTEM_STORE_CURRENT_USER
+        if ($SetLocalizedName) {
+            # CERT_STORE_SET_LOCALIZED_NAME_FLAG: ask the provider to expose
+            # CERT_STORE_LOCALIZED_NAME_PROP_ID for CryptUI wizard display.
+            $storeFlags = $storeFlags -bor [uint32]0x00000002
+        }
         $handle = [AirBridge.G01.NativeMethods]::CertOpenStore(
             [IntPtr]10,             # CERT_STORE_PROV_SYSTEM_W
             [uint32]0,
             [IntPtr]::Zero,
-            [uint32]0x00010000,     # CERT_SYSTEM_STORE_CURRENT_USER
+            $storeFlags,
             $storeNamePointer
         )
     }
@@ -74,8 +91,48 @@ function Open-G01CurrentUserStore {
 function Open-G01CurrentUserRootStore {
     [CmdletBinding()]
     param()
-    return Open-G01CurrentUserStore -StoreName 'Root'
+    return Open-G01CurrentUserStore -StoreName 'Root' -SetLocalizedName
 }
+
+function Get-G01CertificateStoreLocalizedName {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][IntPtr]$Handle)
+
+    if ($Handle -eq [IntPtr]::Zero) { throw 'Certificate store handle is null.' }
+
+    [uint32]$byteCount = 0
+    $sized = [AirBridge.G01.NativeMethods]::CertGetStoreProperty(
+        $Handle, [uint32]0x00001000, [IntPtr]::Zero, [ref]$byteCount
+    )
+    if (-not $sized) {
+        $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw [System.ComponentModel.Win32Exception]::new($code, 'CertGetStoreProperty(size) failed.')
+    }
+    if ($byteCount -lt 2 -or ($byteCount % 2) -ne 0) {
+        throw "Unexpected localized store-name byte count: $byteCount"
+    }
+
+    $buffer = [Runtime.InteropServices.Marshal]::AllocHGlobal([int]$byteCount)
+    try {
+        [uint32]$actualByteCount = $byteCount
+        $read = [AirBridge.G01.NativeMethods]::CertGetStoreProperty(
+            $Handle, [uint32]0x00001000, $buffer, [ref]$actualByteCount
+        )
+        if (-not $read) {
+            $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            throw [System.ComponentModel.Win32Exception]::new($code, 'CertGetStoreProperty(read) failed.')
+        }
+        $name = [Runtime.InteropServices.Marshal]::PtrToStringUni($buffer)
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            throw 'CertGetStoreProperty returned an empty localized store name.'
+        }
+        return $name
+    }
+    finally {
+        [Runtime.InteropServices.Marshal]::FreeHGlobal($buffer)
+    }
+}
+
 function Close-G01CertificateStore {
     [CmdletBinding()]
     param(
