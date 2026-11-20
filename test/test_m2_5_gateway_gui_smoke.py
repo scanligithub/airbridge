@@ -22,13 +22,25 @@ import airbridge_app
 
 class _CredentialStoreProbe:
     def __init__(self):
-        self.present = False
+        self.present_agents: set[str] = set()
 
-    def exists(self, _agent_id: str) -> bool:
-        return self.present
+    def exists(self, agent_id: str) -> bool:
+        return agent_id in self.present_agents
 
     def load(self, _agent_id: str) -> str:
         raise AssertionError("GUI status inspection must not load credential secrets")
+
+
+class _AgentRegistryProbe:
+    def __init__(self, active_agents: set[str] | None = None):
+        self.active_agents = set(active_agents or set())
+
+    def list_tokens(self, agent_id: str | None = None):
+        agents = [agent_id] if agent_id else sorted(self.active_agents)
+        return [
+            {"agent_id": current, "enabled": current in self.active_agents}
+            for current in agents
+        ]
 
 
 class _NoopRequestBroker:
@@ -56,6 +68,49 @@ class GatewayGuiSmokeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.qt_app = QApplication.instance() or QApplication(["AirBridge-Gateway-GUI-Smoke"])
+
+    @unittest.skipUnless(os.name == "nt", "Credential Manager GUI controls require Windows")
+    def test_agent_credential_buttons_require_registry_and_vault(self):
+        with tempfile.TemporaryDirectory(prefix="airbridge-gateway-agent-controls-") as temp:
+            env = {"LOCALAPPDATA": temp}
+            with (
+                patch.dict(os.environ, env, clear=False),
+                patch(
+                    "airbridge_mcp_gateway.credential_store.default_credential_store",
+                    return_value=_CredentialStoreProbe(),
+                ),
+                patch.object(airbridge_app.SerialWorker, "start", lambda _self: None),
+                patch.object(airbridge_app, "RequestBroker", _NoopRequestBroker),
+                patch.object(
+                    airbridge_app,
+                    "AntigravityIPCServer",
+                    _NoopAntigravityIPCServer,
+                ),
+            ):
+                window = airbridge_app.AirBridgeMainWindow()
+                try:
+                    # No M2.4 Registry on the IPC host: fail closed.
+                    self.assertFalse(window.btn_gateway_antigravity_provision.isEnabled())
+                    self.assertFalse(window.btn_gateway_antigravity_revoke.isEnabled())
+
+                    window.gateway_security_store = _AgentRegistryProbe({"antigravity"})
+                    window.gateway_credential_store.present_agents = {"antigravity"}
+                    window.refresh_gateway_settings()
+
+                    # An active server credential blocks duplicate provisioning,
+                    # but explicit revoke remains available.
+                    self.assertFalse(window.btn_gateway_antigravity_provision.isEnabled())
+                    self.assertTrue(window.btn_gateway_antigravity_revoke.isEnabled())
+
+                    # No active credential: Provision is available, while Revoke
+                    # is disabled when the corresponding vault item is absent.
+                    window.gateway_security_store = _AgentRegistryProbe()
+                    window.gateway_credential_store.present_agents = set()
+                    window.refresh_gateway_settings()
+                    self.assertTrue(window.btn_gateway_antigravity_provision.isEnabled())
+                    self.assertFalse(window.btn_gateway_antigravity_revoke.isEnabled())
+                finally:
+                    window.close()
 
     def test_main_window_loads_policy_and_both_client_adapter_panels(self):
         with tempfile.TemporaryDirectory(prefix="airbridge-gateway-gui-") as temp:
@@ -119,7 +174,7 @@ class GatewayGuiSmokeTests(unittest.TestCase):
                         enabled=True,
                         agents={"antigravity": True, "opencode": False},
                     )
-                    window.gateway_credential_store.present = True
+                    window.gateway_credential_store.present_agents = {"antigravity"}
                     window.chk_gateway_enabled.setChecked(False)
                     window.chk_gateway_antigravity.setChecked(False)
                     self.assertTrue(
