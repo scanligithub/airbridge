@@ -30,6 +30,63 @@ class ClientAdapterTests(unittest.TestCase):
         source = path.read_text(encoding="utf-8-sig")
         return _JsoncParser(source).parse().value
 
+    def test_inspect_missing_antigravity_config_is_read_only(self):
+        path = self.root / "not-created" / "mcp_config.json"
+
+        status = self.antigravity.inspect(path, "antigravity")
+
+        self.assertFalse(status.present)
+        self.assertFalse(status.owned)
+        self.assertIsNone(status.enabled)
+        self.assertFalse(path.exists())
+        self.assertFalse(path.parent.exists())
+
+    def test_inspect_reports_owned_antigravity_entry_enabled_state(self):
+        path = self.root / "mcp_config.json"
+        self.antigravity.install_or_update(path, "antigravity", enabled=False)
+
+        disabled = self.antigravity.inspect(path, "antigravity")
+        self.assertTrue(disabled.present)
+        self.assertTrue(disabled.owned)
+        self.assertFalse(disabled.enabled)
+
+        self.antigravity.install_or_update(path, "antigravity", enabled=True)
+        enabled = self.antigravity.inspect(path, "antigravity")
+        self.assertTrue(enabled.present)
+        self.assertTrue(enabled.owned)
+        self.assertTrue(enabled.enabled)
+
+    def test_inspect_reports_name_collision_without_claiming_ownership(self):
+        path = self.root / "mcp_config.json"
+        original = json.dumps({
+            "mcpServers": {
+                "airbridge-antigravity": {
+                    "command": "python.exe",
+                    "args": ["-m", "not-airbridge"],
+                }
+            }
+        })
+        path.write_text(original, encoding="utf-8")
+
+        status = self.antigravity.inspect(path, "antigravity")
+
+        self.assertTrue(status.present)
+        self.assertFalse(status.owned)
+        self.assertIsNone(status.enabled)
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_inspect_reports_opencode_owned_entry_and_does_not_create_missing_config(self):
+        path = self.root / "opencode.json"
+        missing_status = self.opencode.inspect(path, "opencode")
+        self.assertFalse(missing_status.present)
+        self.assertFalse(path.exists())
+
+        self.opencode.install_or_update(path, "opencode", enabled=False)
+        status = self.opencode.inspect(path, "opencode")
+        self.assertTrue(status.present)
+        self.assertTrue(status.owned)
+        self.assertFalse(status.enabled)
+
     def test_antigravity_adds_only_managed_stdio_entry_and_backs_up(self):
         path = self.root / "mcp_config.json"
         original = (
