@@ -7,6 +7,10 @@
 
 ## 1. 目的与判定边界
 
+**部署时点是本 PoC 的核心验证对象。** M2.5 的 CA / localhost 服务器证书创建及 CA 公钥信任导入属于每台 AirBridge 主机的部署流程。这里的 PowerShell 操作仅用于模拟并验证未来部署程序在目标用户上下文完成的同一流程，不是要求用户安装后再手动导入，也不是 Gateway 启动时的临时步骤。
+
+每台安装 M2.5 的主机都在部署阶段执行本机 CA trust bootstrap；无论该机首次安装后 Gateway ON 还是 OFF，都不跳过 CA 部署。CA 部署成功不会改变 `gateway.enabled=false`，不会启动 OAuth Broker 或任何 Worker。用户拒绝时安装仍可完成，但 Managed HTTPS 保持不可用。
+
 G-01 分为三个阶段：
 
 1. **证书与 Windows 信任库**：创建短期一次性 CA 和 localhost 服务器证书；用户明确同意后，只把 CA 公钥导入 CurrentUser Trusted Root；确认 LocalMachine Root 未变化。
@@ -32,12 +36,12 @@ G-01 分为三个阶段：
 
 ## 2.1 每台主机的证书归属与测试范围
 
-本 PoC 不指定 Host A 或 Host B。对每一台需要运行 Managed HTTPS Gateway、并在本机运行 Antigravity / OpenCode MCP Client 的 Windows 主机，均应独立执行：
+本 PoC 不指定 Host A 或 Host B。对**每一台实际部署 M2.5 AirBridge 的 Windows 主机**，均须在部署阶段独立执行本机 CA trust bootstrap；即使该机的 Gateway 默认 OFF，也执行证书准备与 Consent。
 
-- 该机本地创建自己的短期测试 CA 和 localhost Leaf；正式产品模型也按每台机器 / 当前 Windows 用户维护独立的本机 CA 身份与私钥，不由另一台主机集中签发。
+- 该机的部署流程本地创建自己的短期 PoC CA 和 localhost Leaf；正式产品模型按每台机器 / 目标 Windows 用户维护独立的本机 CA 身份与私钥，不由另一台主机集中签发。
 - 只将该机 CA 的公钥证书，在运行 MCP Client 的 Windows 用户上下文中经明确同意导入该用户的 CurrentUser Root。CA 私钥不复制、不发送给另一台机器，也不放入仓库、共享目录或 AirBridge Runtime 通道。
 - Gateway Broker / Worker 使用该机本地 Leaf；MCP Client 通过 localhost 连接同一台机器的 loopback listener。localhost 永远指向客户端所在机器，因此不支持由另一台主机上的 MCP Client 通过 localhost 访问本机 Gateway。
-- A、B 的 AirBridge Runtime / 串口通信与本机 HTTPS 信任是两条独立路径；对端不需要信任本机 CA。若某台机器 Gateway 保持 OFF，且其上没有本机 Managed HTTPS 客户端需求，则无需为它导入该 CA。
+- A、B 的 AirBridge Runtime / 串口通信与本机 HTTPS 信任是两条独立路径；对端不需要信任本机 CA。即使某台机器 Gateway 保持 OFF，部署阶段仍完成该机 CA 信任准备；OFF 只阻止 Broker / Worker 启动。
 - CurrentUser 是每台 Windows 主机上的用户配置，不是跨机器共享的信任库。若两台机器都要启用 Managed HTTPS，必须分别生成、分别征求同意、分别导入并分别验证；不复制 CA 私钥，也不要求两台机器的 Root Thumbprint 相同。
 - 本手册的默认测试假设 AirBridge GUI / Gateway 与 MCP Client 由同一 Windows 登录用户运行。若实际部署采用不同 Windows 账户，必须分别验证客户端账户的 CurrentUser Root 信任和 Gateway 账户的私钥访问权限；不得假定一个账户的导入会影响另一个账户。
 
@@ -122,17 +126,19 @@ certutil.exe -dump $leafCer
 
 若扩展、Issuer、SAN、EKU、有效期或私钥属性不符合预期，停止，不要导入 Root。
 
-## 5. 明确同意后导入 CurrentUser Root
+## 5. 部署阶段的明确 Consent 与 CurrentUser Root 导入
 
-向用户展示 Root Subject、Thumbprint、NotBefore / NotAfter、导入目标（Cert:\CurrentUser\Root）及用途（一次性 G-01 localhost HTTPS PoC），取得明确同意。用户未明确同意时不得运行导入命令。
+在实际产品中，这一步必须由 AirBridge 安装 / 部署程序在部署流程中执行，不得推迟到 Gateway ON、Worker 启动或第一次 MCP 连接时。当前手册因正式安装器尚未实现，使用 PowerShell 显式模拟部署程序动作，以验证目标 Windows 用户上下文和 CurrentUser trust 行为。
 
-用户同意后，单独执行：
+向目标 Windows 用户展示 Root Subject、Thumbprint、NotBefore / NotAfter、导入目标（Cert:\CurrentUser\Root）、CA 私钥用途、证书可被本用户信任链使用的影响，以及“拒绝后 AirBridge 仍安装成功但 Managed HTTPS 不可用”的结果，取得明确同意。用户未明确同意时不得运行导入命令。
+
+仅在模拟部署阶段、且用户明确同意后，才单独执行：
 
 ~~~powershell
 Import-Certificate -FilePath $rootCer -CertStoreLocation 'Cert:\CurrentUser\Root' -Confirm
 ~~~
 
-导入目标必须保持为 Cert:\CurrentUser\Root；禁止改成 LocalMachine 路径。拒绝时不导入，并清理本次新建的证书和 CER 文件。
+导入目标必须保持为 Cert:\CurrentUser\Root；禁止改成 LocalMachine 路径。拒绝时不导入，但模拟 AirBridge 安装仍应继续完成；只将 Managed HTTPS / OAuth 标记为不可用，Gateway 保持默认 OFF，AirBridge Core / Runtime / 串口功能不受影响。若以后需要补做，必须再次进入明确的部署 Repair 流程并重新 Consent，不能通过 Gateway ON 静默导入。
 
 ## 6. 验证信任范围
 
@@ -259,7 +265,7 @@ Remove-Item -LiteralPath $leafCer -WhatIf
 
 ## 11. G-01 Go / No-Go（按部署主机分别判定）
 
-**每台计划启用 Managed HTTPS Gateway 的目标主机，PASS 必须同时满足：**
+**每台实际部署 M2.5 AirBridge 的目标主机，部署阶段 CA trust bootstrap 的 PASS 必须同时满足：**
 - 用户明确同意导入；仅 CurrentUser 信任；LocalMachine Root 前后完全未变化。
 - 所有首版支持的客户端形态接受有效 localhost TLS 链，并严格拒绝过期、SAN 不匹配、信任移除和不能构建的证书链。
 - Antigravity App / IDE、OpenCode Desktop，以及首版如承诺支持的 OpenCode CLI，分别完成 OAuth discovery / Authenticate、MCP initialize、tools/list 和只读 Tool 调用。
@@ -283,4 +289,4 @@ G-01 未通过时保留现有 stdio 兼容路径；Managed HTTPS 不上线。不
 
 ---
 
-**当前执行状态：NOT RUN。** 本文尚未在任何目标 Windows 主机创建或导入证书、启动监听服务、运行客户端测试或清理证书。PoC 结果必须注明具体主机标识（避免将 Host A / B 当作固定角色），并按每台计划启用 Managed HTTPS 的机器分别归档。
+**当前执行状态：NOT RUN。** 本文尚未在任何目标 Windows 主机创建或导入证书、启动监听服务、运行客户端测试或清理证书。实际产品必须在每台安装部署期间执行 CA trust bootstrap；本手册仅模拟部署动作。PoC 结果必须注明具体主机标识和目标 Windows 用户上下文；如 A / B 都部署 M2.5，则分别验证其独立部署流程。
