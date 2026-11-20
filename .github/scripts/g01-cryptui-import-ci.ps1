@@ -91,7 +91,7 @@ try {
     $results.current_user_root_before_count = $currentUserRootBefore.Count
 
     Set-G01CryptPhase 'before-create-temporary-ca'
-    $root = New-SelfSignedCertificate @{
+    $rootParams = @{
         Type = 'Custom'
         Subject = "CN=AirBridge G01 CryptUI CI Root $runId"
         KeyAlgorithm = 'RSA'
@@ -105,7 +105,9 @@ try {
         NotAfter = (Get-Date).AddDays(2)
         CertStoreLocation = 'Cert:\CurrentUser\My'
     }
-    $leaf = New-SelfSignedCertificate @{
+    $root = New-SelfSignedCertificate @rootParams
+
+    $leafParams = @{
         Type = 'Custom'
         Subject = 'CN=localhost'
         DnsName = @('localhost')
@@ -124,6 +126,7 @@ try {
         NotAfter = (Get-Date).AddDays(1)
         CertStoreLocation = 'Cert:\CurrentUser\My'
     }
+    $leaf = New-SelfSignedCertificate @leafParams
 
     $rootThumb = $root.Thumbprint.ToUpperInvariant()
     $leafThumb = $leaf.Thumbprint.ToUpperInvariant()
@@ -267,6 +270,5 @@ if (
     $results.current_user_my_cleanup -ne 'PASS' -or
     $results.cleanup -ne 'PASS'
 ) {
-    exit 1
+    throw 'G-01A2 CryptUIWizImport API CI subgate failed; inspect g01-cryptui-result.json.'
 }
-exit 0
