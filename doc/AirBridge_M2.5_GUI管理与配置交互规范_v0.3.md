@@ -454,7 +454,19 @@ AirBridge 不能读取客户端自己的 Token Vault，因此不能仅凭 Broker
 
 导入本机信任证书前必须明确提示用户证书作用和信任范围，并获得用户确认。只管理本产品记录的证书 thumbprint；不得清理或覆盖其他软件证书。卸载时仅删除由本产品创建且确认不再被其他组件引用的证书。
 
-### 13.6 GUI 验收补充
+### 13.6 OAuth Client 注册与 Consent 界面
+
+M2.5 首版首批 OAuth Client 注册策略：
+- Antigravity 官方 CIMD Client ID：`https://antigravity.google/oauth/client-metadata.json`。
+- OpenCode 官方 CIMD Client ID：`https://opencode.ai/oauth/opencode/client.json`。
+- 目标客户端支持 CIMD 时优先 CIMD；Antigravity IDE 低于 2.6.0 或目标客户端未采用 CIMD 时，使用 DCR 兼容回退。
+- Broker metadata 应在兼容时声明 `client_id_metadata_document_supported=true`，并保留 DCR registration endpoint。AirBridge 自动写入的 MCP 配置不得写自定义 `oauth.client_id`、`oauth.client_secret` 或 `redirect_uri`。
+- GUI 显示本次 OAuth Client 注册机制（CIMD / DCR）、Client ID、来源 URL 和注册状态。CIMD URL 属于精确白名单；DCR 提供的 Client Name / URI / Logo / 产品类型均标注为“客户端自述，未经验证”，不得误标为官方身份认证。
+- 注册成功只表示 Client Registration 已建立，不得显示为 Agent 已授权或 Gateway 已连接。
+- 每个 Agent / Resource 的首次授权分别显示 Consent：客户端身份声明、目标 Agent instance、Resource Audience、请求 Scope、授权期限 / 撤销影响；用户明确确认后才建立该 Grant。相同 Client ID 访问不同 Agent / Resource 必须再次 Consent。
+- 任何 CIMD / DCR 注册都不能绕过 PKCE S256、OAuth state、redirect URI、issuer 和 Resource Audience 校验。拒绝授权时不得创建 Grant 或放行 Worker Tool。
+
+### 13.7 GUI 验收补充
 
 - [ ] Antigravity 配置写入后，GUI 明确提示用户仍需在客户端点击 Authenticate 并完成授权。
 - [ ] OpenCode 配置写入后，可引导用户使用 `/mcps` 或 `opencode mcp auth`。
@@ -464,3 +476,9 @@ AirBridge 不能读取客户端自己的 Token Vault，因此不能仅凭 Broker
 - [ ] Broker 有 Grant 但客户端从未发起已认证请求时，显示“等待客户端连接/授权验证”。
 - [ ] HTTPS 证书不受信任时，拒绝把 Worker 标记为安全可用。
 - [ ] 只在 Worker 观察到成功的认证请求后，更新“最近成功认证”时间。
+- [ ] Antigravity / OpenCode 官方 CIMD Client ID 采用精确白名单，不接受相似域名、额外路径、query / fragment 或任意用户 Metadata URL。
+- [ ] 支持 CIMD 时优先 CIMD；Antigravity IDE 低于 2.6.0 或其它不支持 CIMD 的已支持版本验证 DCR fallback。
+- [ ] AirBridge MCP Host 配置不写入 `oauth.client_id`、`oauth.client_secret` 或自定义 `redirect_uri`。
+- [ ] DCR Client Metadata 仅作为用户声明展示，不显示为经过官方身份验证；注册成功不产生 Agent Grant。
+- [ ] 每个 Grant 单独 Consent，并绑定 Client ID、Agent instance ID、Resource Audience 和 Scope；同一 Client ID 请求第二个 Agent / Resource 时再次 Consent。
+- [ ] 错误 PKCE、redirect URI、state、issuer 或 resource/audience 被拒绝；DCR 限流、元数据尺寸限制和审计生效。
