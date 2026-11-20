@@ -4,7 +4,7 @@
 - 版本：0.1
 - 日期：2026-11-20
 - 状态：待评审
-- 关联：M2.5 v0.3 主文档、ADR-007 至 ADR-011
+- 关联：M2.5 v0.3 主文档、ADR-007 至 ADR-012
 - 目的：把用户已确认的产品约束、当前建议方案和仍需产品决策的项目区分开
 
 ## 1. 已确认、不得在实现中擅自改变的产品原则
@@ -44,11 +44,9 @@
 
 ### D-01：首次安装时 Gateway 默认状态
 
-建议：默认 OFF，由用户在 GUI 首次启用。
+建议：**新安装默认 OFF**；升级安装保留已有 Gateway 配置，不重置用户选择。
 
-需要决定：
-- 新安装包默认 OFF 是否接受；
-- 升级已有安装时，是否保留旧配置、还是迁移后默认 OFF。
+状态：建议方案待用户最终确认。
 
 ### D-02：Gateway 随 AirBridge 启动
 
@@ -60,11 +58,7 @@
 
 ### D-03：GUI 关闭时 Gateway Worker 行为
 
-建议：初版 GUI 正常退出时，先有界排空，再停止所有 Worker 和 OAuth Broker；不引入无主后台进程。
-
-需要决定：
-- 是否接受关闭 GUI 即停止 Gateway；
-- 是否需要系统托盘 / 后台常驻，建议先不纳入 M2.5 第一版。
+**用户已确认：** GUI 正常退出时，先对在途请求进行有界排空，然后停止所有 Gateway Worker 和 OAuth Broker；不保留后台 Worker，不允许 Worker 脱离 Supervisor 孤立运行。首版不引入系统托盘 / 后台常驻模式。
 
 ### D-04：本机 HTTPS 证书信任
 
@@ -77,15 +71,7 @@
 
 ### D-05：MCP Client 配置安装范围
 
-建议：
-- Antigravity App 使用客户端实际提供的配置路径；
-- Antigravity CLI 使用用户级全局配置；
-- OpenCode 使用当前 Windows 用户的全局配置；
-- 系统级 / 项目级配置仅检测和提示，不自动修改。
-
-需要决定：
-- 是否接受以上默认安装范围；
-- 是否需要允许用户通过 GUI 明确选择项目级配置。
+**用户已确认：** 自动配置只修改当前 Windows 用户级配置。首批 Antigravity / OpenCode Adapter 不自动修改项目级或系统级配置；项目级 / 系统级配置最多检测并提示，不代替用户写入。后续新增 Adapter 默认沿用相同的用户级范围，除非另有明确产品决策。
 
 ### D-06：端口分配
 
@@ -100,14 +86,12 @@
 ### D-07：OAuth 客户端注册策略
 
 建议：
-- 首批 Antigravity / OpenCode 使用官方 Client Metadata URL allowlist / pre-registration；
-- 不开放无限制的任意 CIMD Metadata URL fetch；
-- DCR / CIMD Registration 不代表用户已授权 Agent；
-- 新 Client / 新 Grant 必须明确 Consent。
+- 首批内置专用 Adapter 为 Antigravity / OpenCode；
+- 同时设计通用 MCP Client 注册入口，允许用户手动填写客户端名称并复制 Gateway 提供的 Streamable HTTP / OAuth 配置说明；
+- 只有通过 Streamable HTTP、HTTPS 和 MCP OAuth 兼容性验证的客户端，才能进入受管 Gateway 模式；
+- 不开放无限制的任意 CIMD Metadata URL fetch；DCR / CIMD 注册不代表用户已授权 Agent；新 Client / 新 Grant 必须明确 Consent。
 
-需要决定：
-- M2.5 第一版是否只支持上述两个已知客户端；
-- 是否暂不开放任意第三方 MCP Client 自动接入（建议是）。
+**待产品决策：** 是否接受首版提供“通用手动接入”入口，以及后续是否按需增加 Cursor、VS Code Copilot、Cline 等专用 Adapter。
 
 ### D-08：双机冲突弹窗行为
 
@@ -121,6 +105,18 @@
 - 每个冲突状态只弹一次，直到状态恢复或连接代次改变（建议是）；
 - 是否提供“本次会话忽略”按钮；
 - 是否需要 GUI 同时提供持久化的冲突状态提示。
+
+### D-09：扩展更多 Agent / MCP Client 的机制
+
+建议：采用“Agent 类型注册表 + 客户端配置 Adapter + 通用手动接入”三层机制，详见 ADR-012。
+
+- Agent 类型不写死为 Antigravity / OpenCode。
+- 每个注册实例有独立且稳定的内部 Agent ID；Agent 类型 / Adapter ID 与 Agent 实例 ID 分离。
+- Worker、Service Credential、OAuth Grant、Resource Audience 和 Scope 按 Agent 实例隔离。
+- 首版内置 Antigravity / OpenCode 专用 Adapter；通用模式不修改第三方配置文件，只生成配置片段和授权指引。
+- 后续增加产品专用 Adapter 时不修改 Gateway 核心 Worker / OAuth Broker。
+
+待决定：是否接受通用手动接入作为首版能力；第三方专用 Adapter 按兼容性验证结果逐步增加。
 
 ## 4. 必须通过技术 PoC 的事项
 
@@ -151,7 +147,7 @@
 
 文档评审完成后：
 1. 将已确认 P-01 至 P-10 标记为 Frozen Product Requirements；
-2. 对 D-01 至 D-08 记录用户选择或明确延期；
+2. 对 D-01 至 D-09 记录用户选择或明确延期；
 3. 关闭 G-01 至 G-09 的技术可行性门禁，或者明确标记 No-Go / 暂缓；
 4. 更新 M2.5 架构文档和 ADR 状态；
 5. 仅在用户明确批准后进入 M2.5.1 代码实施。
