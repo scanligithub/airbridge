@@ -460,3 +460,10 @@ AirBridge 不读取 Antigravity / OpenCode 的客户端 Token Vault。Broker 有
 - [ ] 模拟成功迁移、中途崩溃、配置损坏、未知 schema、备份失败和回滚失败；验证原始数据保留、Worker fail-closed 和 GUI 恢复说明。
 - [ ] Runtime Session 新/旧版本互操作与四种冲突组合通过。
 - [ ] A/B 使用相同最终 AirBridge.exe 完成双机实测。
+
+
+## 8.7 G-01 Windows PoC 执行手册
+
+G-01 Host A 证书创建、CurrentUser Root 用户同意导入、LocalMachine Root 不变验证、客户端 TLS / OAuth / MCP 测试矩阵、负向测试与清理步骤，统一见 [G-01 Windows CurrentUser HTTPS 信任 PoC 操作手册 v0.1](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md)。
+
+该手册当前为 NOT RUN；尚无 Host A 实测证据。Chrome TLS smoke test、证书导入成功或单一客户端连通均不能单独关闭 G-01。PoC 必须验证所有首版承诺支持的客户端形态，并确认 TLS 负向场景 fail-closed。此阶段不授权产品代码、正式 EXE 或证书管理功能实施。
