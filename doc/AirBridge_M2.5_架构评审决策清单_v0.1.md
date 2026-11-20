@@ -60,13 +60,13 @@
 - M2.4 Agent Service Credential 在当前 Windows 用户 Credential Manager 中的既有条目；升级不得自动重新签发、轮换或撤销；
 - OAuth Broker 的客户端注册、Grant / Revocation 状态、issuer / Resource Audience 绑定及维持这些状态所需的持久化数据 / 密钥材料；
 - AirBridge 当前用户级 Antigravity / OpenCode MCP 配置中由 Adapter 管理的条目，以及其他 MCP Server、未知字段和 JSONC 注释 / 格式；
-- 仍有效且由 AirBridge 管理的 CurrentUser 证书及其私钥关联 / 信任状态；升级不得无故删除、重建或静默扩大证书信任范围。
+- 仍有效且由 AirBridge 管理的本机 CA、CA 私钥关联、localhost Server Certificate 和 CurrentUser 信任状态；升级不得无故删除、重建、重复导入或静默扩大证书信任范围。
 
 **授权数据边界：** Antigravity / OpenCode 自己的 OAuth Token Vault 仍完全由客户端管理。AirBridge 不读取、复制、备份、迁移、改写或删除客户端 Access Token / Refresh Token。正常升级应保持 issuer、Resource URL / Audience 和 Broker 持久化状态稳定，使已有授权无需无故重新进行；若必要变更确实导致某个授权失效，必须明确告知并只要求受影响的客户端 / Agent 重新授权。
 
 **迁移与恢复要求：**
 - 通过可靠的安装 / 实例标记区分首次安装与升级；升级时即使配置文件缺失、损坏或 schema 不支持，也不得误判为首次安装并静默写入默认配置。
-- 升级前为 AirBridge 配置、Broker 持久化状态 / 密钥元数据、AirBridge 管理的证书元数据和将被 Adapter 修改的当前用户 MCP 配置建立受当前用户 ACL 保护的本地备份；不得把客户端 OAuth Token Vault 纳入备份。
+- 升级前为 AirBridge 配置、Broker 持久化状态 / 密钥元数据、AirBridge 管理的本机 CA / 服务器证书元数据和将被 Adapter 修改的当前用户 MCP 配置建立受当前用户 ACL 保护的本地备份；不得把客户端 OAuth Token Vault 纳入备份。
 - 按 schema version 执行可重复、幂等的迁移；保留未知字段和已存在的用户值。只允许为旧 schema 中确实不存在的新字段应用明确记录的迁移默认值，不得覆盖现有值。
 - 迁移先备份、校验、暂存，再原子提交；任一步骤失败均回滚到升级前状态，不留下配置、Grant、证书或 MCP endpoint 的半迁移状态。
 - 配置损坏、未知版本或备份 / 回滚失败时，GUI 显示明确恢复提示；不得自动清空或重建配置。托管 Gateway Worker 在迁移未解决前保持停止，原始用户设置和数据保留供恢复。
