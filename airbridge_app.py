@@ -2678,7 +2678,9 @@ class AntigravityIPCServer:
 
       thread = self._server_thread
       if thread is not None and thread is not threading.current_thread():
-        thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        # The drain deadline may already be consumed; allow a small, separate
+        # bound for the serve_forever thread to return after shutdown().
+        thread.join(timeout=max(1.0, deadline - time.monotonic()))
         if thread.is_alive():
           raise RuntimeError("AirBridge HTTP server thread did not stop")
         self._server_thread = None
