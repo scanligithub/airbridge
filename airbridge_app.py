@@ -10,6 +10,7 @@ import hashlib
 import math
 import ntpath
 import os
+from pathlib import Path
 import queue
 import sys
 import threading
