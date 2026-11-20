@@ -119,7 +119,7 @@ Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭�
 端口管理要求：
 - AirBridge HTTP API 继续使用现有 `127.0.0.1:8888`；不得与 Gateway Broker / Worker 共用端口。
 - Broker 和每个 Agent Worker 使用独立 TCP 端口；同一客户端类型可以注册多个 Agent 实例，每个实例必须有独立端口。
-- 默认候选池为 `38801–38864`；新增实例自动选择池内未分配且通过本机检查的空闲端口，并持久化。用户可在 GUI 主动修改为池内其他空闲端口。
+- 默认候选池为 `38801–38864`；IANA 当前将其标记为 Unassigned（非 AirBridge 保留端口），发布时须复核登记状态。新增实例自动选择池内未分配且通过本机检查的空闲端口，并持久化。用户可在 GUI 主动修改为池内其他空闲端口。
 - 服务只绑定 loopback（`127.0.0.1` / `::1`）；客户端 endpoint 使用 `localhost`。不得绑定通配地址或自动开放 LAN / 公网访问。
 - 启动前做实际 TCP bind / 占用验证，并检查系统当前动态端口和 excluded port range。不能只依赖进程列表或默认 Windows 端口范围。
 - 冲突时 GUI 显示端口和可取得的进程名称 / PID；Broker 冲突阻断 Managed HTTPS OAuth，Worker 冲突仅阻断对应 Agent。不得静默换随机端口；可让其它独立 Worker 继续运行。
