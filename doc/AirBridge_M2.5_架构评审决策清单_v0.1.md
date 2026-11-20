@@ -88,9 +88,9 @@
 ### D-07：OAuth 客户端注册策略
 
 建议：
-- 首批内置专用 Adapter 为 Antigravity / OpenCode；
-- 同时设计通用 MCP Client 注册入口，允许用户手动填写客户端名称并复制 Gateway 提供的 Streamable HTTP / OAuth 配置说明；
-- 只有通过 Streamable HTTP、HTTPS 和 MCP OAuth 兼容性验证的客户端，才能进入受管 Gateway 模式；
+- M2.5 首批仅为 Antigravity / OpenCode 内置专用 Adapter；
+- Generic / Manual 通用 MCP Client 手动接入明确排除在首版之外；
+- 其他客户端后续只有在通过 Streamable HTTP、HTTPS 和 MCP OAuth 兼容性验证，并完成对应产品范围评审后，才考虑增加专用 Adapter 或通用接入能力；
 - 不开放无限制的任意 CIMD Metadata URL fetch；DCR / CIMD 注册不代表用户已授权 Agent；新 Client / 新 Grant 必须明确 Consent。
 
 **已确认：** M2.5 首批专用 Adapter 仅包含 Antigravity 和 OpenCode；Cursor、VS Code / Copilot、Cline 等不属于首批专用适配器开发范围，留待后续版本按需求和兼容性验证评估。
