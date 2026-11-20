@@ -1,26 +1,31 @@
 # -*- mode: python ; coding: utf-8 -*-
 # AirBridge.spec
-# 完整集成 protocol, eda_engine, fs_engine, shell_engine 单文件打包清单
+# Unified AirBridge.exe: GUI default + MCP STDIO subprocess mode.
+
+from PyInstaller.utils.hooks import collect_all
+
+mcp_datas, mcp_binaries, mcp_hiddenimports = collect_all('mcp')
 
 block_cipher = None
 
 a = Analysis(
-    ['airbridge_app.py'],
-    pathex=[],
-    binaries=[],
+    ['airbridge_entry.py'],
+    pathex=['mcp_gateway'],
+    binaries=mcp_binaries,
     datas=[
         ('protocol.py', '.'),
         ('eda_engine.py', '.'),
         ('fs_engine.py', '.'),
         ('shell_engine.py', '.'),
-    ],
+    ] + mcp_datas,
     hiddenimports=[
         'serial',
         'serial.tools.list_ports',
         'PySide6.QtCore',
         'PySide6.QtWidgets',
         'PySide6.QtGui',
-    ],
+        'airbridge_mcp_gateway.server',
+    ] + mcp_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -44,7 +49,10 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    # STDIO requires real stdin/stdout/stderr handles. Use the console
+    # subsystem, then hide only a console window owned by a GUI launch.
+    console=True,
+    hide_console='hide-early',
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
