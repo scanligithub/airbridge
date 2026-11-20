@@ -2,7 +2,7 @@
 
 - 文档编号：AB-M2.5-G01-RUNBOOK-001
 - 版本：0.1；日期：2026-11-20
-- 状态：草案，尚未在 Host A 执行；G-01 仍为 Partial Research / NOT PASS
+- 状态：草案，尚未在任何目标 Windows 主机执行；G-01 仍为 Partial Research / NOT PASS
 - 关联：架构评审决策清单 G-01、ADR-007、实施路线图 §8.1
 
 ## 1. 目的与判定边界
@@ -30,9 +30,20 @@ G-01 分为三个阶段：
 - 测试 URL 必须指向本机 loopback。
 - 清理时只删除本次新建并记录的精确 Thumbprint，不按 Subject 通配删除。
 
-## 3. 执行前基线
+## 2.1 每台主机的证书归属与测试范围
 
-使用普通权限打开 PowerShell。此阶段只读取信息：
+本 PoC 不指定 Host A 或 Host B。对每一台需要运行 Managed HTTPS Gateway、并在本机运行 Antigravity / OpenCode MCP Client 的 Windows 主机，均应独立执行：
+
+- 该机本地创建自己的短期测试 CA 和 localhost Leaf；正式产品模型也按每台机器 / 当前 Windows 用户维护独立的本机 CA 身份与私钥，不由另一台主机集中签发。
+- 只将该机 CA 的公钥证书，在运行 MCP Client 的 Windows 用户上下文中经明确同意导入该用户的 CurrentUser Root。CA 私钥不复制、不发送给另一台机器，也不放入仓库、共享目录或 AirBridge Runtime 通道。
+- Gateway Broker / Worker 使用该机本地 Leaf；MCP Client 通过 localhost 连接同一台机器的 loopback listener。localhost 永远指向客户端所在机器，因此不支持用 Host A 的客户端经 localhost 访问 Host B 的 Gateway。
+- A、B 的 AirBridge Runtime / 串口通信与本机 HTTPS 信任是两条独立路径；对端不需要信任本机 CA。若某台机器 Gateway 保持 OFF，且其上没有本机 Managed HTTPS 客户端需求，则无需为它导入该 CA。
+- CurrentUser 是每台 Windows 主机上的用户配置，不是跨机器共享的信任库。若两台机器都要启用 Managed HTTPS，必须分别生成、分别征求同意、分别导入并分别验证；不复制 CA 私钥，也不要求两台机器的 Root Thumbprint 相同。
+- 本手册的默认测试假设 AirBridge GUI / Gateway 与 MCP Client 由同一 Windows 登录用户运行。若实际部署采用不同 Windows 账户，必须分别验证客户端账户的 CurrentUser Root 信任和 Gateway 账户的私钥访问权限；不得假定一个账户的导入会影响另一个账户。
+
+## 3. 目标 Windows 主机执行前基线
+
+在当前要验证的 Windows 主机上，使用运行 AirBridge / MCP Client 的目标 Windows 用户，以普通权限打开 PowerShell。此阶段只读取信息；不要假定它必须是 Host A。
 
 ~~~powershell
 $PSVersionTable
@@ -51,7 +62,7 @@ Get-ChildItem 'Cert:\CurrentUser\Root' | Select-Object Subject, Thumbprint, NotB
 Get-ChildItem 'Cert:\LocalMachine\Root' | Select-Object Subject, Thumbprint, NotBefore, NotAfter | Sort-Object Thumbprint
 ~~~
 
-注意：Windows CurrentUser 逻辑证书视图可能继承 LocalMachine 证书。因此，CurrentUser Root 中“可见”本身不足以证明证书是用户级新导入。证据须同时包括本次唯一 Thumbprint、certutil 用户范围查询，以及 LocalMachine Root 前后清单一致。若无法读取 LocalMachine 基线或系统状态无法解释，停止并记录阻塞原因。
+注意：这里的 CurrentUser 指**本机当前登录用户**的证书视图，并非跨机器的共享存储。Windows CurrentUser 逻辑证书视图还可能继承本机 LocalMachine 证书。因此，CurrentUser Root 中“可见”本身不足以证明证书是用户级新导入。证据须同时包括本次唯一 Thumbprint、certutil 用户范围查询，以及 LocalMachine Root 前后清单一致。若无法读取 LocalMachine 基线或系统状态无法解释，停止并记录阻塞原因。
 
 **会话要求：** 第 3 至第 9 节应在同一个普通权限 PowerShell 会话中依次执行，以保留变量。若会话中断，重新打开 PowerShell 后，必须将 $evidence 设为原证据目录，并从其中的 Thumbprint / 基线文件恢复变量；不得重新生成证书来补齐旧证据。
 
@@ -151,9 +162,9 @@ $leaf | Format-List Subject, Issuer, Thumbprint, NotBefore, NotAfter, HasPrivate
 - certutil -dump Leaf CER 显示正确 DNS SAN / Server Authentication EKU。
 - 若 LocalMachine Root 被修改，不得继续把本次 PoC 记为合格。
 
-## 7. 客户端 TLS 与真实协议测试
+## 7. 客户端 TLS 与真实协议测试（按目标主机分别执行）
 
-必须有一个专用本机测试端点使用第 4 节 Leaf 证书，且只监听 127.0.0.1 / ::1。**本手册不创建或启动监听服务。** 正式 Gateway Broker / Worker 尚未完成时，应使用经单独评审的可丢弃 PoC 服务，不得以公网服务器或其它机器替代。
+必须有一个与当前 MCP Client 位于**同一台 Windows 主机**的专用本机测试端点使用第 4 节 Leaf 证书，且只监听 127.0.0.1 / ::1。由于端点 hostname 是 localhost，客户端访问的就是客户端自己的机器；不能让另一台主机上的 MCP Client 用 localhost 访问本机 Gateway。**本手册不创建或启动监听服务。** 正式 Gateway Broker / Worker 尚未完成时，应使用经单独评审的可丢弃 PoC 服务，不得以公网服务器或其它机器替代。
 
 D-06 已确认的默认端口：
 - OAuth Broker：https://localhost:38861/
@@ -246,9 +257,9 @@ Remove-Item -LiteralPath $leafCer -WhatIf
 | 负向测试结果 | |
 | 脱敏日志 / 截图路径及备注 | |
 
-## 11. G-01 Go / No-Go
+## 11. G-01 Go / No-Go（按部署主机分别判定）
 
-**PASS 必须同时满足：**
+**每台计划启用 Managed HTTPS Gateway 的目标主机，PASS 必须同时满足：**
 - 用户明确同意导入；仅 CurrentUser 信任；LocalMachine Root 前后完全未变化。
 - 所有首版支持的客户端形态接受有效 localhost TLS 链，并严格拒绝过期、SAN 不匹配、信任移除和不能构建的证书链。
 - Antigravity App / IDE、OpenCode Desktop，以及首版如承诺支持的 OpenCode CLI，分别完成 OAuth discovery / Authenticate、MCP initialize、tools/list 和只读 Tool 调用。
@@ -272,4 +283,4 @@ G-01 未通过时保留现有 stdio 兼容路径；Managed HTTPS 不上线。不
 
 ---
 
-**当前执行状态：NOT RUN。** 本文尚未在 Host A 创建或导入证书、启动监听服务、运行客户端测试或清理证书。
+**当前执行状态：NOT RUN。** 本文尚未在任何目标 Windows 主机创建或导入证书、启动监听服务、运行客户端测试或清理证书。PoC 结果必须注明具体主机标识（避免将 Host A / B 当作固定角色），并按每台计划启用 Managed HTTPS 的机器分别归档。
