@@ -53,6 +53,8 @@ Get-ChildItem 'Cert:\LocalMachine\Root' | Select-Object Subject, Thumbprint, Not
 
 注意：Windows CurrentUser 逻辑证书视图可能继承 LocalMachine 证书。因此，CurrentUser Root 中“可见”本身不足以证明证书是用户级新导入。证据须同时包括本次唯一 Thumbprint、certutil 用户范围查询，以及 LocalMachine Root 前后清单一致。若无法读取 LocalMachine 基线或系统状态无法解释，停止并记录阻塞原因。
 
+**会话要求：** 第 3 至第 9 节应在同一个普通权限 PowerShell 会话中依次执行，以保留变量。若会话中断，重新打开 PowerShell 后，必须将 $evidence 设为原证据目录，并从其中的 Thumbprint / 基线文件恢复变量；不得重新生成证书来补齐旧证据。
+
 ## 4. 创建一次性测试 CA 和 localhost Leaf
 
 下列命令把 CA 和 Leaf 放在 CurrentUser My，私钥均不可导出；不会把 CA 加入 Root 信任库。
@@ -84,7 +86,7 @@ $leafParams = @{
     KeyExportPolicy = 'NonExportable'
     KeyUsageProperty = 'All'
     KeyUsage = @('DigitalSignature', 'KeyEncipherment')
-    TextExtension = @('2.5.29.37={text}1.3.6.1.5.5.7.3.1')
+    TextExtension = @('2.5.29.19={critical}{text}ca=FALSE', '2.5.29.37={text}1.3.6.1.5.5.7.3.1')
     NotAfter = (Get-Date).AddDays(14)
     CertStoreLocation = 'Cert:\CurrentUser\My'
 }
@@ -194,6 +196,8 @@ D-06 已确认的默认端口：
 $rootThumb = (Get-Content (Join-Path $evidence 'root-thumbprint.txt')).Trim()
 $leafThumb = (Get-Content (Join-Path $evidence 'leaf-thumbprint.txt')).Trim()
 
+$rootCer = Join-Path $evidence ("g01-root-" + $rootThumb + ".cer")
+$leafCer = Join-Path $evidence ("g01-localhost-" + $leafThumb + ".cer")
 $rootTrustPath = "Cert:\CurrentUser\Root\$rootThumb"
 $leafPath = "Cert:\CurrentUser\My\$leafThumb"
 $rootMyPath = "Cert:\CurrentUser\My\$rootThumb"
