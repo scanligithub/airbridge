@@ -3383,12 +3383,41 @@ class AirBridgeMainWindow(QMainWindow):
     answer = QMessageBox.question(
         self,
         "移除 AirBridge MCP 配置",
-        f"只移除 {agent_id} 配置文件中的 AirBridge 专用条目，不删除其它 MCP Server：\n{path}\n\n是否继续？",
+        f"将先把 {agent_id} 的本机 Agent 策略设为 OFF，阻止仍在运行的 STDIO 子进程继续调用；"
+        f"然后只移除该配置文件中的 AirBridge 专用条目，不删除其它 MCP Server，也不撤销 M2.4 Credential：\n"
+        f"{path}\n\n是否继续？",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         QMessageBox.StandardButton.No,
     )
     if answer != QMessageBox.StandardButton.Yes:
       return
+
+    # Disable the Agent policy before editing the MCP host config. A running
+    # STDIO child checks this policy before every Tool call and must stop now.
+    try:
+      try:
+        gateway_enabled, agents = self.gateway_policy_store.read_snapshot()
+      except (OSError, ValueError):
+        # A malformed/unreadable prior snapshot is already fail-closed. Replace
+        # it with a valid global-OFF snapshot before proceeding with removal.
+        gateway_enabled, agents = False, {}
+      agents[agent_id] = False
+      self.gateway_policy_store.write(enabled=gateway_enabled, agents=agents)
+    except (OSError, ValueError) as exc:
+      QMessageBox.critical(
+          self,
+          "无法安全移除 Adapter",
+          f"未修改客户端配置，因为无法先持久化 Agent OFF 策略。\n{exc}",
+      )
+      return
+
+    self._gateway_policy_agents = dict(agents)
+    self._gateway_policy_invalid = False
+    if agent_id == "antigravity":
+      self.chk_gateway_antigravity.setChecked(False)
+    else:
+      self.chk_gateway_opencode.setChecked(False)
+
     try:
       result = adapter.remove_owned(path, agent_id)
     except Exception as exc:
@@ -3402,9 +3431,12 @@ class AirBridgeMainWindow(QMainWindow):
     if result.backup_path:
       detail += f"\n原文件备份：{result.backup_path}"
     self.lbl_gateway_policy_status.setText(
-        f"{agent_id} 的 AirBridge MCP 条目已{'移除' if result.changed else '不存在'}。{detail}"
+        f"{agent_id} 的 Agent 策略已设为 OFF；"
+        f"AirBridge MCP 条目已{'移除' if result.changed else '不存在'}。{detail}"
+        "M2.4 Credential 保留，未执行 revoke。"
     )
-    self.refresh_gateway_adapter_statuses()
+    self.append_log("INFO", f"{agent_id} Agent policy switched OFF before Adapter removal; M2.4 credential retained")
+    self.refresh_gateway_settings()
 
   def _sync_installed_gateway_adapters(self, gateway_enabled: bool, agents: Dict[str, bool]):
     """Apply the policy state to already-owned entries; never create missing entries."""
