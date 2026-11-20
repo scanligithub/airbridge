@@ -22,6 +22,7 @@
 | P-09 | 冲突提示不得自动修改任何一端配置或自动停止 Gateway | 用户已确认 |
 | P-10 | AirBridge 不接管 Capture / Allegro 专业软件业务生命周期 | 既有项目架构原则 |
 | P-11 | M2.5 首批专用 MCP Client Adapter 仅支持 Antigravity 与 OpenCode；其他专用 Adapter 不属于首批范围 | 用户已确认 |
+| P-12 | M2.5 首版不提供 Generic / Manual 通用 MCP Client 手动接入；该能力留待后续版本评估 | 用户已确认 |
 
 ## 2. 建议采用的技术决策
 
@@ -94,7 +95,7 @@
 
 **已确认：** M2.5 首批专用 Adapter 仅包含 Antigravity 和 OpenCode；Cursor、VS Code / Copilot、Cline 等不属于首批专用适配器开发范围，留待后续版本按需求和兼容性验证评估。
 
-**仍待产品决策：** 通用 MCP Client 手动接入是否纳入 M2.5 首版。该决定与首批专用 Adapter 名单相互独立。
+**用户已确认：** Generic / Manual 通用 MCP Client 手动接入不纳入 M2.5 首版，不开发首版 GUI 入口，不列入首版验收。未来版本如有需要再单独评估。
 
 ### D-08：双机冲突弹窗行为
 
@@ -111,16 +112,16 @@
 
 ### D-09：扩展更多 Agent / MCP Client 的机制
 
-建议：采用“Agent 类型注册表 + 客户端配置 Adapter + 通用手动接入”三层机制，详见 ADR-012。
+建议：采用“Agent 类型注册表 + 客户端配置 Adapter”作为 M2.5 首版扩展基础，详见 ADR-012。Generic / Manual 是未来可选扩展，不属于首版功能。
 
 - Agent 类型不写死为 Antigravity / OpenCode。
 - 每个注册实例有独立且稳定的内部 Agent ID；Agent 类型 / Adapter ID 与 Agent 实例 ID 分离。
 - Worker、Service Credential、OAuth Grant、Resource Audience 和 Scope 按 Agent 实例隔离。
 - **用户已确认：** 首版专用 Adapter 仅有 Antigravity / OpenCode；不开发其他产品的专用 Adapter。
-- 通用模式（若获准纳入首版）不修改第三方配置文件，只生成配置片段和授权指引。
+- **用户已确认：** Generic / Manual 通用 MCP Client 手动接入不纳入 M2.5 首版。
 - 后续增加产品专用 Adapter 时不修改 Gateway 核心 Worker / OAuth Broker。
 
-已确认首批专用 Adapter 范围：仅 Antigravity / OpenCode。待决定：是否接受通用手动接入作为首版能力；其他产品专用 Adapter 留待后续版本评估。
+**已确认：** 首批专用 Adapter 仅 Antigravity / OpenCode；Generic / Manual 通用手动接入不纳入 M2.5 首版；其他产品专用 Adapter 留待后续版本评估。
 
 ## 4. 必须通过技术 PoC 的事项
 
