@@ -1,5 +1,8 @@
 # AirBridge M2.5：统一运行时与 Gateway GUI 管理架构设计
 
+> **版本状态（2026-11-20）：本 v0.3 文档保留为历史评审稿。** 其中 Streamable HTTP、双 HTTPS、OAuth Broker、CA / CurrentUser Root、端口池及 GUI Supervisor 持久 Worker 模型均被 ADR-013 取代。当前首版 transport 为本机 STDIO，子进程由 Antigravity / OpenCode MCP Host 启动和管理；AirBridge 保留 M2.4 Agent Token / Scope / Audit 和既有 ABFP 串口链路。
+
+
 - 文档编号：AB-M2.5-ARCH-001
 - 版本：0.3（基线状态、OAuth/TLS 和 Runtime Session 兼容性复核稿）
 - 日期：2026-11-20
