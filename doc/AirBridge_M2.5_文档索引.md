@@ -18,6 +18,8 @@
 - Host A ↔ Host B 继续使用现有 ABFP / 串口链路；没有跨机器 MCP HTTPS 服务。
 - AirBridge Core 保持通用通信通道定位；Capture / Allegro 生命周期由 Skill 负责。
 
+当前实现基线补充：main 已存在 M2.1 / M2.2 STDIO Gateway（mcp_gateway/airbridge_mcp_gateway），包括 MCP Server、Agent Credential Manager 读取、AirBridge HTTP API 客户端和基础 MCP / Credential 单元测试。M2.5 以此为基础整合进统一 AirBridge.exe / Python 3.11+，不从零重写。详细见 ADR-013 §3.1 / §10。
+
 ## 二、当前有效的架构决策记录
 
 1. [ADR-013：STDIO 本机 MCP 接入与客户端托管生命周期](ADR-013_M2.5_Stdio本机MCP接入与客户端托管生命周期.md) — 当前首版 transport、认证、进程生命周期、Gateway OFF 语义和验收标准。
