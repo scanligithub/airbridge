@@ -79,6 +79,24 @@ try {
 }
 finally {
     if ($userCreated) {
+        $userSid = $account.SID.Value
         Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue
+
+        # A forcibly terminated child may not run the test script's finally block.
+        # Remove the temporary Windows profile by its exact SID so any residual
+        # CurrentUser certificate material is removed with that disposable profile.
+        $profileDeadline = (Get-Date).AddSeconds(20)
+        do {
+            $profile = Get-CimInstance -ClassName Win32_UserProfile -Filter ("SID='" + $userSid + "'") -ErrorAction SilentlyContinue
+            if ($null -eq $profile -or -not $profile.Loaded) { break }
+            Start-Sleep -Seconds 1
+        } while ((Get-Date) -lt $profileDeadline)
+
+        if ($profile) {
+            if ($profile.Loaded) {
+                throw "Temporary standard-user profile is still loaded; refusing to leave its certificate store behind (SID $userSid)."
+            }
+            Remove-CimInstance -InputObject $profile -ErrorAction Stop
+        }
     }
 }
