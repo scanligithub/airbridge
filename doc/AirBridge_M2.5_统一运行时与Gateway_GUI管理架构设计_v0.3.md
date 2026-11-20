@@ -29,6 +29,7 @@ M2.5 不改变 AirBridge 的产品定位：AirBridge 仍是通用、透明的双
 11. **首次安装时 Gateway 总开关默认 OFF**；首次安装不得自动启动任何 Gateway Worker。
 12. `gateway.start_with_airbridge` 是独立启动策略，默认 ON；仅当 `gateway.enabled=true` 且 Agent 实例已启用时，GUI 启动才会拉起对应 Worker。首次安装的总开关 OFF 优先级更高。
 13. **M2.5 首版不配置 Windows 登录自动启动 AirBridge GUI**；这与 GUI 启动后的 Gateway Worker 启动策略分离，留待后续版本评估。
+14. 本机 HTTPS 证书只在当前 Windows 用户（CurrentUser）范围建立信任；安装时必须取得用户明确同意，不要求管理员权限，不修改 LocalMachine Root。用户拒绝或撤销信任时，托管 HTTPS Gateway 不可用，禁止关闭 TLS 校验或降级成无认证 HTTP。
 
 ## 3. 当前基线与 M2.5 变化
 
@@ -383,12 +384,22 @@ MCP Authorization 规范要求 Authorization Server endpoints 使用 HTTPS；OAu
 - 每 Agent Gateway Worker：HTTPS MCP Resource Server；
 - HTTP loopback 仅可作为 OAuth authorization code redirect URI 的允许例外，不可作为携带 Access Token 的 MCP 资源请求通道。
 
-目标 endpoint 统一采用稳定 loopback hostname，例如 `https://localhost:<port>/mcp`。本机证书必须包含 SAN、受目标客户端信任，且客户端必须执行正常证书链验证。参考：
+目标 endpoint 统一采用稳定 loopback hostname，例如 `https://localhost:<port>/mcp`。本机证书必须包含 SAN、受目标客户端信任，且客户端必须执行正常证书链验证。
+
+**用户已确认的证书信任策略：**
+- 证书信任安装限定在当前 Windows 用户（CurrentUser）范围；不得修改 LocalMachine 证书存储区或 LocalMachine Root。
+- 首次安装 / 初始配置证书时，必须说明证书用途与信任范围，并由用户明确同意后才导入；不要求管理员权限。
+- 用户拒绝导入或撤销信任后，托管 Streamable HTTP / OAuth HTTPS Gateway 不可用；不得忽略证书错误、关闭 TLS 校验或降级为无认证 HTTP。
+- 此决定不关闭既有 stdio 兼容路径，也不影响 AirBridge Core / Runtime。
+
+**技术边界：** CurrentUser 根证书信任能否被目标客户端及其所用 TLS 栈共同识别，仍须用 Antigravity App / IDE、OpenCode 和系统浏览器进行 Windows 实测。不得把“写入 CurrentUser 证书存储成功”误判为所有客户端均已信任。若真实客户端无法正常验证证书，Managed HTTPS Mode 判定 No-Go，并提交新的架构决策；不得自行扩大到 LocalMachine Root 或要求管理员权限。
+
+参考：
 - [MCP Authorization Specification — Communication Security](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
 - [RFC 6750 — Bearer Token Usage](https://www.rfc-editor.org/rfc/rfc6750)
 - [Microsoft New-SelfSignedCertificate](https://learn.microsoft.com/en-us/powershell/module/pki/new-selfsignedcertificate)
 
-Microsoft 的自签名证书示例可用于 Windows 原型，但不能据此推断 Antigravity / OpenCode 一定信任该证书。证书安装 / CurrentUser 信任、SAN、重启、轮换和卸载均必须在真实目标客户端验证。
+Microsoft 的自签名证书示例可用于 Windows 原型，但不能据此推断 Antigravity / OpenCode 一定信任该证书。证书安装 / CurrentUser 信任、SAN、重启、轮换、撤销和卸载均必须在真实目标客户端验证。
 
 ### 15.4 两类客户端 OAuth 操作由客户端完成
 
