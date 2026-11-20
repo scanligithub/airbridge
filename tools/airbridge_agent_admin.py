@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO_ROOT / "mcp_gateway"))
 
 from agent_security import AgentSecurityStore, VALID_SCOPES  # noqa: E402
 from airbridge_mcp_gateway.credential_store import (  # noqa: E402
+    CredentialNotFound,
     CredentialStoreError,
     WindowsCredentialStore,
 )
@@ -115,6 +116,59 @@ def _provision_agent(store: AgentSecurityStore, args: argparse.Namespace) -> dic
     }
 
 
+def _revoke_token(store: AgentSecurityStore, token_id: str) -> tuple[dict, int]:
+    """Revoke one token and delete the vault entry only when it stores that token."""
+    target = next(
+        (item for item in store.list_tokens() if item["token_id"] == token_id),
+        None,
+    )
+    changed = store.revoke_token(token_id)
+    if target is None:
+        return {"revoked": changed, "credential_cleanup": "not_found"}, 0
+    if os.name != "nt":
+        return {"revoked": changed, "credential_cleanup": "not_applicable"}, 0
+
+    agent_id = target["agent_id"]
+    credentials = WindowsCredentialStore()
+    try:
+        stored_token = credentials.load(agent_id)
+    except CredentialNotFound:
+        return {
+            "revoked": changed,
+            "credential_deleted": False,
+            "credential_cleanup": "not_found",
+        }, 0
+    except CredentialStoreError:
+        return {
+            "revoked": changed,
+            "credential_deleted": False,
+            "credential_cleanup": "failed",
+        }, 1
+
+    token_parts = stored_token.split(".")
+    if len(token_parts) != 3 or token_parts[1] != token_id:
+        # The vault belongs to a different still-current token for this Agent.
+        # Never delete it when revoking an older or unrelated credential.
+        return {
+            "revoked": changed,
+            "credential_deleted": False,
+            "credential_cleanup": "not_current",
+        }, 0
+    try:
+        deleted = credentials.delete(agent_id)
+    except CredentialStoreError:
+        return {
+            "revoked": changed,
+            "credential_deleted": False,
+            "credential_cleanup": "failed",
+        }, 1
+    return {
+        "revoked": changed,
+        "credential_deleted": deleted,
+        "credential_cleanup": "deleted" if deleted else "not_found",
+    }, 0
+
+
 def _revoke_agent(store: AgentSecurityStore, agent_id: str) -> tuple[dict, int]:
     """Revoke server credentials first, then report local vault cleanup precisely."""
     changed = store.revoke_agent(agent_id)
@@ -162,19 +216,16 @@ def main() -> int:
             return 0
         if args.command == "revoke":
             if args.token_id:
-                changed = store.revoke_token(args.token_id)
-                credential_deleted = None
+                result, exit_code = _revoke_token(store, args.token_id)
             else:
                 result, exit_code = _revoke_agent(store, args.agent_id)
-                print(json.dumps(result, ensure_ascii=False))
-                if exit_code:
-                    print(
-                        "Server credential is revoked, but local Credential Manager cleanup failed; retry cleanup.",
-                        file=sys.stderr,
-                    )
-                return exit_code
-            print(json.dumps({"revoked": changed}, ensure_ascii=False))
-            return 0
+            print(json.dumps(result, ensure_ascii=False))
+            if exit_code:
+                print(
+                    "Server credential is revoked, but local Credential Manager cleanup failed; retry cleanup.",
+                    file=sys.stderr,
+                )
+            return exit_code
         if args.command == "list":
             print(json.dumps(store.list_tokens(args.agent_id), ensure_ascii=False, indent=2))
             return 0

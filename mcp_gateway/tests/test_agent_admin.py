@@ -59,6 +59,8 @@ class _FakeCredentialStore:
     def load(self, agent_id):
         if self.fail_load:
             raise airbridge_agent_admin.CredentialStoreError("vault readback failed")
+        if agent_id not in self.values:
+            raise airbridge_agent_admin.CredentialNotFound("credential not found")
         return self.values[agent_id]
 
     def delete(self, agent_id):
@@ -160,6 +162,49 @@ class AgentProvisioningTests(unittest.TestCase):
             ):
                 airbridge_agent_admin._provision_agent(security, self._args())
         self.assertIsNone(security.issued)
+
+    def test_single_token_revoke_deletes_vault_only_when_it_matches(self):
+        security = _FakeSecurityStore(
+            existing=[{"token_id": "token-id", "agent_id": "opencode", "enabled": True}]
+        )
+        credentials = _FakeCredentialStore()
+        credentials.values["opencode"] = "abg1.token-id.secret"
+        with patch.object(airbridge_agent_admin.os, "name", "nt"), patch.object(
+            airbridge_agent_admin, "WindowsCredentialStore", return_value=credentials
+        ):
+            result, exit_code = airbridge_agent_admin._revoke_token(security, "token-id")
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(result["revoked"])
+        self.assertTrue(result["credential_deleted"])
+        self.assertEqual(result["credential_cleanup"], "deleted")
+        self.assertEqual(credentials.values, {})
+
+    def test_single_token_revoke_preserves_a_different_current_vault_token(self):
+        security = _FakeSecurityStore(
+            existing=[{"token_id": "old-token-id", "agent_id": "opencode", "enabled": True}]
+        )
+        credentials = _FakeCredentialStore()
+        credentials.values["opencode"] = "abg1.current-token-id.secret"
+        with patch.object(airbridge_agent_admin.os, "name", "nt"), patch.object(
+            airbridge_agent_admin, "WindowsCredentialStore", return_value=credentials
+        ):
+            result, exit_code = airbridge_agent_admin._revoke_token(security, "old-token-id")
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["credential_cleanup"], "not_current")
+        self.assertEqual(credentials.values["opencode"], "abg1.current-token-id.secret")
+        self.assertEqual(credentials.delete_calls, [])
+
+    def test_single_token_revoke_reports_missing_vault_entry(self):
+        security = _FakeSecurityStore(
+            existing=[{"token_id": "token-id", "agent_id": "opencode", "enabled": True}]
+        )
+        credentials = _FakeCredentialStore()
+        with patch.object(airbridge_agent_admin.os, "name", "nt"), patch.object(
+            airbridge_agent_admin, "WindowsCredentialStore", return_value=credentials
+        ):
+            result, exit_code = airbridge_agent_admin._revoke_token(security, "token-id")
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["credential_cleanup"], "not_found")
 
     def test_agent_revoke_reports_deleted_local_credential(self):
         security = _FakeSecurityStore()

@@ -1748,6 +1748,10 @@ class AntigravityIPCServer:
         security_store if security_store is not None else AgentSecurityStore.from_env()
     )
     self._stop_lock = threading.Lock()
+    self._handler_condition = threading.Condition()
+    self._active_handlers = 0
+    self._shutting_down = False
+    self._shutdown_timeout_seconds = 5.0
     if allow_eda_execute is None:
       allow_eda_execute = os.environ.get("AIRBRIDGE_ALLOW_EDA_EXECUTE", "0").strip().lower() in ("1", "true", "yes", "on")
     self.allow_eda_execute = bool(allow_eda_execute)
@@ -1779,8 +1783,15 @@ class AntigravityIPCServer:
     self._server_ready = threading.Event()
     self._server_error = None
 
+  def _handler_finished(self):
+    with self._handler_condition:
+      if self._active_handlers > 0:
+        self._active_handlers -= 1
+      self._handler_condition.notify_all()
+
   def start(self):
     worker_ref = self.worker
+    server_owner = self
     security_ref = self.security_store
     allow_eda_execute = self.allow_eda_execute
     read_requests_per_minute = self.read_requests_per_minute
@@ -1793,11 +1804,24 @@ class AntigravityIPCServer:
       def log_message(self, format, *args):
         pass
 
-      def _reply_json(self, status_code: int, data: dict, extra_headers: Optional[dict] = None):
+      def _send_json(self, status_code: int, data: dict, extra_headers: Optional[dict] = None):
         body = json.dumps(data).encode("utf-8")
-        # Persist the audit record before exposing the response to the caller.
-        # This makes a completed HTTP response a reliable audit visibility point.
-        if getattr(self, "_audit_path", "").startswith("/api/"):
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        for header_name, header_value in (extra_headers or {}).items():
+          self.send_header(str(header_name), str(header_value))
+        self.end_headers()
+        self.wfile.write(body)
+
+      def _reply_json(self, status_code: int, data: dict, extra_headers: Optional[dict] = None):
+        # Admission is durably recorded by _authorize_api before an API handler
+        # may touch the Runtime. A failure to write the final outcome must not
+        # be converted into an apparently successful HTTP response.
+        if (
+            getattr(self, "_audit_path", "").startswith("/api/")
+            and not getattr(self, "_audit_preflight_failed", False)
+        ):
           try:
             security_ref.audit_request(
                 agent_id=getattr(getattr(self, "_principal", None), "agent_id", None),
@@ -1814,17 +1838,26 @@ class AntigravityIPCServer:
                 payload_sha256=getattr(self, "_audit_payload_sha256", None),
             )
           except Exception:
-            # An audit write failure must not leak request data or crash the
-            # HTTP response path. Authorization itself remains fail-closed.
-            pass
+            request_id = getattr(self, "_audit_request_id", None)
+            failure = {
+                "success": False,
+                "state": "unknown" if request_id else "unavailable",
+                "error": {
+                    "code": "AGENT_AUDIT_FINALIZATION_FAILED",
+                    "message": (
+                        "The request may already have been admitted. Query this request_id; "
+                        "do not submit the operation again."
+                        if request_id else
+                        "The final audit record could not be persisted; no success result is returned."
+                    ),
+                },
+            }
+            if request_id:
+              failure["request_id"] = request_id
+            self._send_json(503, failure)
+            return
 
-        self.send_response(status_code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        for header_name, header_value in (extra_headers or {}).items():
-          self.send_header(str(header_name), str(header_value))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_json(status_code, data, extra_headers)
 
       @staticmethod
       def _required_scope(method: str, path: str) -> Optional[str]:
@@ -1997,6 +2030,7 @@ class AntigravityIPCServer:
               request_id=self._audit_request_id,
           )
         except Exception:
+          self._audit_preflight_failed = True
           self._audit_decision = "denied"
           self._audit_reason = "AGENT_AUDIT_UNAVAILABLE"
           self._reply_json(503, {
@@ -2568,12 +2602,33 @@ class AntigravityIPCServer:
         else:
           self._reply_json(404, {"error": "Not Found"})
 
+    class _TrackedThreadingHTTPServer(ThreadingHTTPServer):
+      # Handler threads are daemonized so server_close() never performs an
+      # unbounded implicit join. The owner performs an explicit bounded drain.
+      daemon_threads = True
+      block_on_close = False
+
+      def process_request(self, request, client_address):
+        with server_owner._handler_condition:
+          if server_owner._shutting_down:
+            self.shutdown_request(request)
+            return
+          server_owner._active_handlers += 1
+        try:
+          super().process_request(request, client_address)
+        except Exception:
+          server_owner._handler_finished()
+          raise
+
+      def process_request_thread(self, request, client_address):
+        try:
+          super().process_request_thread(request, client_address)
+        finally:
+          server_owner._handler_finished()
+
     def serve():
       try:
-        server = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
-        # Wait for in-flight request handlers before closing the shared SQLite store.
-        server.daemon_threads = False
-        server.block_on_close = True
+        server = _TrackedThreadingHTTPServer(("127.0.0.1", self.port), Handler)
         self._server = server
         self.port = server.server_address[1]
         self._server_ready.set()
@@ -2593,17 +2648,35 @@ class AntigravityIPCServer:
 
   def stop(self):
     with self._stop_lock:
+      deadline = time.monotonic() + max(0.0, self._shutdown_timeout_seconds)
+      with self._handler_condition:
+        self._shutting_down = True
+
       server = self._server
       if server is not None:
+        # Stop accepting new work before closing the listening socket. Requests
+        # already admitted are counted and drained below.
         server.shutdown()
         server.server_close()
         self._server = None
+
       thread = self._server_thread
       if thread is not None and thread is not threading.current_thread():
-        thread.join(timeout=5.0)
+        thread.join(timeout=max(0.0, deadline - time.monotonic()))
         if thread.is_alive():
           raise RuntimeError("AirBridge HTTP server thread did not stop")
         self._server_thread = None
+
+      with self._handler_condition:
+        while self._active_handlers:
+          remaining = deadline - time.monotonic()
+          if remaining <= 0:
+            raise RuntimeError(
+                f"AirBridge shutdown timed out with {self._active_handlers} "
+                "in-flight HTTP handler(s); the window will remain open"
+            )
+          self._handler_condition.wait(timeout=remaining)
+
       if self._owns_security_store and self.security_store is not None:
         self.security_store.close()
         self.security_store = None

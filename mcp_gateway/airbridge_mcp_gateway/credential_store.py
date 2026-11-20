@@ -16,6 +16,10 @@ class CredentialStoreError(RuntimeError):
     """Credential storage is unavailable or an operation failed."""
 
 
+class CredentialNotFound(CredentialStoreError):
+    """No credential is stored for the requested Agent ID."""
+
+
 class CredentialStore(Protocol):
     def store(self, agent_id: str, token: str) -> None: ...
     def load(self, agent_id: str) -> str: ...
@@ -134,9 +138,12 @@ class WindowsCredentialStore:
             target, self.CRED_TYPE_GENERIC, 0, ctypes.byref(pointer)
         ):
             code = ctypes.get_last_error()
+            if code == self.ERROR_NOT_FOUND:
+                raise CredentialNotFound(
+                    "Agent credential is not present in Windows Credential Manager"
+                )
             raise CredentialStoreError(
-                f"Agent credential is unavailable in Windows Credential Manager (error {code})"
-            )
+                f"Windows Credential Manager read failed (error {code})"
         try:
             credential = pointer.contents
             size = int(credential.CredentialBlobSize)
