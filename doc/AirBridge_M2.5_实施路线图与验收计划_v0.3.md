@@ -1,7 +1,7 @@
 # AirBridge M2.5：实施路线图与验收计划
 
 - 文档编号：AB-M2.5-PLAN-001
-- 版本：0.2（官方兼容性核查后的评审稿）
+- 版本：0.3（首批 Adapter 范围、配置边界与用户决策修订稿）
 - 日期：2026-11-20
 - 状态：计划草案；尚未授权代码实施
 - 关联文档：
@@ -28,7 +28,7 @@ M2.5 的最终交付是一个统一的 AirBridge Windows 安装包 / AirBridge.e
 3. 明确 Python 3.11+ 的构建、运行、测试和依赖锁定策略。
 4. Antigravity / OpenCode 的 Streamable HTTP 配置 schema 已由官方文档核查；需完成目标安装版本实测及 OAuth 授权用户流程验收。
 5. 完成本机 OAuth Broker + Worker Resource Server 的双 HTTPS 认证设计；loopback 不能作为唯一访问控制，也不能以 HTTP Bearer Token 作为生产方案。
-6. 评审 GUI 关闭时 Gateway Worker 的退出策略。
+6. 按用户已确认策略实现 GUI 关闭时所有受管 Gateway Worker 的有界排空与退出；共享依赖的关闭顺序由 Supervisor 管理。
 7. 评审 Runtime Session Gateway 状态扩展字段及旧版本兼容策略。
 
 ## 3. 里程碑
