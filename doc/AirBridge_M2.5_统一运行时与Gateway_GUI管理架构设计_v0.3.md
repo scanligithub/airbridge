@@ -183,7 +183,7 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 **首次安装：**
 - 只有确认没有既有 AirBridge 安装 / 实例标记时，才创建全新 Gateway 配置；`gateway.enabled=false`，`gateway.start_with_airbridge=true`，首批 Agent 实例初始为 disabled。
 - 首次安装不得启动任何 Gateway Worker；Gateway 总开关必须由用户在 GUI 中明确开启。
-- 在同一部署流程中执行本机 CA trust bootstrap：按目标 Windows 用户生成 / 保存该机独立 CA 私钥和 localhost Server Certificate，展示证书指纹 / 用途 / 当前用户信任范围并取得明确 Consent 后，只导入 CA 公钥至该用户 `Cert:\CurrentUser\Root`。
+- 在同一部署流程中执行本机 CA trust bootstrap：由部署流程准备适用于该机 localhost 的 CA 公钥信任材料和服务器证书关联，展示证书指纹 / 用途 / 当前用户信任范围并取得明确 Consent 后，只导入 CA 公钥至该用户 `Cert:\CurrentUser\Root`。具体 CA 签发 / 供应方式由 G-01 技术验证确定，不从固定 Host A / Host B 手工导入。
 - CA trust bootstrap 与 Gateway 开关分离；即使 CA 部署成功，首次安装 `gateway.enabled=false` 仍然生效，不启动 OAuth Broker 或任何 Worker。
 - 若用户拒绝 CA Consent，安装继续完成，Core / Runtime 可用，但 Managed HTTPS / OAuth Gateway 保持不可用。后续只能经显式部署 Repair 流程再次征求 Consent；不得在 Gateway ON 或应用普通启动时静默导入。
 
@@ -437,7 +437,7 @@ MCP Authorization 规范要求 Authorization Server endpoints 使用 HTTPS；OAu
 
 **技术边界：** CurrentUser 根证书信任能否被目标客户端及其所用 TLS 栈共同识别，仍须用 Antigravity App / IDE、OpenCode 和系统浏览器进行 Windows 实测。
 
-**本机证书归属补充：** Broker / Worker 仅监听 loopback，MCP Client 使用 `localhost`，因此客户端和 Gateway 必须位于同一台 Windows 主机。每台实际部署 M2.5 AirBridge 的主机在部署阶段独立维护本机 CA 私钥与 localhost Server Certificate；只将 CA 公钥在该机运行 MCP Client 的 Windows 用户 CurrentUser Root 中经明确同意后建立信任。A / B 不共享 CA 私钥或信任状态，也没有固定 CA 主机；如两机都启用 Managed HTTPS，则分别建立、分别验收。即使 Gateway OFF 或暂时没有本机 MCP Client 请求，也在部署阶段完成 CA 信任准备；Gateway OFF 仍不启动 Broker / Worker。CurrentUser 是每台机器、每个用户独立的存储，不是跨主机共享信任库。不得把“写入 CurrentUser 证书存储成功”误判为所有客户端均已信任。若真实客户端无法正常验证证书，Managed HTTPS Mode 判定 No-Go，并提交新的架构决策；不得自行扩大到 LocalMachine Root 或要求管理员权限。
+**本机证书归属补充：** Broker / Worker 仅监听 loopback，MCP Client 使用 `localhost`，因此客户端和 Gateway 必须位于同一台 Windows 主机。每台实际部署 M2.5 AirBridge 的主机在部署阶段取得适用于本机 localhost 的 CA 公钥信任材料，并在该机目标 Windows 用户 CurrentUser Root 中经明确同意后建立信任。A / B 不依赖固定 CA 主机，也不手工从另一台主机导入；CA 签发 / 供应模型由 G-01 技术验证确定，不得把 CA 私钥放入普通安装包或经 AirBridge Runtime 跨机传输。若两机都部署 M2.5，则分别执行部署导入和信任验证。即使 Gateway OFF 或暂时没有本机 MCP Client 请求，也在部署阶段完成 CA 信任准备；Gateway OFF 仍不启动 Broker / Worker。CurrentUser 是每台机器、每个用户独立的存储，不是跨主机共享信任库。不得把“写入 CurrentUser 证书存储成功”误判为所有客户端均已信任。若真实客户端无法正常验证证书，Managed HTTPS Mode 判定 No-Go，并提交新的架构决策；不得自行扩大到 LocalMachine Root 或要求管理员权限。
 
 参考：
 - [MCP Authorization Specification — Communication Security](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
