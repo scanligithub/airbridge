@@ -279,6 +279,7 @@ class ClientAdapterTests(unittest.TestCase):
         home = self.root / "home"
         (home / ".gemini" / "config").mkdir(parents=True)
         expected_ant = home / ".gemini" / "config" / "mcp_config.json"
+        self.assertEqual(AntigravityAdapter.global_config(home), expected_ant)
         self.assertEqual(AntigravityAdapter.cli_global_config(home), expected_ant)
 
         opencode_dir = home / ".config" / "opencode"
