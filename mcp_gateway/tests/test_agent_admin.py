@@ -85,7 +85,7 @@ class AgentProvisioningTests(unittest.TestCase):
             "WindowsAgentCredentialLock",
             side_effect=lambda _agent_id: _FakeAgentLock(),
         )
-        self.lock_patcher.start()
+        self.lock_factory = self.lock_patcher.start()
         self.addCleanup(self.lock_patcher.stop)
 
     def test_legacy_issue_requires_explicit_token_reveal_opt_in(self):
@@ -126,6 +126,7 @@ class AgentProvisioningTests(unittest.TestCase):
         self.assertEqual(credentials.values["opencode"], "secret-must-not-be-returned")
         self.assertNotIn("token", result)
         self.assertNotIn("secret-must-not-be-returned", repr(result))
+        self.lock_factory.assert_called_once_with("OpenCode")
 
     def test_provision_failure_revokes_new_server_credential(self):
         security = _FakeSecurityStore()
@@ -195,6 +196,7 @@ class AgentProvisioningTests(unittest.TestCase):
         self.assertTrue(result["credential_deleted"])
         self.assertEqual(result["credential_cleanup"], "deleted")
         self.assertEqual(credentials.values, {})
+        self.lock_factory.assert_called_once_with("opencode")
 
     def test_single_token_revoke_preserves_a_different_current_vault_token(self):
         security = _FakeSecurityStore(
@@ -258,6 +260,7 @@ class AgentProvisioningTests(unittest.TestCase):
         self.assertTrue(result["revoked"])
         self.assertFalse(result["credential_deleted"])
         self.assertEqual(result["credential_cleanup"], "failed")
+        self.lock_factory.assert_called_once_with("opencode")
 
 
 if __name__ == "__main__":
