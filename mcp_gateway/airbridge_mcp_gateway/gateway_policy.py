@@ -140,6 +140,44 @@ class GatewayPolicyStore:
 
         return PolicyDecision(True, "ALLOW", "Gateway and Agent are enabled.")
 
+    def read_snapshot(self) -> tuple[bool, dict[str, bool]]:
+        """Return the GUI snapshot; a missing file is the first-install OFF state."""
+        if self.path is None:
+            raise OSError("The current Windows user's LOCALAPPDATA path is unavailable")
+        try:
+            raw = self.path.read_bytes()
+        except FileNotFoundError:
+            return False, {}
+        if len(raw) > MAX_POLICY_BYTES:
+            raise ValueError("Gateway policy exceeds the supported size")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Gateway policy is malformed") from exc
+
+        schema_version = payload.get("schema_version") if isinstance(payload, dict) else None
+        if type(schema_version) is not int or schema_version != POLICY_SCHEMA_VERSION:
+            raise ValueError("Gateway policy schema is missing or unsupported")
+        gateway = payload.get("gateway")
+        if not isinstance(gateway, dict) or not isinstance(gateway.get("enabled"), bool):
+            raise ValueError("Gateway policy gateway.enabled must be a Boolean")
+        raw_agents = payload.get("agents")
+        if not isinstance(raw_agents, dict):
+            raise ValueError("Gateway policy agents must be an object")
+
+        agents: dict[str, bool] = {}
+        for raw_agent_id, agent in raw_agents.items():
+            if not isinstance(raw_agent_id, str):
+                raise ValueError("Gateway policy Agent IDs must be strings")
+            agent_id = raw_agent_id.strip().lower()
+            if not _AGENT_ID_RE.fullmatch(agent_id) or agent_id in agents:
+                raise ValueError("Gateway policy contains an invalid or duplicate Agent ID")
+            if not isinstance(agent, dict) or not isinstance(agent.get("enabled"), bool):
+                raise ValueError(f"Gateway policy Agent '{agent_id}' enabled must be a Boolean")
+            agents[agent_id] = agent["enabled"]
+
+        return gateway["enabled"], agents
+
     def write(self, *, enabled: bool, agents: Mapping[str, bool]) -> None:
         """Atomically persist a non-secret policy snapshot for the GUI/settings layer."""
         if self.path is None:
