@@ -43,7 +43,7 @@ def main() -> int:
     sys.stdout = io.TextIOWrapper(
         _open_standard_handle(STD_OUTPUT_HANDLE, readable=False),
         encoding="utf-8",
-        newline="\\n",
+        newline="\n",
         write_through=True,
     )
     sys.stderr = io.TextIOWrapper(
@@ -66,7 +66,7 @@ def main() -> int:
         "stdout_restored": sys.stdout is not None and hasattr(sys.stdout, "buffer"),
         "stderr_restored": sys.stderr is not None and hasattr(sys.stderr, "buffer"),
     }
-    sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\\n")
+    sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
     sys.stdout.flush()
     return 0
 
