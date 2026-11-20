@@ -314,6 +314,11 @@ Cursor、VS Code / Copilot、Cline 等不属于首批专用 Adapter 范围。Gen
 
 - [ ] A/B 两端显示相同 Gateway 页面和相同功能入口。
 - [ ] 首次安装完成后 Gateway 总开关为 OFF，且没有任何 Gateway Worker 自动启动。
+- [ ] 每台部署 M2.5 的主机都在部署阶段完成本机 CA / localhost 服务器证书准备，并在目标 Windows 用户明确 Consent 后导入 CurrentUser Root；不因 Gateway OFF 而跳过。
+- [ ] 证书部署成功不启动 OAuth Broker / Worker；首次安装 Gateway 总开关仍为 OFF。
+- [ ] 安装器若需要提升权限，CurrentUser Root 导入仍由实际目标用户上下文完成，不误写入提升后管理员账户。
+- [ ] 用户拒绝 CA Consent 时 AirBridge 安装可继续，Core / Runtime 正常，Managed HTTPS 明确不可用；Gateway ON 不触发静默导入。
+- [ ] 升级保留有效本机 CA / 私钥 / Leaf / CurrentUser trust，不重复导入或无故轮换；缺失或需要轮换时通过显式部署 / Repair 再次 Consent。
 - [ ] 升级安装保留已有 Gateway 总开关配置。
 - [ ] Gateway OFF 时所有管理页面仍可访问，AirBridge Runtime 正常。
 - [ ] 总开关、Agent 开关和随 AirBridge 启动配置正确持久化。
@@ -445,19 +450,24 @@ GUI 可在检测到并验证 OpenCode CLI 后提供“打开授权流程”快�
 
 AirBridge 不能读取客户端自己的 Token Vault，因此不能仅凭 Broker 有 Grant 就宣称客户端当前持有有效 Token。建议通过 Worker 最近一次成功验证的请求时间，显示“客户端最近成功认证”；无请求时显示“等待客户端连接/授权验证”。
 
-### 13.5 证书管理界面
+### 13.5 部署阶段 CA 信任与证书状态
 
-本机 HTTPS 证书状态必须单独显示：
+CA / localhost 服务器证书的创建和 CA 公钥导入属于每台主机的 AirBridge 部署流程，安装器 / 部署助手在目标 Windows 用户上下文中执行 Consent 和 CurrentUser Root 导入；不是 Gateway 开关动作，也不是每次 GUI 启动时执行。证书部署在 Gateway OFF 时也完成，但绝不因此启动 Broker / Worker。
+
+部署页面必须展示 CA issuer / subject、thumbprint、有效期、用途、CurrentUser 目标范围和信任影响，并明确说明用户拒绝后 AirBridge Core / Runtime 仍可用、Managed HTTPS 不可用。用户同意后只导入 CA 公钥到目标用户 CurrentUser Root；CA 私钥保留在本机受保护密钥容器。若安装器需要提升权限，CurrentUser Root 导入必须由真实目标用户上下文执行。
+
+GUI 证书状态单独显示：
 - issuer / subject；
 - SAN；
 - thumbprint；
 - not-before / not-after；
-- 当前用户证书库位置；
+- 当前 Windows 用户证书库位置；
 - trust chain 验证结果；
 - 是否由本 AirBridge 实例创建；
-- 更新 / 移除操作。
+- 部署 Consent 状态（未执行 / 等待同意 / 已同意并导入 / 用户拒绝 / 失败）；
+- 是否需要通过部署 / Repair 流程修复或轮换。
 
-导入本机信任证书前必须明确提示用户证书作用和信任范围，并获得用户确认。只管理本产品记录的证书 thumbprint；不得清理或覆盖其他软件证书。卸载时仅删除由本产品创建且确认不再被其他组件引用的证书。
+普通 Gateway ON、AirBridge GUI 启动和 MCP 首次连接不得静默触发 CA 导入。只管理本产品记录的证书 thumbprint；不得清理或覆盖其他软件证书。升级保留有效证书；缺失或轮换时通过明确部署 / Repair 再次取得 Consent。卸载时仅删除由本产品创建且确认不再被其他组件引用的证书。
 
 ### 13.6 OAuth Client 注册与 Consent 界面
 
