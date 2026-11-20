@@ -38,6 +38,7 @@ try {
     $psi.Domain = $env:COMPUTERNAME
     $psi.Password = $password
     $psi.LoadUserProfile = $true
+    $psi.Environment['G01_EVIDENCE_ROOT'] = $evidenceRoot
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.RedirectStandardOutput = $true
