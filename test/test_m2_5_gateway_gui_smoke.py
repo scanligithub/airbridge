@@ -99,6 +99,12 @@ class GatewayGuiSmokeTests(unittest.TestCase):
                     self.assertFalse(window.gateway_adapter_actions_enabled)
                     self.assertFalse(window.btn_gateway_antigravity_install.isEnabled())
                     self.assertFalse(window.btn_gateway_opencode_install.isEnabled())
+                    # The smoke IPC stub exposes no M2.4 registry, so credential
+                    # Provision/Revoke buttons must fail closed as well.
+                    self.assertFalse(window.btn_gateway_antigravity_provision.isEnabled())
+                    self.assertFalse(window.btn_gateway_antigravity_revoke.isEnabled())
+                    self.assertFalse(window.btn_gateway_opencode_provision.isEnabled())
+                    self.assertFalse(window.btn_gateway_opencode_revoke.isEnabled())
 
                     # Unsaved GUI checkboxes must not enable a client entry.
                     window.chk_gateway_enabled.setChecked(True)
