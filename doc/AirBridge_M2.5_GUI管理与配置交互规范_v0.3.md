@@ -1,7 +1,7 @@
 # AirBridge M2.5：Gateway GUI 管理与配置交互规范
 
 - 文档编号：AB-M2.5-GUI-001
-- 版本：0.2（官方兼容性核查后的评审稿）
+- 版本：0.3（首批 Adapter 范围与用户配置边界修订稿）
 - 日期：2026-11-20
 - 状态：目标交互规范；GUI 尚未实现
 - 关联文档：《AirBridge M2.5：统一运行时与 Gateway GUI 管理架构设计》
@@ -34,7 +34,7 @@ AirBridge GUI 必须成为 Gateway 的统一管理控制台。用户无需手工
 | 实际运行状态 | Stopped / Starting / Running / Stopping / Failed / Degraded |
 | 启动策略 | 是否随 AirBridge 启动 |
 | Worker 数量 | 当前运行、已启用和失败的实例数量 |
-| Agent | Antigravity、OpenCode 等 Agent 的独立状态 |
+| Agent | 每个已注册 Agent 实例的独立状态；M2.5 首批专用 Adapter 仅覆盖 Antigravity / OpenCode |
 | 传输方式 | 当前配置的 stdio / Streamable HTTP 等 |
 | Endpoint / 端口 | 仅展示实际绑定成功的 endpoint |
 | PID | 对应 Worker 的真实进程 ID |
@@ -83,10 +83,9 @@ AirBridge GUI 必须成为 Gateway 的统一管理控制台。用户无需手工
 
 ### 5.3 Agent 实例开关
 
-每个 Agent 独立启用：
-- Antigravity；
-- OpenCode；
-- 后续注册的其他 Agent。
+每个已注册 Agent 实例独立启用。
+
+M2.5 首批专用 Adapter 仅为 Antigravity、OpenCode。其他产品的专用 Adapter 留待后续版本评估。通用 MCP Client 手动接入是否纳入首版仍待产品决策，不得将其当作已承诺的首版功能。
 
 Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭据和服务端权限策略。
 
@@ -138,9 +137,11 @@ Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭�
 
 ### 7.1 客户端发现
 
-支持检测：
+M2.5 首批自动发现与自动配置仅支持：
 - Antigravity；
 - OpenCode。
+
+Cursor、VS Code / Copilot、Cline 等不属于首批专用 Adapter 范围。通用 MCP Client 手动接入是否纳入首版仍待产品决策；未获批准前，GUI 不得将其展示为首版已支持的添加方式。
 
 发现结果需区分：
 - 已安装且找到配置；
@@ -256,6 +257,8 @@ Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭�
 - [ ] 启动、停止、重启和失败恢复反馈真实。
 - [ ] 能显示每个 Worker 的 PID、endpoint、端口和最近错误。
 - [ ] Agent 凭据状态、Scope 和撤销状态正确。
+- [ ] 首批专用 Adapter 仅包含 Antigravity 和 OpenCode。
+- [ ] MCP Adapter 自动写入仅限当前 Windows 用户级配置；项目级 / 系统级配置不被修改。
 - [ ] MCP 配置备份、合并、验证与恢复有效，其他 Server 配置不丢失。
 - [ ] 日志脱敏，不出现 Token 或 Authorization Header。
 - [ ] 双机 ON/ON 与 OFF/OFF 弹窗正确；ON/OFF 与 OFF/ON 不弹冲突。
@@ -274,13 +277,14 @@ Antigravity 与 OpenCode 使用不同的配置结构，GUI 必须分别实现 Ad
 **Antigravity：**
 - App 优先读取用户从 Antigravity Customizations / MCP Servers 页面复制的配置路径或通过已验证方式发现路径；不猜测 App 专用目录。
 - CLI 的 global 配置为 `~/.gemini/config/mcp_config.json`，workspace 配置为 `<workspace>/.agents/mcp_config.json`。
+- 自动配置仅写入当前 Windows 用户级 global / App 用户配置；workspace 配置只检测并提示，不自动修改。
 - 远程服务器写入 `mcpServers.<name>.serverUrl`；需要依据实际产品版本决定 OAuth / CIMD / DCR 行为。
 - Antigravity IDE 的 CIMD 支持要求 2.6.0+；旧版不能直接据此判定 OAuth 不可用，应继续验证其 DCR 支持或提示升级。
 
 **OpenCode：**
 - V2 远程配置位于 `mcp.servers.<name>`，字段为 `type: "remote"`、`url`。
 - 用户全局配置通常位于 `~/.config/opencode/opencode.json(c)`；Windows 系统级配置目录为 `%ProgramData%\\opencode`；项目级配置可覆盖同名 Server。
-- GUI 默认只修改用户全局配置。系统级配置需要管理员权限，项目级配置必须由用户明确选择。
+- GUI 自动配置只修改当前 Windows 用户级 global 配置。系统级和项目级配置即使被发现，也只显示路径、优先级或冲突提示；不自动修改，也不提供首版自动写入入口。
 - OpenCode 远程 OAuth 默认启用，不应设置 `oauth: false` 来绕开安全授权。
 
 ### 13.2 凭据显示与 OAuth 授权
@@ -298,6 +302,7 @@ OpenCode 支持 JSON 和 JSONC，且全局、系统、项目配置存在优先�
 配置 Adapter 必须报告：
 - 实际写入路径与路径来源；
 - 配置层级及优先级；
+- 是否严格属于当前 Windows 用户级配置（否则不得写入）；
 - 是否存在同名 AirBridge Server 冲突；
 - 是否需重载/重启客户端才能生效。
 
