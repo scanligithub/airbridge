@@ -30,6 +30,7 @@ M2.5 不改变 AirBridge 的产品定位：AirBridge 仍是通用、透明的双
 12. `gateway.start_with_airbridge` 是独立启动策略，默认 ON；仅当 `gateway.enabled=true` 且 Agent 实例已启用时，GUI 启动才会拉起对应 Worker。首次安装的总开关 OFF 优先级更高。
 13. **M2.5 首版不配置 Windows 登录自动启动 AirBridge GUI**；这与 GUI 启动后的 Gateway Worker 启动策略分离，留待后续版本评估。
 14. 本机 HTTPS 证书只在当前 Windows 用户（CurrentUser）范围建立信任；安装时必须取得用户明确同意，不要求管理员权限，不修改 LocalMachine Root。用户拒绝或撤销信任时，托管 HTTPS Gateway 不可用，禁止关闭 TLS 校验或降级成无认证 HTTP。
+15. Gateway 端口默认固定为 Broker TCP 38861、首个 Antigravity Worker TCP 38862、首个 OpenCode Worker TCP 38863；每个 Agent 实例端口独立、持久化，冲突必须显式报告，不能随机改端口。
 
 ## 3. 当前基线与 M2.5 变化
 
@@ -113,7 +114,7 @@ M2.5 目标建议增加可由 AirBridge 管理的持久 MCP 网络传输，优�
 - 服务默认只监听本机 loopback，不监听 LAN 或公网；
 - 每个实例绑定固定 Agent ID，使用对应 Agent 的独立凭据和服务端 Scope；
 - 首批由 Antigravity 与 OpenCode 分别连接各自的本机 MCP endpoint；其他 MCP Client 只有在相应接入方式通过兼容性与安全验证后才能纳入，Generic / Manual 手动接入不属于 M2.5 首版；
-- 端口和 endpoint 由 GUI 配置/展示，不在文档中提前固化未经验证的端口号；
+- 默认 TCP 端口由 GUI 配置 / 展示：OAuth Broker 38861、首个 Antigravity Worker 38862、首个 OpenCode Worker 38863；每个 Agent 实例独立持久化，冲突处理与变更规则见 D-06；
 - 现有 stdio 模式在迁移期保留兼容，除非兼容性测试证明无法安全共存。托管 HTTP 模式的 OAuth Authorization Server 与 MCP Resource Server endpoint 均采用 HTTPS；HTTP 仅可用于规范允许的 loopback OAuth redirect URI，不用于携带 Bearer Access Token 的 MCP 请求。
 
 **安全阻断条件：** loopback 绑定不等于进程身份认证，也不能单独构成 Agent 隔离。Streamable HTTP 上线前必须明确并验证本地客户端到 Gateway 的身份认证、Agent 绑定、访问控制、凭据保护和请求来源校验。不得以“只监听 127.0.0.1”为由开放无认证的本机 MCP 管理/执行接口。
@@ -134,6 +135,10 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
   "gateway": {
     "enabled": false,
     "start_with_airbridge": true,
+    "oauth_broker": {
+      "listen_host": "localhost",
+      "port": 38861
+    },
     "agent_instances": {
       "<agent_instance_id_1>": {
         "client_type_id": "antigravity",
@@ -141,7 +146,7 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
         "enabled": false,
         "transport": "streamable-http",
         "listen_host": "localhost",
-        "port": null
+        "port": 38862
       },
       "<agent_instance_id_2>": {
         "client_type_id": "opencode",
@@ -149,14 +154,14 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
         "enabled": false,
         "transport": "streamable-http",
         "listen_host": "localhost",
-        "port": null
+        "port": 38863
       }
     }
   }
 }
 ```
 
-该 JSON 是目标配置模型草案，字段、默认端口分配和迁移策略仍需在 GUI / 配置规范中评审。不得把 Token、密码或其他秘密写入该文件。Agent 凭据沿用 M2.4 Credential Provider / Windows Credential Manager 的安全设计。
+该 JSON 是目标配置模型示意：首次注册的 Antigravity / OpenCode 实例分别使用 38862 / 38863；OAuth Broker 使用 38861。新增 Agent 实例从默认候选池中分配唯一空闲端口并持久化。不得把 Token、密码或其他秘密写入该文件。Agent 凭据沿用 M2.4 Credential Provider / Windows Credential Manager 的安全设计。
 
 配置语义：
 - `gateway.enabled`：本机 Gateway 总开关；false 时不启动任何 Gateway Worker。首次安装初始值必须为 `false`（OFF），由用户在 GUI 中明确启用后才允许启动 Worker。
@@ -165,7 +170,11 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 - `client_type_id`：客户端产品类型；`adapter_id`：配置适配器类型。两者都不作为 Agent 实例身份。
 - `agent_instance_id`：AirBridge 为每个本机注册实例生成的稳定唯一 ID；同一种客户端可注册多个实例。
 - `listen_host`：默认固定为 loopback；是否允许修改必须经过安全评审，初版不得开放公网监听。
-- `port`：由配置管理器分配并持久化；冲突时提示用户，不静默改用未知端口。
+- `gateway.oauth_broker.port`：OAuth Broker HTTPS issuer 的固定 TCP 端口，默认 38861；Broker 使用稳定 `https://localhost:<port>/` issuer。
+- `agent_instances.<agent_instance_id>.port`：每个 Agent Resource Server 的独立 TCP 端口；首次 Antigravity / OpenCode 实例默认 38862 / 38863。新增实例从默认候选池 `38801–38864` 中选择空闲且未被 AirBridge 分配的端口，并持久化。
+- 默认候选池当前在 IANA Registry 中标记为 Unassigned，但不是 AirBridge 专属保留段；本机是否可用必须以启动时实际 TCP bind 检查为准。启动前同时检查 IPv4 / IPv6 loopback、Windows 实际动态 / excluded port range 和端口占用。
+- 端口冲突时不启动冲突服务，不静默改用随机端口；GUI 显示冲突端口及可获得的 PID / 进程名称。Broker 失败会阻断依赖其授权的 Managed HTTPS Worker；单个 Worker 冲突不影响其它实例。
+- 端口变更须同步 Resource / issuer metadata 与对应当前用户级 MCP Host 配置；Resource Audience 或 OAuth issuer 改变后必须重新授权。写入失败回滚，避免端口、listener、metadata、客户端配置不一致。
 
 配置读写必须具备 schema 版本、原子写入、损坏恢复提示、默认值迁移和未知字段保留策略。首次安装创建配置时 `gateway.enabled=false`；升级迁移应保留已有用户开关值，不得因升级而自动开启 Gateway。
 
