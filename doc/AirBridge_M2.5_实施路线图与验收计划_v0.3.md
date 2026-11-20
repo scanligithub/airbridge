@@ -114,7 +114,7 @@ M2.5 的最终交付是一个统一的 AirBridge Windows 安装包 / AirBridge.e
 
 ### M2.5.5 — Agent 管理与凭据生命周期 GUI
 
-范围约束：Agent Registry / Agent 实例模型应可扩展；M2.5 首批专用 MCP Client Adapter 仅为 Antigravity、OpenCode。通用 MCP Client 手动接入仍待产品决定，不得默认纳入验收范围。
+范围约束：Agent Registry / Agent 实例模型应可扩展；M2.5 首批专用 MCP Client Adapter 仅为 Antigravity、OpenCode。Generic / Manual 通用 MCP Client 手动接入已确认不纳入 M2.5 首版，不得纳入首版开发或验收范围。
 
 工作：
 - GUI 添加 / 初始化 Agent；
@@ -132,7 +132,7 @@ M2.5 的最终交付是一个统一的 AirBridge Windows 安装包 / AirBridge.e
 
 ### M2.5.6 — Antigravity / OpenCode MCP 配置管理
 
-范围约束：本里程碑只实现 Antigravity 和 OpenCode 两个专用 Adapter；Cursor、VS Code / Copilot、Cline 等专用 Adapter 明确排除在 M2.5 首批之外。通用 MCP Client 手动接入只有经单独产品批准后才能加入范围。
+范围约束：本里程碑只实现 Antigravity 和 OpenCode 两个专用 Adapter；Cursor、VS Code / Copilot、Cline 等专用 Adapter 明确排除在 M2.5 首批之外。Generic / Manual 通用 MCP Client 手动接入不属于 M2.5 首版；未来版本如需加入，必须重新进行产品范围评审。
 
 工作：
 - 研究并适配两种客户端实际版本的配置 schema；
