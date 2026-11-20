@@ -338,7 +338,7 @@ G-01 未通过时保留现有 stdio 兼容路径；Managed HTTPS 不上线。不
 - G-01B PASS 只证明：当前被测 Windows 用户上下文中，交互式导入和 Windows 默认链验证可行，且本次测试没有修改 LocalMachine Root、清理后 CurrentUser Root 恢复原状。
 - G-01B 不证明生产安装器的 CA 生成 / 交付、升级 / Repair、Antigravity 或 OpenCode 的 TLS 信任行为，也不证明真实 OAuth / MCP 连通。
 - G-01B 测试的 CA 是短期 disposable CA，不能把其私钥、CER 或 Thumbprint 当作生产部署材料。
-- G-01A Windows Actions 验证非交互 Store-scope / CustomTrustStore 链；新增 G-01A2 在一次性标准用户 Profile 内使用同一个 CryptUIWizImport API 的 NO_UI 模式，验证 CurrentUser Root 目标句柄、导入回读、Windows 默认链和清理；G-01B 则在真实目标用户桌面运行同一 API 的交互模式。G-01A2 不验证交互 UI，也不代表用户授权。G-01 总体仍需完成所有目标 MCP 客户端 TLS + OAuth + MCP 正向和负向测试。
+- G-01A Windows Actions 验证非交互 Store-scope / CustomTrustStore 链；G-01A2 在一次性标准用户 Profile 内以同一个 CryptUIWizImport API 的 NO_UI 模式，对 CurrentUser My 执行 API control 导入、Thumbprint 回读和清理；同一 CI 后续的 G-01A3 只读打开 CurrentUser Root 目标句柄（附加 CERT_STORE_SET_LOCALIZED_NAME_FLAG），读取 CERT_STORE_LOCALIZED_NAME_PROP_ID，并确认 CurrentUser Root / LocalMachine Root 均未变化。G-01A2/A3 均不验证交互 UI、Root 写入或用户授权；G-01B 才是在真实目标用户桌面运行同一 API 的交互模式。G-01 总体仍需完成所有目标 MCP 客户端 TLS + OAuth + MCP 正向和负向测试。
 
 **当前执行状态：G-01B NOT RUN。** GitHub Actions 会在一次性标准用户 Profile 中执行 G-01A2 的 NO_UI API test，但不会执行交互脚本或显示 Windows 导入向导。
 
@@ -360,3 +360,28 @@ Hosted Actions 无法由操作员完成 Windows 原生证书导入向导，因�
 
 **Root 对照结果：** [run #44743044286](https://github.com/scanligithub/airbridge/actions/runs/44743044286) 和 [run #44743660093](https://github.com/scanligithub/airbridge/actions/runs/44743660093) 以 CurrentUser Root 为目的 Store 时，native API 调用内 120 秒超时；第二轮明确记录了调用前 marker、无调用后 marker。两次都未改变 CurrentUser Root / LocalMachine Root，临时 Profile 清理完成。将这一点标记为 hosted-runner Root no-UI 操作的限制/失败，而不是生产交互向导失败。
 此前将同一 NO_UI API 指向 CurrentUser Root 的 hosted Actions 测试在 native call 内 120 秒超时，阶段标记证明未返回；这不能说明目标机交互向导失败，但也不能算 Root 导入成功。NO_UI 模式不显示 Windows 向导，不证明用户授权，也不能代替 G-01B。
+
+### 13.6 G-01A3：CurrentUser Root 目标句柄只读 CI
+
+为继续验证 G-01B 的 Windows API 前置条件，G-01A2 的同一标准用户 CI 流程增加了一个独立只读子测试。它**不调用 CryptUIWizImport 针对 Root 导入**，也不修改任何 Root 存储。
+
+测试步骤：
+
+1. 使用 CertOpenStore / CERT_STORE_PROV_SYSTEM_W，在 dwFlags 中组合 CERT_SYSTEM_STORE_CURRENT_USER (0x00010000) 与 CERT_STORE_SET_LOCALIZED_NAME_FLAG (0x00000002)，打开 Root 目标存储。
+2. 使用 CertGetStoreProperty，属性 ID 为 CERT_STORE_LOCALIZED_NAME_PROP_ID (0x00001000)。按 Win32 API 约定先以空 buffer 读取所需字节数，再分配缓冲区读取 UTF-16 名称。
+3. 关闭目标句柄，再比较 CurrentUser Root 和 LocalMachine Root 的 Thumbprint 集合，必须与操作前完全一致。
+4. 保留既有 CurrentUser My CryptUIWizImport NO_UI 控制导入、Thumbprint 回读和精确清理；整个标准用户 Profile 最后按 SID 销毁。
+
+**已完成证据（2026-11-20）：** [G-01 Windows Actions run #44747579281](https://github.com/scanligithub/airbridge/actions/runs/44747579281)，commit `cb620fd20d564f61e5e93af7eea97d278ca9bf73`，结论 SUCCESS。证据 JSON / job log：
+
+- `elevated_admin_token=false`；测试用户为一次性标准用户 Profile。
+- `current_user_my_import=PASS`；`current_user_my_readback=PASS`；实际 CryptUI flags 为 `0x00030001`（仅 My 控制测试包含 NO_UI）。
+- `current_user_root_handle_open=PASS`。
+- `current_user_root_localized_name="Trusted Root Certification Authorities"`。
+- `current_user_root_unchanged=PASS`；`local_machine_root_unchanged=PASS`。
+- 临时 CurrentUser My 测试证书删除、Root 只读快照、LocalMachine Root 快照和总体 cleanup 均 PASS。
+- CI 记录 `interactive_wizard_tested=false`。没有在 Root 上执行任何导入操作。
+
+微软 API 文档说明 CERT_STORE_SET_LOCALIZED_NAME_FLAG 会使支持该标志的 Store Provider 设置本地化名称属性；CERT_STORE_PROV_SYSTEM 支持该标志。CertGetStoreProperty 返回的本地化名称是 Unicode 字符串：[CertOpenStore](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-certopenstore)、[CertGetStoreProperty](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-certgetstoreproperty)。
+
+**结论边界：** G-01A3 证明了在当前 Windows hosted runner / 标准用户上下文中，程序可打开 CurrentUser Root 句柄并读取预期的本地化目标名称；这是对交互式向导传入目标句柄的前置 API 验证，不证明 CryptUIWizImport 会在 Windows GUI 中正确显示 / 锁定该 Store，也不证明用户确认后的 Root 写入成功。Root NO_UI 导入仍保留既有超时失败记录；真实可见交互向导 G-01B 仍 NOT RUN。
