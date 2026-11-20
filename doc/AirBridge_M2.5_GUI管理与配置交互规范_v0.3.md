@@ -1,5 +1,8 @@
 # AirBridge M2.5：Gateway GUI 管理与配置交互规范
 
+> **版本状态（2026-11-20）：本 v0.3 文档保留为历史评审稿。** 其中持久 HTTP Worker、端口、HTTPS / CA、OAuth Broker、OAuth Consent 和 GUI 直接启停 Worker 的设计已被 ADR-013 取代。当前 GUI 只管理本机 STDIO Adapter 配置、Gateway 开关、Agent、M2.4 Credential / Scope、审计和可观察状态；STDIO 子进程生命周期由 MCP Host 管理。
+
+
 - 文档编号：AB-M2.5-GUI-001
 - 版本：0.3（首批 Adapter 范围与用户配置边界修订稿）
 - 日期：2026-11-20
