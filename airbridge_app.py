@@ -48,12 +48,6 @@ from agent_security import (
     AgentSecurityError,
     AgentSecurityStore,
 )
-from airbridge_mcp_gateway.gateway_policy import GatewayPolicyStore
-from airbridge_mcp_gateway.credential_store import (
-    CredentialNotFound,
-    CredentialStoreError,
-    default_credential_store,
-)
 from runtime_adapter import (
     RuntimeExecutionContext,
     RuntimeExecutionRequest,
@@ -2735,14 +2729,26 @@ class AirBridgeMainWindow(QMainWindow):
     self.current_hint = "auto.tcl"
     self.current_remote_dir = "e:\\RK3588智能盒子"
 
-    # M2.5 local STDIO Gateway policy is per-user and contains no secrets.
+    # Load the M2.5 support only when the GUI is instantiated. Some existing
+    # protocol tests import this module without installing the optional MCP
+    # package; the unified EXE bundles it, while source runs can use mcp_gateway/.
+    try:
+      from airbridge_mcp_gateway.gateway_policy import GatewayPolicyStore
+      from airbridge_mcp_gateway.credential_store import default_credential_store
+    except ModuleNotFoundError:
+      gateway_package_dir = os.path.join(os.path.dirname(__file__), "mcp_gateway")
+      if gateway_package_dir not in sys.path:
+        sys.path.insert(0, gateway_package_dir)
+      from airbridge_mcp_gateway.gateway_policy import GatewayPolicyStore
+      from airbridge_mcp_gateway.credential_store import default_credential_store
+
     self.gateway_policy_store = GatewayPolicyStore.for_current_user()
     self._gateway_policy_agents: Dict[str, bool] = {}
     self._gateway_policy_invalid = False
     try:
       self.gateway_credential_store = default_credential_store()
       self._gateway_credential_store_error = ""
-    except CredentialStoreError as exc:
+    except Exception as exc:
       self.gateway_credential_store = None
       self._gateway_credential_store_error = str(exc)
 
@@ -3129,7 +3135,9 @@ class AirBridgeMainWindow(QMainWindow):
       present = bool(token)
       del token
       return present
-    except (CredentialNotFound, CredentialStoreError):
+    except Exception:
+      # Missing credentials and Credential Manager read errors both mean
+      # that this Agent cannot be enabled from the GUI yet.
       return False
 
   def refresh_gateway_settings(self):
