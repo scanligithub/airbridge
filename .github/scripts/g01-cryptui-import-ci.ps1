@@ -27,6 +27,7 @@ $results = [ordered]@{
     current_user_my_import = 'NOT_RUN'
     current_user_my_readback = 'NOT_RUN'
     current_user_root_handle_open = 'NOT_RUN'
+    current_user_root_store_readonly = 'NOT_RUN'
     current_user_root_localized_name = 'NOT_RUN'
     current_user_root_unchanged = 'NOT_RUN'
     local_machine_root_unchanged = 'NOT_RUN'
@@ -117,11 +118,12 @@ try {
     # stalled inside the native API. It verifies the exact CurrentUser Root
     # handle and the localized-name property required by the interactive UI.
     Set-G01Phase 'before-open-currentuser-root-localized-handle'
-    $rootStore = Open-G01CurrentUserStore -StoreName 'Root' -SetLocalizedName
+    $rootStore = Open-G01CurrentUserStore -StoreName 'Root' -SetLocalizedName -ReadOnly
     if ($rootStore -eq [IntPtr]::Zero) {
         throw 'CertOpenStore(CurrentUser\\Root, SET_LOCALIZED_NAME) returned a null handle.'
     }
     $results.current_user_root_handle_open = 'PASS'
+    $results.current_user_root_store_readonly = 'PASS_FLAG_0x00008000'
     Set-G01Phase 'currentuser-root-localized-handle-opened'
 
     $localizedName = Get-G01CertificateStoreLocalizedName -Handle $rootStore
@@ -167,6 +169,6 @@ finally {
     Get-Content -LiteralPath $resultPath | Write-Host
 }
 
-if ($results.current_user_my_import -ne 'PASS' -or $results.current_user_my_readback -ne 'PASS' -or $results.current_user_root_handle_open -ne 'PASS' -or [string]::IsNullOrWhiteSpace([string]$results.current_user_root_localized_name) -or $results.current_user_root_unchanged -ne 'PASS' -or $results.local_machine_root_unchanged -ne 'PASS' -or $results.temporary_current_user_my_cleanup -ne 'PASS' -or $results.cleanup -ne 'PASS') {
+if ($results.current_user_my_import -ne 'PASS' -or $results.current_user_my_readback -ne 'PASS' -or $results.current_user_root_handle_open -ne 'PASS' -or $results.current_user_root_store_readonly -ne 'PASS_FLAG_0x00008000' -or [string]::IsNullOrWhiteSpace([string]$results.current_user_root_localized_name) -or $results.current_user_root_unchanged -ne 'PASS' -or $results.local_machine_root_unchanged -ne 'PASS' -or $results.temporary_current_user_my_cleanup -ne 'PASS' -or $results.cleanup -ne 'PASS') {
     throw 'G-01A2 CryptUIWizImport control subgate failed; inspect g01-cryptui-control-result.json.'
 }
