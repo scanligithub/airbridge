@@ -1,5 +1,8 @@
 # AirBridge M2.5：实施路线图与验收计划
 
+> **版本状态（2026-11-20）：本 v0.3 文档保留为历史评审稿。** 其中 M2.5.0-A HTTPS / CA / OAuth Gate、G-01、双 HTTPS Worker 和 Broker 生命周期计划已取消。实施路线以 ADR-013 的 STDIO 入口、两个本机 Adapter、Credential Provider 集成、OFF fail-closed、STDIO CI 和真实客户端验收为准。
+
+
 - 文档编号：AB-M2.5-PLAN-001
 - 版本：0.3（首批 Adapter 范围、配置边界与用户决策修订稿）
 - 日期：2026-11-20
