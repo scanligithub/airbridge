@@ -21,6 +21,7 @@
 | P-08 | ON/OFF 与 OFF/ON 正常；ON/ON 与 OFF/OFF 提示冲突 | 用户已确认 |
 | P-09 | 冲突提示不得自动修改任何一端配置或自动停止 Gateway | 用户已确认 |
 | P-10 | AirBridge 不接管 Capture / Allegro 专业软件业务生命周期 | 既有项目架构原则 |
+| P-11 | M2.5 首批专用 MCP Client Adapter 仅支持 Antigravity 与 OpenCode；其他专用 Adapter 不属于首批范围 | 用户已确认 |
 
 ## 2. 建议采用的技术决策
 
