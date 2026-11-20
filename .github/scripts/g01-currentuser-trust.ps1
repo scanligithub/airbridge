@@ -2,7 +2,8 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $runId = [Guid]::NewGuid().ToString('N')
-$evidenceDir = Join-Path $env:RUNNER_TEMP "airbridge-g01-$runId"
+$evidenceBase = if ($env:G01_EVIDENCE_ROOT) { $env:G01_EVIDENCE_ROOT } else { $env:RUNNER_TEMP }
+$evidenceDir = Join-Path $evidenceBase "airbridge-g01-$runId"
 New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
 
 $root = $null
@@ -113,6 +114,7 @@ function Test-ChainBuild {
 try {
     Import-Module PKI -ErrorAction Stop
     Write-Host 'G-01 CurrentUser Root import and X509Chain validation'
+    if ($results.runner_is_elevated_admin) { throw 'G-01 trust-store test must run as a standard, non-elevated Windows user.' }
     Write-Host "Identity: $($results.windows_identity)"
     Write-Host "Elevated admin token: $($results.runner_is_elevated_admin)"
     Write-Host "PowerShell: $($results.powershell)"
