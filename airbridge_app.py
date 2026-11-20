@@ -1744,7 +1744,9 @@ class AntigravityIPCServer:
     self.worker = worker
     self.port = port
     self._owns_security_store = security_store is None
-    self.security_store = security_store or AgentSecurityStore.from_env()
+    self.security_store = (
+        security_store if security_store is not None else AgentSecurityStore.from_env()
+    )
     self._stop_lock = threading.Lock()
     if allow_eda_execute is None:
       allow_eda_execute = os.environ.get("AIRBRIDGE_ALLOW_EDA_EXECUTE", "0").strip().lower() in ("1", "true", "yes", "on")
@@ -2664,7 +2666,7 @@ class AirBridgeMainWindow(QMainWindow):
       QMessageBox.critical(
           self,
           "AirBridge shutdown failed",
-          f"The local API server could not shut down safely. The window will remain open.\\n{exc}",
+          f"The local API server could not shut down safely. The window will remain open.\n{exc}",
       )
       event.ignore()
       return
