@@ -377,7 +377,7 @@ PyInstaller onefile 独立子进程如果需要独立于父 GUI 运行，应按 
 | D-06 GUI 退出 | GUI 退出时有界排空并停止所有受管 Gateway Worker；不保留后台 Worker | 用户已确认；异常退出收敛仍需 PoC |
 | D-07 双机冲突 | ON/ON、OFF/OFF 仅提示，不自动改配置或停服务 | 已按用户确认作为默认要求 |
 | D-08 迁移 | 旧 stdio 暂时保留；客户端配置无明文 Service Token | 迁移策略待实施设计 |
-| D-09 OAuth Client 注册 | 官方 Antigravity / OpenCode CIMD URL 白名单优先；DCR 兼容回退；每 Grant 独立 Consent 并绑定 Agent / Resource / Scope | 用户已确认策略；真实客户端 OAuth / Broker 安全 PoC 待完成 |
+| OAuth Client 注册（评审清单 D-07） | 官方 Antigravity / OpenCode CIMD URL 白名单优先；DCR 兼容回退；每 Grant 独立 Consent 并绑定 Agent / Resource / Scope | 用户已确认策略；真实客户端 OAuth / Broker 安全 PoC 待完成 |
 
 ### 14.6 本版本仍未完成的工作
 
