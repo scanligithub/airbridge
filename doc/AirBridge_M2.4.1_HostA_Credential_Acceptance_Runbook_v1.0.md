@@ -211,3 +211,28 @@ Stop and report without trying alternative paths if:
 - a process would need to be force-terminated.
 
 This runbook does not authorize deployment, process termination, database replacement, Host B operation, or EDA / Shell execution.
+
+## 10. Host A acceptance record — 2026-11-20
+
+- Acceptance source revision: `c63f07ecda0e1ca0b5140a711fcc9ea2466f70be`, matching the tested PR #14 branch HEAD at the time of the run.
+- Host: Windows, running as the same local user for the AirBridge desktop process, administrator CLI and MCP Gateway subprocess.
+- Existing AirBridge HTTP service: `127.0.0.1:8888`; the listener was confirmed to belong to the AirBridge child process.
+- Agent Security database: the default `%LOCALAPPDATA%\AirBridge\agent_security.sqlite3` file existed and contained the expected Agent Security tables. The acceptance CLI was explicitly pointed at this same database path. An authenticated request through the running HTTP service using the test credential in that database returned HTTP 200, confirming that the running service accepted the credential.
+- The dedicated test identity `m24-hosta-smoke` was already present and enabled when the read-only database inspection began. Its metadata showed exactly `runtime.read`, `eda.versions.read`, and `request.read`, with label `M2.4 Host A read-only acceptance`. It was not provisioned a second time in this acceptance session.
+- Windows Credential Manager listed the namespaced entry `AirBridge/Agent/m24-hosta-smoke`. The PR #14 Credential Manager provider read the credential successfully without displaying it.
+- Direct authenticated HTTP check: `GET /api/v1/runtime/capabilities` returned HTTP 200.
+- A dedicated Python 3.11.9 virtual environment was created under `mcp_gateway/.venv`; the Gateway project installed successfully with pinned `mcp==2.3.0`.
+- A real Gateway subprocess was launched through MCP stdio with `AIRBRIDGE_AGENT_ID=m24-hosta-smoke`, loopback base URL and `AIRBRIDGE_ENABLE_EDA_EXECUTE=0`. The child environment did not contain `AIRBRIDGE_AGENT_TOKEN`.
+- MCP `initialize` succeeded. Tool discovery returned the four expected tools: `airbridge_get_capabilities`, `airbridge_get_eda_versions`, `airbridge_eda_execute`, and `airbridge_request_status`.
+- `airbridge_get_capabilities` succeeded through MCP. `airbridge_request_status` for the deliberately nonexistent UUID `00000000-0000-4000-8000-000000000000` returned the expected `state=not_found` and HTTP 404.
+- No `airbridge_eda_execute` call, Shell operation, EDA script, Capture operation, Allegro operation, or Host B operation was performed. The EDA versions tool was discovered but not called.
+- Revocation result for the isolated test Agent: `revoked=1`, `credential_deleted=true`, `credential_cleanup=deleted`, exit code 0.
+- Final read-only verification showed the test credential disabled with a populated `revoked_at`, and the matching Windows Credential Manager entry absent. The formal Antigravity and OpenCode Agent records each still had one enabled read-only credential; neither formal Agent was revoked or re-provisioned.
+- No existing Antigravity / OpenCode MCP Host configuration was edited. No Token value was recorded in this acceptance evidence.
+
+### Acceptance result and remaining boundary
+
+- **Stages C–E: PASS** for the isolated test Agent credential lookup, authenticated HTTP / MCP read-only checks, server-side revocation and local Credential Manager cleanup.
+- **Stage A / B: not claimed by this acceptance record.** The running executable's directory name identified the PR #14 source SHA, but this record does not include a fresh manual-dispatch build run plus independent `BUILD_INFO.txt` and executable SHA-256 verification.
+- **Stage F: not performed.** No AirBridge EXE replacement or GUI shutdown test was attempted. This still requires separate explicit authorization.
+- The above does not constitute Host B, Capture, Allegro, EDA execution, Shell execution, MCP Host migration, or production Agent migration acceptance.
