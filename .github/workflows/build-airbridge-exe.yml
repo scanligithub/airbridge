@@ -8,6 +8,7 @@ on:
     paths:
       - "AirBridge.spec"
       - "airbridge_entry.py"
+      - "stdio_io.py"
       - "airbridge_app.py"
       - "protocol.py"
       - "eda_engine.py"
@@ -30,6 +31,7 @@ on:
     paths:
       - "AirBridge.spec"
       - "airbridge_entry.py"
+      - "stdio_io.py"
       - "airbridge_app.py"
       - "protocol.py"
       - "eda_engine.py"
@@ -80,7 +82,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python -m py_compile airbridge_entry.py airbridge_app.py protocol.py eda_engine.py fs_engine.py shell_engine.py capture_tcl_bridge.py runtime_adapter.py runtime_session_protocol.py request_tracker.py request_broker.py process_supervisor.py agent_security.py test/test_airbridge_entry.py test/test_mcp_stdio_frozen_smoke.py
+          python -m py_compile airbridge_entry.py stdio_io.py airbridge_app.py protocol.py eda_engine.py fs_engine.py shell_engine.py capture_tcl_bridge.py runtime_adapter.py runtime_session_protocol.py request_tracker.py request_broker.py process_supervisor.py agent_security.py test/test_airbridge_entry.py test/test_mcp_stdio_frozen_smoke.py
           python -m compileall -q mcp_gateway/airbridge_mcp_gateway
 
       - name: Run unified entrypoint and existing MCP Gateway unit tests
