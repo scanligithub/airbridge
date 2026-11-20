@@ -9,7 +9,7 @@
 
 **部署时点是本 PoC 的核心验证对象。** M2.5 的 CA / localhost 服务器证书创建及 CA 公钥信任导入属于每台 AirBridge 主机的部署流程。这里的 PowerShell 操作仅用于模拟并验证未来部署程序在目标用户上下文完成的同一流程，不是要求用户安装后再手动导入，也不是 Gateway 启动时的临时步骤。
 
-每台安装 M2.5 的主机都在部署阶段执行本机 CA trust bootstrap；无论该机首次安装后 Gateway ON 还是 OFF，都不跳过 CA 部署。CA 部署成功不会改变 `gateway.enabled=false`，不会启动 OAuth Broker 或任何 Worker。用户拒绝时安装仍可完成，但 Managed HTTPS 保持不可用。
+每台安装 M2.5 的主机都在部署阶段执行 CA trust bootstrap；无论该机首次安装后 Gateway ON 还是 OFF，都不跳过 CA 导入。CA 导入成功不会改变 `gateway.enabled=false`，不会启动 OAuth Broker 或任何 Worker。用户拒绝时安装仍可完成，但 Managed HTTPS 保持不可用。本次 PowerShell PoC 在目标机本地创建一次性测试 CA 以模拟部署导入动作，并不冻结正式 CA 的签发 / 供应来源；正式部署不应要求从 Host A 或 Host B 手工导出 CA。
 
 G-01 分为三个阶段：
 
@@ -38,11 +38,11 @@ G-01 分为三个阶段：
 
 本 PoC 不指定 Host A 或 Host B。对**每一台实际部署 M2.5 AirBridge 的 Windows 主机**，均须在部署阶段独立执行本机 CA trust bootstrap；即使该机的 Gateway 默认 OFF，也执行证书准备与 Consent。
 
-- 该机的部署流程本地创建自己的短期 PoC CA 和 localhost Leaf；正式产品模型按每台机器 / 目标 Windows 用户维护独立的本机 CA 身份与私钥，不由另一台主机集中签发。
+- 本次 PoC 在目标机本地创建短期测试 CA 和 localhost Leaf；正式产品部署流程提供 / 准备适用于该机 localhost 的 CA 公钥信任材料。正式 CA 签发 / 供应方式仍由 G-01 技术验证确定，不预设从哪台主机导出。
 - 只将该机 CA 的公钥证书，在运行 MCP Client 的 Windows 用户上下文中经明确同意导入该用户的 CurrentUser Root。CA 私钥不复制、不发送给另一台机器，也不放入仓库、共享目录或 AirBridge Runtime 通道。
 - Gateway Broker / Worker 使用该机本地 Leaf；MCP Client 通过 localhost 连接同一台机器的 loopback listener。localhost 永远指向客户端所在机器，因此不支持由另一台主机上的 MCP Client 通过 localhost 访问本机 Gateway。
 - A、B 的 AirBridge Runtime / 串口通信与本机 HTTPS 信任是两条独立路径；对端不需要信任本机 CA。即使某台机器 Gateway 保持 OFF，部署阶段仍完成该机 CA 信任准备；OFF 只阻止 Broker / Worker 启动。
-- CurrentUser 是每台 Windows 主机上的用户配置，不是跨机器共享的信任库。若两台机器都要启用 Managed HTTPS，必须分别生成、分别征求同意、分别导入并分别验证；不复制 CA 私钥，也不要求两台机器的 Root Thumbprint 相同。
+- CurrentUser 是每台 Windows 主机上的用户配置，不是跨机器共享的信任库。若两台机器都部署 M2.5，必须分别在各自部署流程中征求同意、导入该机适用的 CA 公钥并核验 CurrentUser Root；不要求从某一台机器导出 CA，Root Thumbprint 是否相同取决于最终供应模型。
 - 本手册的默认测试假设 AirBridge GUI / Gateway 与 MCP Client 由同一 Windows 登录用户运行。若实际部署采用不同 Windows 账户，必须分别验证客户端账户的 CurrentUser Root 信任和 Gateway 账户的私钥访问权限；不得假定一个账户的导入会影响另一个账户。
 
 ## 3. 目标 Windows 主机执行前基线
