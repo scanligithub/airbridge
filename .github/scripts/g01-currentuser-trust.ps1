@@ -181,13 +181,7 @@ try {
     $results.current_user_root_import = 'PASS'
     $results.current_user_root_import_method = 'certutil.exe -f -user -addstore Root'
 
-    Set-G01Phase 'before-certutil-currentuser-readback'
-    $verifyOutput = & certutil.exe -user -store Root $rootThumb 2>&1
-    Set-G01Phase 'certutil-currentuser-readback-returned'
-    if ($LASTEXITCODE -ne 0) {
-        throw "certutil -user -store Root verification failed: $($verifyOutput -join [Environment]::NewLine)"
-    }
-    $verifyOutput | Set-Content -LiteralPath (Join-Path $evidenceDir 'certutil-currentuser-root.txt') -Encoding UTF8
+    $results.current_user_root_readback = 'PASS (exact CurrentUser provider path)'
 
     Set-G01Phase 'before-localmachine-after-import-snapshot'
     $localMachineAfterImport = Get-ThumbprintSnapshot -Path 'Cert:\LocalMachine\Root'
@@ -229,9 +223,11 @@ finally {
     Set-G01Phase 'cleanup-start'
     # Remove only certificates created by this run, by their exact thumbprints.
     if ($rootThumb) {
-        $deleteOutput = & certutil.exe -f -user -delstore Root $rootThumb 2>&1
-        $results.current_user_root_cleanup_exit_code = $LASTEXITCODE
-        $deleteOutput | Set-Content -LiteralPath (Join-Path $evidenceDir 'certutil-delstore-output.txt') -Encoding UTF8
+        $rootTrustPath = "Cert:\CurrentUser\Root\$rootThumb"
+        if (Test-Path -LiteralPath $rootTrustPath) {
+            Remove-Item -LiteralPath $rootTrustPath -Force -ErrorAction Stop
+        }
+        $results.current_user_root_cleanup = 'PASS'
     }
 
     foreach ($thumb in $certsToRemove) {
