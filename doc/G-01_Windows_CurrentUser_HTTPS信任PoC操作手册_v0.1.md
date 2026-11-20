@@ -1,0 +1,271 @@
+# G-01：Windows CurrentUser HTTPS 信任 PoC 操作手册
+
+- 文档编号：AB-M2.5-G01-RUNBOOK-001
+- 版本：0.1；日期：2026-11-20
+- 状态：草案，尚未在 Host A 执行；G-01 仍为 Partial Research / NOT PASS
+- 关联：架构评审决策清单 G-01、ADR-007、实施路线图 §8.1
+
+## 1. 目的与判定边界
+
+G-01 分为三个阶段：
+
+1. **证书与 Windows 信任库**：创建短期一次性 CA 和 localhost 服务器证书；用户明确同意后，只把 CA 公钥导入 CurrentUser Trusted Root；确认 LocalMachine Root 未变化。
+2. **客户端 TLS 兼容**：使用 loopback HTTPS 测试端点，分别验证 Chrome、Antigravity App / IDE、OpenCode Desktop。OpenCode CLI 如列入首版支持矩阵，必须单独测试。
+3. **真实协议集成**：在 OAuth Broker / Agent Worker 或等价本机 PoC 服务上完成 discovery、OAuth 授权、MCP initialize、tools/list 和只读 Tool 调用，再执行负向测试。
+
+**阶段 1 通过不代表阶段 2 通过；Chrome 通过不代表 MCP 客户端通过；任何单客户端 TLS 成功都不代表完整 G-01 PASS。** 只有首版承诺支持的客户端形态完成真实 TLS + OAuth + MCP，且负向场景均 fail-closed，才允许 G-01 PASS。
+
+本文只是操作规范，不代表已执行命令或已创建、导入、删除证书。
+
+## 2. 安全约束
+
+- 只使用当前 Windows 用户证书存储；禁止写入 Cert:\LocalMachine\Root 或其它 LocalMachine 信任位置。
+- 使用普通权限，不要求管理员权限。
+- 信任导入前向用户展示 CA Subject、Thumbprint、有效期和用途，并取得明确同意；拒绝时停止。
+- 只导出 CA 公钥 CER；CA 私钥必须留在当前用户密钥容器并设为不可导出。
+- 测试 CA 必须短期、一次性，不得复用为生产 CA。
+- 服务端只允许绑定 127.0.0.1 和 / 或 ::1；禁止 0.0.0.0、::、通配地址或 LAN 接口。
+- Leaf 必须有 DNS SAN localhost、Server Authentication EKU；客户端必须正常校验证书链、有效期和主机名。
+- 禁止 NODE_TLS_REJECT_UNAUTHORIZED=0、忽略证书错误、关闭 TLS 验证或降级到明文 / 无认证 HTTP。
+- 测试 URL 必须指向本机 loopback。
+- 清理时只删除本次新建并记录的精确 Thumbprint，不按 Subject 通配删除。
+
+## 3. 执行前基线
+
+使用普通权限打开 PowerShell。此阶段只读取信息：
+
+~~~powershell
+$PSVersionTable
+Get-Module -ListAvailable PKI
+Get-Date -Format o
+
+$evidence = Join-Path $env:USERPROFILE ("Desktop\AirBridge-G01-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+
+$lmRootBefore = @(Get-ChildItem 'Cert:\LocalMachine\Root' | ForEach-Object { $_.Thumbprint } | Sort-Object)
+$cuMyBefore = @(Get-ChildItem 'Cert:\CurrentUser\My' | ForEach-Object { $_.Thumbprint } | Sort-Object)
+$lmRootBefore | Set-Content (Join-Path $evidence 'localmachine-root-before.txt')
+$cuMyBefore | Set-Content (Join-Path $evidence 'currentuser-my-before.txt')
+
+Get-ChildItem 'Cert:\CurrentUser\Root' | Select-Object Subject, Thumbprint, NotBefore, NotAfter | Sort-Object Thumbprint
+Get-ChildItem 'Cert:\LocalMachine\Root' | Select-Object Subject, Thumbprint, NotBefore, NotAfter | Sort-Object Thumbprint
+~~~
+
+注意：Windows CurrentUser 逻辑证书视图可能继承 LocalMachine 证书。因此，CurrentUser Root 中“可见”本身不足以证明证书是用户级新导入。证据须同时包括本次唯一 Thumbprint、certutil 用户范围查询，以及 LocalMachine Root 前后清单一致。若无法读取 LocalMachine 基线或系统状态无法解释，停止并记录阻塞原因。
+
+## 4. 创建一次性测试 CA 和 localhost Leaf
+
+下列命令把 CA 和 Leaf 放在 CurrentUser My，私钥均不可导出；不会把 CA 加入 Root 信任库。
+
+~~~powershell
+$rootParams = @{
+    Type = 'Custom'
+    Subject = 'CN=AirBridge G-01 Disposable Test Root'
+    KeyAlgorithm = 'RSA'
+    KeyLength = 3072
+    HashAlgorithm = 'SHA256'
+    KeyExportPolicy = 'NonExportable'
+    KeyUsageProperty = 'All'
+    KeyUsage = @('CertSign', 'CRLSign', 'DigitalSignature')
+    TextExtension = @('2.5.29.19={critical}{text}ca=TRUE&pathlength=0')
+    NotAfter = (Get-Date).AddDays(30)
+    CertStoreLocation = 'Cert:\CurrentUser\My'
+}
+$root = New-SelfSignedCertificate @rootParams
+
+$leafParams = @{
+    Type = 'Custom'
+    Subject = 'CN=localhost'
+    DnsName = 'localhost'
+    Signer = $root
+    KeyAlgorithm = 'RSA'
+    KeyLength = 2048
+    HashAlgorithm = 'SHA256'
+    KeyExportPolicy = 'NonExportable'
+    KeyUsageProperty = 'All'
+    KeyUsage = @('DigitalSignature', 'KeyEncipherment')
+    TextExtension = @('2.5.29.37={text}1.3.6.1.5.5.7.3.1')
+    NotAfter = (Get-Date).AddDays(14)
+    CertStoreLocation = 'Cert:\CurrentUser\My'
+}
+$leaf = New-SelfSignedCertificate @leafParams
+
+$rootCer = Join-Path $evidence ("g01-root-" + $root.Thumbprint + ".cer")
+$leafCer = Join-Path $evidence ("g01-localhost-" + $leaf.Thumbprint + ".cer")
+Export-Certificate -Cert $root -FilePath $rootCer -Type CERT | Out-Null
+Export-Certificate -Cert $leaf -FilePath $leafCer -Type CERT | Out-Null
+
+$root.Thumbprint | Set-Content (Join-Path $evidence 'root-thumbprint.txt')
+$leaf.Thumbprint | Set-Content (Join-Path $evidence 'leaf-thumbprint.txt')
+certutil.exe -dump $rootCer
+certutil.exe -dump $leafCer
+~~~
+
+人工核对：
+- Root 的 Basic Constraints 为 CA，Key Usage 含 Certificate Signing / CRL Signing，path length 为 0。
+- Leaf DNS SAN 精确包含 localhost；EKU 包含 Server Authentication（OID 1.3.6.1.5.5.7.3.1）；Issuer 对应本次 Root。
+- Root 和 Leaf 都在 CurrentUser My，私钥不可导出。
+- 导出的 CER 仅含公钥。不得导出 PFX 或任何 CA 私钥文件。
+
+若扩展、Issuer、SAN、EKU、有效期或私钥属性不符合预期，停止，不要导入 Root。
+
+## 5. 明确同意后导入 CurrentUser Root
+
+向用户展示 Root Subject、Thumbprint、NotBefore / NotAfter、导入目标（Cert:\CurrentUser\Root）及用途（一次性 G-01 localhost HTTPS PoC），取得明确同意。用户未明确同意时不得运行导入命令。
+
+用户同意后，单独执行：
+
+~~~powershell
+Import-Certificate -FilePath $rootCer -CertStoreLocation 'Cert:\CurrentUser\Root' -Confirm
+~~~
+
+导入目标必须保持为 Cert:\CurrentUser\Root；禁止改成 LocalMachine 路径。拒绝时不导入，并清理本次新建的证书和 CER 文件。
+
+## 6. 验证信任范围
+
+~~~powershell
+$rootThumb = (Get-Content (Join-Path $evidence 'root-thumbprint.txt')).Trim()
+$leafThumb = (Get-Content (Join-Path $evidence 'leaf-thumbprint.txt')).Trim()
+
+certutil.exe -user -store Root $rootThumb |
+    Tee-Object -FilePath (Join-Path $evidence 'currentuser-root-test-ca.txt')
+
+$lmRootAfter = @(Get-ChildItem 'Cert:\LocalMachine\Root' | ForEach-Object { $_.Thumbprint } | Sort-Object)
+$lmRootAfter | Set-Content (Join-Path $evidence 'localmachine-root-after.txt')
+$lmDelta = Compare-Object -ReferenceObject $lmRootBefore -DifferenceObject $lmRootAfter
+if ($lmDelta) {
+    $lmDelta | Format-Table -AutoSize
+    throw 'LocalMachine Root changed. Stop G-01 and investigate.'
+}
+
+$leaf = Get-Item -LiteralPath ("Cert:\CurrentUser\My\" + $leafThumb)
+$leaf | Format-List Subject, Issuer, Thumbprint, NotBefore, NotAfter, HasPrivateKey, DnsNameList, EnhancedKeyUsageList
+~~~
+
+要求：
+- certutil -user -store Root <RootThumbprint> 能找到本次 Root。
+- LocalMachine Root 导入前后 Thumbprint 清单完全一致；否则停止。
+- Leaf 在 CurrentUser My 且 HasPrivateKey=True；Root 私钥也留在 CurrentUser My，未导出。
+- certutil -dump Leaf CER 显示正确 DNS SAN / Server Authentication EKU。
+- 若 LocalMachine Root 被修改，不得继续把本次 PoC 记为合格。
+
+## 7. 客户端 TLS 与真实协议测试
+
+必须有一个专用本机测试端点使用第 4 节 Leaf 证书，且只监听 127.0.0.1 / ::1。**本手册不创建或启动监听服务。** 正式 Gateway Broker / Worker 尚未完成时，应使用经单独评审的可丢弃 PoC 服务，不得以公网服务器或其它机器替代。
+
+D-06 已确认的默认端口：
+- OAuth Broker：https://localhost:38861/
+- Antigravity Worker：https://localhost:38862/mcp
+- OpenCode Worker：https://localhost:38863/mcp
+
+端点尚未提供这些端口时，记录实际端口及原因；不得擅自改动已确认的产品默认端口。每次启动服务都核对监听地址，不得出现通配或 LAN listener。
+
+| 客户端形态 | TLS 测试 | OAuth / MCP 测试 | 独立记录 |
+|---|---|---|---|
+| Chrome | 本机 https://localhost:<port>/health 无证书警告 | 不替代 OAuth / MCP PASS | Chrome 版本、URL、截图 / 脱敏日志 |
+| Antigravity App | 目标版本访问本机 OAuth discovery | Authenticate、MCP initialize、tools/list、只读 Tool | App 版本、安装形态 |
+| Antigravity IDE | 与 App 分开验证 | OAuth、只读 MCP 调用，记录 CIMD / DCR 实际路径 | IDE 版本、CIMD 是否采用 |
+| OpenCode Desktop | 与 CLI 分开验证 | OAuth discovery、授权、Resource 请求、只读 MCP 调用 | Desktop 版本、安装形态 |
+| OpenCode CLI（如属首版支持范围） | 用 CLI 实际运行时单独验证 | CLI auth / MCP 只读调用 | CLI 版本、运行时、system-CA 配置 |
+
+顺序：Chrome TLS smoke test；Antigravity App / IDE 分开测试；OpenCode Desktop；OpenCode CLI（如纳入支持）；最后完成真实 OAuth + MCP 调用。只打开 /health 或 metadata 页面不算协议验收。
+
+若 OpenCode CLI 只有设置 NODE_USE_SYSTEM_CA=1 或运行时明确支持的等效系统 CA 选项后才成功，记录为该形态的支持前提，并评估是否纳入首版；不得把 CLI 结果外推到 Desktop。禁止 NODE_TLS_REJECT_UNAUTHORIZED=0。
+
+## 8. 负向测试
+
+每种失败场景都必须 fail-closed，不能忽略 TLS 错误、吞掉错误或降级到无认证 HTTP。
+
+| 场景 | 操作 | 预期 |
+|---|---|---|
+| CA 信任移除 | 从 CurrentUser Root 移除本次精确 Root Thumbprint | Chrome / 目标客户端拒绝 TLS，OAuth / MCP 不可继续 |
+| Leaf 过期 | 使用同一 CA 签发已过期 localhost Leaf | 客户端拒绝 |
+| SAN 不匹配 | 使用 SAN 不含 localhost 的测试 Leaf，但访问 localhost URL | 客户端因 hostname mismatch 拒绝 |
+| 链不完整 | 使用包含中间 CA 的测试链，服务端不发送必需中间证书 | 无法构建链时拒绝；记录客户端是否从缓存补链并清理缓存重测 |
+| 信任恢复 | 重新导入本次 Root 公钥证书 | 仅在证书有效、SAN 正确、链完整时恢复连接 |
+
+移除 CurrentUser Root 验证的是当前信任不存在，不等同于 OCSP / CRL 撤销验证。若要测试 OCSP / CRL，须另行设计带可达撤销端点的 PoC，不能把本表描述成 OCSP / CRL 已通过。
+
+## 9. 清理与回滚
+
+归档证据后核对两个 Thumbprint，确认它们是本次新建的唯一证书，再清理。不要按 Subject 通配删除。
+
+~~~powershell
+$rootThumb = (Get-Content (Join-Path $evidence 'root-thumbprint.txt')).Trim()
+$leafThumb = (Get-Content (Join-Path $evidence 'leaf-thumbprint.txt')).Trim()
+
+$rootTrustPath = "Cert:\CurrentUser\Root\$rootThumb"
+$leafPath = "Cert:\CurrentUser\My\$leafThumb"
+$rootMyPath = "Cert:\CurrentUser\My\$rootThumb"
+
+if (Test-Path -LiteralPath $rootTrustPath) {
+    Remove-Item -LiteralPath $rootTrustPath -WhatIf
+    # 检查 WhatIf 输出后，再单独决定是否移除本次 Root 信任。
+}
+if (Test-Path -LiteralPath $leafPath) {
+    Remove-Item -LiteralPath $leafPath -WhatIf
+    # 检查输出后，再单独决定是否删除本次 Leaf。
+}
+if (Test-Path -LiteralPath $rootMyPath) {
+    Remove-Item -LiteralPath $rootMyPath -WhatIf
+    # 检查输出后，再单独决定是否删除本次 Root 私钥容器关联。
+}
+Remove-Item -LiteralPath $rootCer -WhatIf
+Remove-Item -LiteralPath $leafCer -WhatIf
+~~~
+
+先用 -WhatIf 逐项核对，再由操作者决定实际删除。完成后确认：
+- certutil -user -store Root <RootThumbprint> 不再找到本次 Root。
+- CurrentUser My 中不再有本次 Root / Leaf。
+- LocalMachine Root 前后清单仍完全一致。
+- 测试端点进程已退出、无监听残留。
+- 保留测试报告和脱敏日志；CER 在证据归档后按数据处理要求删除。
+
+## 10. 证据记录模板
+
+每个客户端形态分别填写，Desktop / CLI 不得合并：
+
+| 字段 | 记录 |
+|---|---|
+| Windows edition / build、PowerShell 版本 | |
+| 客户端产品 / 版本 / 安装形态 | |
+| OpenCode CLI 运行时与 system-CA 配置（如适用） | |
+| Root Subject / Thumbprint / 有效期 | |
+| Leaf Subject / Thumbprint / SAN / EKU / 有效期 | |
+| CurrentUser Root 查询结果 | |
+| LocalMachine Root 前后清单比较 | |
+| 服务监听地址 / 端口 | |
+| HTTPS URL / Issuer / Resource URL | |
+| TLS 正向结果 | PASS / FAIL / NOT RUN |
+| OAuth discovery / Authenticate | PASS / FAIL / NOT RUN |
+| MCP initialize / tools/list / 只读 Tool | PASS / FAIL / NOT RUN |
+| 负向测试结果 | |
+| 脱敏日志 / 截图路径及备注 | |
+
+## 11. G-01 Go / No-Go
+
+**PASS 必须同时满足：**
+- 用户明确同意导入；仅 CurrentUser 信任；LocalMachine Root 前后完全未变化。
+- 所有首版支持的客户端形态接受有效 localhost TLS 链，并严格拒绝过期、SAN 不匹配、信任移除和不能构建的证书链。
+- Antigravity App / IDE、OpenCode Desktop，以及首版如承诺支持的 OpenCode CLI，分别完成 OAuth discovery / Authenticate、MCP initialize、tools/list 和只读 Tool 调用。
+- 没有 TLS bypass、关闭验证或无认证 HTTP 降级。
+- 有可复核的版本、证书、URL、监听地址、测试日志和清理记录。
+
+**NO-GO / 暂缓：**
+- 必需客户端不识别 CurrentUser Root，或只有绕过 TLS 校验时才工作。
+- 必须修改 LocalMachine Root、获取管理员权限或不安全降级才能连接。
+- 客户端只打开 HTTPS 页面，未完成 OAuth / MCP，或 Agent / Resource Audience / Token 隔离未验证。
+- 负向证书测试不能 fail-closed，或测试证据不足。
+
+G-01 未通过时保留现有 stdio 兼容路径；Managed HTTPS 不上线。不得把部分 PASS 写成整体 PASS，也不得突破用户已确认的 CurrentUser-only 信任边界。
+
+## 12. 公开技术参考
+
+- Microsoft：[New-SelfSignedCertificate](https://learn.microsoft.com/en-us/powershell/module/pki/new-selfsignedcertificate?view=windowsserver2025-ps)（测试证书、SAN、EKU、Signer 和 CurrentUser My）。
+- Microsoft：[Import-Certificate](https://learn.microsoft.com/en-us/powershell/module/pki/import-certificate?view=windowsserver2025-ps)（明确导入 Cert:\CurrentUser\Root）。
+- Microsoft：[Manage Certificate Stores in Windows Server](https://learn.microsoft.com/en-us/windows-server/identity/ad-cs/inspect-certificates-manage-certificate-stores)（Current User / Local Computer store scope 和继承规则）。
+- Microsoft：[Configure certificate authentication in ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/certauth?view=aspnetcore-10.0)（测试 CA / 叶证书 PowerShell 示例；本文不采用其 LocalMachine 示例）。
+
+---
+
+**当前执行状态：NOT RUN。** 本文尚未在 Host A 创建或导入证书、启动监听服务、运行客户端测试或清理证书。
