@@ -699,8 +699,14 @@ class OpenCodeAdapter(_BaseAdapter):
         environ: Mapping[str, str] | None = None,
     ) -> Path:
         env = os.environ if environ is None else environ
+        # Match OpenCode's actual Global service resolution: the explicit
+        # OPENCODE_CONFIG_DIR replaces the global root; otherwise XDG_CONFIG_HOME
+        # supplies the root; finally default to ~/.config/opencode.
+        explicit_config_dir = env.get("OPENCODE_CONFIG_DIR", "").strip()
         xdg_config_home = env.get("XDG_CONFIG_HOME", "").strip()
-        if xdg_config_home:
+        if explicit_config_dir:
+            directory = Path(explicit_config_dir).expanduser()
+        elif xdg_config_home:
             directory = Path(xdg_config_home).expanduser() / "opencode"
         else:
             directory = Path(home or Path.home()) / ".config" / "opencode"
