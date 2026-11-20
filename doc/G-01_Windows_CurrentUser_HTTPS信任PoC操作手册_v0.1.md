@@ -296,3 +296,48 @@ G-01 未通过时保留现有 stdio 兼容路径；Managed HTTPS 不上线。不
 ---
 
 **当前执行状态：NOT RUN。** 本文尚未在任何目标 Windows 主机创建或导入证书、启动监听服务、运行客户端测试或清理证书。实际产品必须在每台安装部署期间执行 CA trust bootstrap；本手册仅模拟部署动作。PoC 结果必须注明具体主机标识和目标 Windows 用户上下文；如 A / B 都部署 M2.5，则分别验证其独立部署流程。
+
+
+## 13. G-01B：交互式 CurrentUser Root 导入 PoC 脚本
+
+仓库提供一次性测试脚本：
+
+`.github/scripts/g01-interactive-currentuser-import.ps1`
+
+该脚本仅用于验证**当前 Windows 用户的交互式会话能否完成 CurrentUser Root 导入和系统默认证书链验证**。它生成短期、一次性的测试 CA / localhost Leaf；不是正式 AirBridge CA 供应方案，也不验证安装器、Antigravity、OpenCode 或 OAuth / MCP。
+
+### 执行前提
+
+- 在本次要验证的实际 Windows 主机上，以将运行 AirBridge / MCP Client 的目标 Windows 用户登录。
+- 打开可见、非提升（非管理员运行）的 PowerShell；不得从服务、计划任务、无交互会话或 GitHub-hosted Runner 执行。
+- 确认该账户对本机 CurrentUser`My` 和 CurrentUser`Root` 有正常用户级访问权限。
+- 如果 AirBridge GUI 与 MCP Client 使用不同 Windows 账户，必须对实际 MCP Client 账户单独执行；本脚本不能证明其它账户继承了该信任。
+- 运行前关闭其它正在修改证书库的安装 / 管理操作，避免并发变化影响前后快照。
+
+### 执行步骤
+
+从已检出的 PR 分支根目录运行：
+
+~~~powershell
+.\.github\scripts\g01-interactive-currentuser-import.ps1
+~~~
+
+脚本会先检查交互式会话、Session ID 和非提升身份，然后在 CurrentUser`My` 创建一次性 CA / Leaf，并导出**仅含公钥**的 Root CER。随后显示 Root Subject、完整 Thumbprint 和有效期。
+
+1. 仔细核对 Subject、Thumbprint、有效期和用途。
+2. 只有明确同意信任这个一次性测试 Root，才输入完整 Thumbprint。输入不匹配或直接取消时，不执行 Root 导入。
+3. 脚本调用 Windows `Import-Certificate`，目标明确限定为 `Cert:\CurrentUser\Root`。若 Windows 显示 Root 信任确认，必须由操作者亲自核对并批准；不得隐藏、自动点击或绕过系统确认。
+4. 导入后，脚本按精确 Thumbprint 回读 CurrentUser Root，并用 Windows 默认 X509Chain 构建器验证 localhost Leaf 链。
+5. 操作者还需如实确认 Windows Root 系统提示确实出现且已获批准。最终 PASS 要求导入回读和默认链验证同时成功。
+6. 脚本在 finally 阶段只按本次唯一 Thumbprint 删除本次导入的测试 Root、Leaf 和本次 Root 私钥关联，并比较 CurrentUser Root 回到基线、LocalMachine Root 完全不变。输出 `g01b-result.json` 作为证据。
+
+若用户拒绝应用层同意、拒绝 / 取消 Windows 系统确认、导入没有回读、链验证失败或清理不完整，脚本返回非零，不能记为 PASS。若脚本意外中断，必须先检查 JSON / 当前证书库快照，再由操作者按本次记录的 Thumbprint 决定如何清理；不得按 Subject 通配删除证书。
+
+### G-01B 的结论边界
+
+- G-01B PASS 只证明：当前被测 Windows 用户上下文中，交互式导入和 Windows 默认链验证可行，且本次测试没有修改 LocalMachine Root、清理后 CurrentUser Root 恢复原状。
+- G-01B 不证明生产安装器的 CA 生成 / 交付、升级 / Repair、Antigravity 或 OpenCode 的 TLS 信任行为，也不证明真实 OAuth / MCP 连通。
+- G-01B 测试的 CA 是短期 disposable CA，不能把其私钥、CER 或 Thumbprint 当作生产部署材料。
+- 现有 G-01A Windows Actions 子 Gate 与 G-01B 互补：G-01A 是非交互存储范围 / CustomTrustStore CI；G-01B 是真实用户交互导入。G-01 总体仍需完成所有目标 MCP 客户端 TLS + OAuth + MCP 正向和负向测试。
+
+**当前执行状态：NOT RUN。** GitHub Actions 只对该脚本做 PowerShell 语法 / 目标存储路径静态检查，不会执行脚本或触碰 Runner 的 Root 存储。
