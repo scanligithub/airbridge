@@ -108,6 +108,15 @@ Agent enabled 仅表示允许为该 Agent 启动 Worker；仍必须有有效凭�
 - loopback 不是身份认证，启动前必须完成本地客户端访问认证设计；
 - 端口冲突必须明确报错，不能静默改成任意端口后不更新 MCP 客户端配置。
 
+### 5.5 本机 HTTPS 证书与用户信任
+
+- 安装 / 初始配置时，GUI 必须清楚说明本机证书用途、信任范围和影响，并在用户明确同意后才导入。
+- 证书信任只写入当前 Windows 用户（CurrentUser）范围；不要求管理员权限，不修改 LocalMachine 证书存储区或 LocalMachine Root。
+- GUI 显示证书状态、有效期、SAN / hostname 匹配、信任状态及可执行的修复引导；不得将“证书已导入”直接显示为“所有 MCP 客户端均已信任”。
+- 用户拒绝导入、证书失效或用户撤销信任时，托管 Streamable HTTP / OAuth HTTPS Gateway 标记为不可用，说明原因和恢复方式。
+- 不得提示用户忽略证书错误，不得提供关闭 TLS 校验的选项，不得降级为无认证 HTTP。
+- 证书信任问题不得关闭既有 stdio 兼容路径或 AirBridge Core / Runtime。
+
 ## 6. Agent 管理
 
 每个 Agent 行展示：
@@ -315,6 +324,9 @@ OpenCode 支持 JSON 和 JSONC，且全局、系统、项目配置存在优先�
 ### 13.4 本地 HTTPS 授权服务的 GUI 状态
 
 在 OAuth Authorization Server HTTPS 原型通过前，GUI 不得显示“本地 MCP OAuth 安全授权已就绪”。至少应显示：
+- 当前用户证书信任状态（未安装 / 等待同意 / 已信任 / 用户拒绝 / 失效 / 已撤销）；
+- Broker 与 Worker 证书的 SAN / 有效期 / TLS 健康状态；
+- 托管 HTTPS Gateway 是否因证书信任未完成而不可用。
 - Gateway Worker 进程状态；
 - MCP Resource Server endpoint 状态；
 - Authorization Server / TLS 状态；
