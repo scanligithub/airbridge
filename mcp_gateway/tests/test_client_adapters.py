@@ -362,7 +362,7 @@ class ClientAdapterTests(unittest.TestCase):
         project_file.write_text("{}", encoding="utf-8")
         json_file = opencode_dir / "opencode.json"
         json_file.write_text("{}", encoding="utf-8")
-        self.assertEqual(OpenCodeAdapter.global_config(home), json_file)
+        self.assertEqual(OpenCodeAdapter.global_config(home, environ={}), json_file)
 
         jsonc_file = opencode_dir / "opencode.jsonc"
         jsonc_file.write_text("{}", encoding="utf-8")
