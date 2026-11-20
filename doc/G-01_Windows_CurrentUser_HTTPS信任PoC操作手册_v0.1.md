@@ -132,13 +132,28 @@ certutil.exe -dump $leafCer
 
 向目标 Windows 用户展示 Root Subject、Thumbprint、NotBefore / NotAfter、导入目标（Cert:\CurrentUser\Root）、CA 私钥用途、证书可被本用户信任链使用的影响，以及“拒绝后 AirBridge 仍安装成功但 Managed HTTPS 不可用”的结果，取得明确同意。用户未明确同意时不得运行导入命令。
 
-仅在模拟部署阶段、且用户明确同意后，才单独执行：
+仅在模拟部署阶段、且用户明确同意后，部署程序使用 Windows 证书存储 API 写入公钥证书。不要在非交互式部署子进程中调用依赖证书导入向导 UI 的 `Import-Certificate`；CI 已观察到该 cmdlet 在 GitHub Runner 上报 `UI is not allowed in this operation`。建议用 .NET `X509Store` API 执行实际写入，Consent UI 仍由 AirBridge 部署界面提前完成：
 
 ~~~powershell
-Import-Certificate -FilePath $rootCer -CertStoreLocation 'Cert:\CurrentUser\Root' -Confirm
+$rootPublic = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCer)
+if ($rootPublic.HasPrivateKey) {
+    throw 'Only the CA public certificate may be imported.'
+}
+
+$store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+    [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+    [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+)
+try {
+    $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    $store.Add($rootPublic)
+}
+finally {
+    $store.Close()
+}
 ~~~
 
-导入目标必须保持为 Cert:\CurrentUser\Root；禁止改成 LocalMachine 路径。拒绝时不导入，但模拟 AirBridge 安装仍应继续完成；只将 Managed HTTPS / OAuth 标记为不可用，Gateway 保持默认 OFF，AirBridge Core / Runtime / 串口功能不受影响。若以后需要补做，必须再次进入明确的部署 Repair 流程并重新 Consent，不能通过 Gateway ON 静默导入。
+导入目标必须明确指定为 `StoreLocation.CurrentUser` + `StoreName.Root`；禁止改成 LocalMachine。Consent 必须在调用该 API 之前由用户明确完成，不能把 API 调用本身当成 Consent。拒绝时不导入，但模拟 AirBridge 安装仍应继续完成；只将 Managed HTTPS / OAuth 标记为不可用，Gateway 保持默认 OFF，AirBridge Core / Runtime / 串口功能不受影响。若以后需要补做，必须再次进入明确的部署 Repair 流程并重新 Consent，不能通过 Gateway ON 静默导入。
 
 ## 6. 验证信任范围
 
