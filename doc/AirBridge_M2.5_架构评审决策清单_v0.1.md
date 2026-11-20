@@ -215,23 +215,26 @@
 
 **因此 G-01 当前状态为 Partial Research / NOT PASS。** 不得因 Chrome 成功或证书导入成功就判定目标 MCP 客户端兼容；不得扩大到 LocalMachine Root、要求管理员权限、设置 TLS bypass 或降级为无认证 HTTP。
 
-### 4.1.1 G-01A：GitHub Actions Windows CurrentUser 存储测试（CI 层）
+### 4.1.1 G-01A：GitHub Actions Windows Store-scope / Chain CI（非交互子 Gate）
 
 新增独立 workflow：
 - `.github/workflows/g01-windows-currentuser-ci.yml`
 - `.github/scripts/g01-currentuser-trust.ps1`
+- `.github/scripts/run-g01-as-standard-user.ps1`
 
-CI 层应验证：
-1. 在 Windows `windows-2025` Runner 当前用户上下文中生成一次性测试 CA / Leaf，并只导出 CA 公钥 CER；
-2. 在已记录用户 Consent 的等效测试前提下，将公钥写入 `CurrentUser\\Root`，用 `certutil -user -store Root <thumbprint>` 回读；
-3. 确认 CurrentUser Root 条目没有私钥，CA 私钥留在 CurrentUser My 的临时测试证书对象中；
-4. `X509Chain.Build` 对已信任 CA 签发的 Leaf 成功，对未导入信任的另一 CA 签发的 Leaf 失败；
-5. LocalMachine Root 在导入前、导入后和清理后 Thumbprint 集合完全一致；
-6. 通过精确 Thumbprint 清理本次创建 / 导入的证书，并保存不包含私钥的 JSON / certutil 证据。
+**CI 能验证的内容：**
+1. 在 Windows `windows-2025` Runner 中创建一次性普通权限本地用户，加载独立用户 Profile，并确认测试子进程不是 Administrators 成员；
+2. 在该用户的 `CurrentUser\\My` 中创建短期测试 Root / Leaf，Root CER 只含公钥；
+3. 使用 `X509ChainPolicy.CustomTrustStore` 在内存中验证已配置测试信任锚的正向链成功、未配置的另一 CA 链失败；
+4. 校验 localhost / wrong-host SAN 测试夹具；
+5. 前后比较 `CurrentUser\\Root` 与 `LocalMachine\\Root` Thumbprint 集合均完全一致；CI 不写入任一 Root store；
+6. 按精确 Thumbprint 清理 `CurrentUser\\My` 临时证书，并删除临时用户及其 Profile。
 
-**CI 的证明边界与当前状态：** GitHub-hosted Windows Runner 的父 workflow 进程以 elevated `runneradmin` 运行；workflow harness 现在会创建一次性普通本地 Windows 用户，并尝试在该用户的独立进程 / CurrentUser profile 中执行 CA 公钥导入与 X509Chain 正反向验证，结束后删除该临时账户。最早一次 `Import-Certificate` 尝试因非交互 Runner 报 `UI is not allowed in this operation` 而失败；后来增加的标准用户进程测试尚未得到成功结果，最新 run 仍处于执行中，因此 G-01A **NOT PASS / PENDING**。必须看到子进程身份确认为非管理员、CurrentUser Root 写入 / 回读成功、LocalMachine Root 前后完全不变、证书链正反向结果和清理成功，才能关闭 CI 子 Gate。该 workflow 不运行 Antigravity / OpenCode 桌面客户端，也不证明它们使用相同信任库。
+**明确不在 hosted Actions 执行的操作：** CurrentUser Root 导入。Windows Root store 是受保护的信任边界，写入会触发 Windows 用户确认；GitHub-hosted Runner 无法完成交互式确认。之前的 `Import-Certificate` 得到 `UI is not allowed in this operation`，而 `.NET X509Store.Add()` 与 `certutil -f -user -addstore Root` 在无交互子进程中分别超时。最新证据没有 Root 导入回读或链结果，不能记为导入成功。Microsoft 说明见 [Managing Certificates with Certificate Stores](https://learn.microsoft.com/en-us/windows/win32/seccrypto/managing-certificates-with-certificate-stores)。
 
-因此 G-01 分为 CI OS store / chain 子项和真实 MCP Client TLS / OAuth 子项；CI 子项通过不能单独把 G-01 总体标记为 PASS。当前 workflow 已接入 PR #16，执行状态与实际结论以该 workflow run 为准。
+新的 CI 将 `current_user_root_import` 记为 `NOT_RUN_INTERACTIVE_WINDOWS_CONSENT_REQUIRED`。因此 G-01A 当前仅表示 **非交互 Store-scope / CustomTrustStore Chain 检查**；这些检查通过后也不等于 CurrentUser Root 导入 PASS。真实 Root 导入必须在目标用户的交互式部署 / Repair 流程中完成应用层 Consent 和 Windows 系统确认，并确认只写入该用户的 CurrentUser Root。
+
+该 workflow 不运行 Antigravity / OpenCode 桌面客户端，也不证明真实客户端的 TLS / OAuth / MCP 兼容。G-01 总体仍为 Partial Research / NOT PASS；不得扩大到 LocalMachine Root、注册表直写、隐藏或自动点击 Windows 确认、TLS bypass 或无认证 HTTP fallback。
 
 ### 4.2 G-01 必须执行的 Windows PoC 矩阵
 
