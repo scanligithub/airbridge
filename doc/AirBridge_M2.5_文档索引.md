@@ -29,6 +29,7 @@
    - 复用 0x15 / 0x16，新增可选 `gateway.state.v1`，兼容旧版并验证四种开关组合。
 6. [ADR-012：Agent 扩展与 MCP Client Adapter 注册机制](ADR-012_M2.5_Agent扩展与MCP_Client_Adapter注册机制.md)
    - 区分客户端类型与 Agent 实例；首批专用 Adapter 仅 Antigravity / OpenCode；Generic / Manual 通用手动接入已明确延期，不纳入首版。
+7. **D-07 OAuth Client 注册决策（已确认）**：Antigravity / OpenCode 官方 CIMD URL 精确白名单优先，DCR 兼容回退；注册不授予 Agent 权限，每个 Agent / Resource / Scope 独立 Consent；不开放任意 CIMD URL fetch。
 7. [M2.5 架构评审决策清单 v0.1](AirBridge_M2.5_架构评审决策清单_v0.1.md)
    - 区分用户已确认原则、技术提案、尚需产品决策的默认行为和实施前必须完成的 PoC Gate。
 
@@ -50,7 +51,7 @@
 - 首次安装 Gateway 总开关默认 OFF；用户在 GUI 中明确启用后才启动 Worker。升级安装保留 Gateway / Agent / OAuth Grant / CurrentUser 证书 / MCP 用户配置；版本化迁移、备份和回滚，不重置用户状态。
 - `gateway.start_with_airbridge` 默认 ON，但受 Gateway 总开关和 Agent 实例开关约束；M2.5 首版不配置 Windows 登录自动启动 AirBridge GUI。
 - Gateway OFF 不关闭 AirBridge Runtime、串口通信或 HTTP API。
-- 每个 Agent 身份、OAuth Grant、M2.4 Service Credential 和 Resource Audience 相互隔离。
+- 每个 Agent 身份、OAuth Grant、M2.4 Service Credential 和 Resource Audience 相互隔离；OAuth Client 注册采用官方 CIMD 白名单优先、DCR 兼容回退，Grant 必须逐 Agent / Resource / Scope Consent。
 - OAuth Access Token 与 M2.4 Agent Service Token 不得混用；Service Token 不进入 MCP Host 配置。
 - MCP Authorization Server 和携带 Bearer Token 的 MCP Resource Server endpoint 都使用 HTTPS。
 - 本机 HTTPS 证书只在 CurrentUser 范围建立信任；安装时明确征求同意，不要求管理员权限、不修改 LocalMachine Root；拒绝信任时 Managed HTTPS Gateway 不可用且不得不安全降级。
@@ -63,6 +64,7 @@
 ## 五、实施前置 Gate
 
 - 首次安装默认 OFF 与升级配置 / 授权状态保留、配置损坏恢复和迁移回滚验证；
+- Antigravity / OpenCode CIMD 白名单、DCR 回退、用户 Consent、独立 Agent / Resource / Scope Grant 和反 SSRF 测试；
 - 本机 OAuth Broker + 两个 Worker endpoint 的 HTTPS 证书真实客户端验证；
 - 默认 TCP 端口、loopback-only 监听、实际 bind 冲突检测、Worker / Broker 端口迁移与 OAuth 重新授权验证；
 - Antigravity Authenticate 与 OpenCode `/mcps` / CLI auth 验证；
