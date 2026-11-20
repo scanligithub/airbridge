@@ -238,6 +238,19 @@
 
 该 workflow 不运行 Antigravity / OpenCode 桌面客户端，也不证明真实客户端的 TLS / OAuth / MCP 兼容。G-01 总体仍为 Partial Research / NOT PASS；不得扩大到 LocalMachine Root、注册表直写、隐藏或自动点击 Windows 确认、TLS bypass 或无认证 HTTP fallback。
 
+### 4.1.2 G-01B：交互式 CurrentUser Root 导入子 Gate
+
+新增操作脚本：`.github/scripts/g01-interactive-currentuser-import.ps1`；执行说明见 G-01 操作手册第 13 节。
+
+- 必须由实际目标 Windows 用户在可见、非提升的交互式桌面 PowerShell 中运行；不能在 hosted Actions、服务、计划任务或 Session 0 执行。
+- 脚本只创建 disposable CA / localhost Leaf，取得针对完整 Root Thumbprint 的应用层明确 Consent 后，才调用 `Import-Certificate` 写入 `Cert:\CurrentUser\Root`。
+- 需要确认 Windows Root 系统信任提示由操作者亲自批准；随后按精确 Thumbprint 回读，并以 Windows 默认 X509Chain 构建器验证 localhost Leaf。
+- 完成后精确清理本次 Root / Leaf / Root 私钥关联；CurrentUser Root 必须恢复原 Thumbprint 集合，LocalMachine Root 必须完全不变。
+- 用户拒绝、系统确认未批准 / 未出现、导入回读失败、默认链失败或清理不完整，均为 FAIL / NOT RUN，不能把已有 G-01A CI PASS 推断为 G-01B PASS。
+- 该 PoC 只验证 Windows 交互式信任导入能力；不代表正式产品 CA provisioning、Antigravity / OpenCode TLS、OAuth 或 MCP 验收通过。
+
+**状态：NOT RUN。** hosted CI 仅做脚本语法和目标存储路径静态检查，不执行交互导入。
+
 ### 4.2 G-01 必须执行的 Windows PoC 矩阵
 
 **主机范围澄清：** G-01 不绑定 Host A / Host B 角色。Managed HTTPS endpoints 只监听 loopback，`localhost` 指向 MCP Client 所在的本机，因此 Gateway 与 MCP Client 必须位于同一台 Windows 主机。每台实际部署 M2.5 的主机都在部署阶段导入适用于该机 localhost 的 CA 公钥；CurrentUser Root 是该机当前 Windows 用户的信任库，不跨机器共享。不得依赖固定 Host A / Host B 作为 CA 来源。正式 CA 签发 / 供应模型尚未冻结；若 A、B 都部署 M2.5，必须分别执行部署导入和信任检查；Gateway OFF 不跳过部署阶段的 CA 导入。
