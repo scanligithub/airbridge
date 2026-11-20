@@ -49,10 +49,9 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    # STDIO requires real stdin/stdout/stderr handles. Use the console
-    # subsystem, then hide only a console window owned by a GUI launch.
-    console=True,
-    hide_console='hide-early',
+    # Keep the desktop application windowed. The MCP entrypoint restores
+    # inherited STARTF_USESTDHANDLES pipes before starting the STDIO SDK.
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
