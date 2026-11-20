@@ -3,10 +3,12 @@ $ProgressPreference = 'SilentlyContinue'
 
 # GitHub-hosted Windows Actions cannot complete the interactive Windows
 # confirmation required when adding a certificate to CurrentUser\Root.
-# This CI harness intentionally never writes either Root store. It validates
-# the standard-user profile, read-only store scope, custom-root chain logic,
-# certificate fixtures, and exact cleanup. Actual Root import belongs in the
-# interactive deployment flow after explicit user consent.
+# This first CI subtest never writes either Root store. It validates the
+# standard-user profile, read-only store scope, custom-root chain logic,
+# certificate fixtures, and exact cleanup. After this script completes,
+# g01-cryptui-import-ci.ps1 separately tests CryptUIWizImport NO_UI mode inside
+# the disposable standard-user profile. Actual interactive import remains
+# a separate target-Windows-user test.
 
 $runId = [Guid]::NewGuid().ToString('N')
 $evidenceBase = if ($env:G01_EVIDENCE_ROOT) { $env:G01_EVIDENCE_ROOT } else { $env:RUNNER_TEMP }
