@@ -53,11 +53,13 @@
 
 ### D-02：Gateway 随 AirBridge 启动
 
-建议提供独立的 “Start Gateway with AirBridge” 选项，默认 ON；但仅在 Gateway 总开关 ON 时生效。
+**用户已确认并冻结：**
+- 提供独立的 “Start Gateway with AirBridge” 选项，配置键为 `gateway.start_with_airbridge`，默认值为 `true`（ON）。
+- AirBridge GUI 启动时，只有在 Gateway 总开关 `gateway.enabled=true` 且至少一个 Agent 实例已启用时，Supervisor 才按配置启动对应 Worker。
+- `gateway.start_with_airbridge=false` 时，GUI 启动不自动启动 Worker；用户仍可在 GUI 中手动启动。
+- 该选项不能绕过 Gateway 总开关。首次安装时 `gateway.enabled=false` 仍是硬性门禁，因此即使 `start_with_airbridge=true` 也不会启动任何 Worker。
 
-需要决定：
-- GUI 默认启动策略；
-- Windows 登录自动启动是否属于 M2.5，还是暂不包含。
+**M2.5 首版明确不包含：** Windows 登录时自动启动 AirBridge GUI（注册表 Run、Startup 文件夹、计划任务或等效自启动机制均不由本版本配置）。这与“AirBridge GUI 启动后是否启动 Gateway”是两个独立行为。
 
 ### D-03：GUI 关闭时 Gateway Worker 行为
 
