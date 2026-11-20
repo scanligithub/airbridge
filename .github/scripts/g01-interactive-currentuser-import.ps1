@@ -155,8 +155,8 @@ try {
     $leafThumb = $leaf.Thumbprint.ToUpperInvariant()
     $results.root_thumbprint = $rootThumb
     $results.leaf_thumbprint = $leafThumb
-    $results.root_private_key_non_exportable = $root.HasPrivateKey
-    $results.leaf_private_key_non_exportable = $leaf.HasPrivateKey
+    $results.root_private_key_present = $root.HasPrivateKey
+    $results.leaf_private_key_present = $leaf.HasPrivateKey
 
     if (-not $root.HasPrivateKey -or -not $leaf.HasPrivateKey) {
         throw 'The disposable Root and Leaf private keys were not created in CurrentUser\My.'
