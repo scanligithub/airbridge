@@ -135,7 +135,7 @@
 
 | 编号 | PoC 项目 | 通过条件 |
 |---|---|---|
-| G-01 | Windows 本机 OAuth Broker HTTPS | 证书可信、issuer 稳定、客户端 discovery 成功 |
+| G-01 | Windows 本机 OAuth Broker HTTPS | CurrentUser 证书信任仅经用户明确同意写入；Antigravity / OpenCode / 系统浏览器正常验证证书链；issuer 稳定、客户端 discovery 成功；拒绝 / 撤销时 fail-closed |
 | G-02 | Antigravity OAuth | 当前目标 App / IDE 完成 Authenticate、Token 获取和只读 MCP 调用 |
 | G-03 | OpenCode OAuth | 当前目标版本完成 /mcps 或 CLI auth，并成功调用只读 MCP Tool |
 | G-04 | Worker HTTPS | 两个 Agent Resource Server 均能被目标客户端正常验证 TLS |
