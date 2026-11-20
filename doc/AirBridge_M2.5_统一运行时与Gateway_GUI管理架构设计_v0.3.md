@@ -29,7 +29,7 @@ M2.5 不改变 AirBridge 的产品定位：AirBridge 仍是通用、透明的双
 11. **首次安装时 Gateway 总开关默认 OFF**；首次安装不得自动启动任何 Gateway Worker。
 12. `gateway.start_with_airbridge` 是独立启动策略，默认 ON；仅当 `gateway.enabled=true` 且 Agent 实例已启用时，GUI 启动才会拉起对应 Worker。首次安装的总开关 OFF 优先级更高。
 13. **M2.5 首版不配置 Windows 登录自动启动 AirBridge GUI**；这与 GUI 启动后的 Gateway Worker 启动策略分离，留待后续版本评估。
-14. 本机 HTTPS 证书只在当前 Windows 用户（CurrentUser）范围建立信任；安装时必须取得用户明确同意，不要求管理员权限，不修改 LocalMachine Root。用户拒绝或撤销信任时，托管 HTTPS Gateway 不可用，禁止关闭 TLS 校验或降级成无认证 HTTP。
+14. 每台实际部署 M2.5 的 Windows 主机都在部署阶段准备本机 CA 与 localhost Server Certificate；CA 公钥仅在目标 Windows 用户 CurrentUser Root 中经明确同意后建立信任，不要求管理员权限，不修改 LocalMachine Root。部署 CA 不会开启 Gateway，Gateway 首次安装仍默认 OFF。用户拒绝或撤销信任时，托管 HTTPS Gateway 不可用，禁止关闭 TLS 校验或降级成无认证 HTTP。
 15. Gateway 端口默认固定为 Broker TCP 38861、首个 Antigravity Worker TCP 38862、首个 OpenCode Worker TCP 38863；每个 Agent 实例端口独立、持久化，冲突必须显式报告，不能随机改端口。
 16. **升级安装保留所有有效 Gateway / Agent / Broker OAuth Grant / 证书信任 / 当前用户 MCP 配置状态**；仅首次安装应用 Gateway 默认 OFF。升级迁移必须版本化、备份、原子提交和可回滚；异常配置不得静默重置。
 
@@ -183,13 +183,16 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 **首次安装：**
 - 只有确认没有既有 AirBridge 安装 / 实例标记时，才创建全新 Gateway 配置；`gateway.enabled=false`，`gateway.start_with_airbridge=true`，首批 Agent 实例初始为 disabled。
 - 首次安装不得启动任何 Gateway Worker；Gateway 总开关必须由用户在 GUI 中明确开启。
+- 在同一部署流程中执行本机 CA trust bootstrap：按目标 Windows 用户生成 / 保存该机独立 CA 私钥和 localhost Server Certificate，展示证书指纹 / 用途 / 当前用户信任范围并取得明确 Consent 后，只导入 CA 公钥至该用户 `Cert:\CurrentUser\Root`。
+- CA trust bootstrap 与 Gateway 开关分离；即使 CA 部署成功，首次安装 `gateway.enabled=false` 仍然生效，不启动 OAuth Broker 或任何 Worker。
+- 若用户拒绝 CA Consent，安装继续完成，Core / Runtime 可用，但 Managed HTTPS / OAuth Gateway 保持不可用。后续只能经显式部署 Repair 流程再次征求 Consent；不得在 Gateway ON 或应用普通启动时静默导入。
 
 **升级安装：**
 - 必须通过持久化安装 / 实例标记识别升级；不能仅因配置文件不存在或无法解析就把升级误判为首次安装。
 - 保留现有 `gateway.enabled`、`gateway.start_with_airbridge`、Agent 实例 ID / 类型 / Adapter / enabled / Scope、Broker / Worker 端口和 endpoint。
 - 保留 M2.4 Credential Provider / Windows Credential Manager 中现有 Agent Service Credential；升级不得自动重签、轮换或撤销。
 - 保留 Broker 客户端注册、Grant / Revocation、issuer / Resource Audience 绑定及维持授权有效所需的持久化数据 / 密钥材料；稳定 issuer、Resource URL、Audience 和有效证书身份，避免正常升级触发无故重新授权。
-- 保留有效的 AirBridge CurrentUser 证书、私钥关联和信任状态；不重新导入、不扩大信任范围、不无故删除或重建证书。
+- 保留有效的本机 CA、CA 私钥关联、localhost Server Certificate 和 AirBridge CurrentUser 信任状态；升级不重复导入、不扩大信任范围、不无故删除或重建。若旧安装缺少 CA 或证书失效，必须在部署 / Repair 流程明确告知并再次取得用户 Consent 后补建 / 轮换；不得由升级静默导入。
 - 保留 Adapter 管理的当前用户级 Antigravity / OpenCode MCP 配置条目；更新时只修改明确归属 AirBridge 的条目，保留其他 MCP Server、未知字段与 JSONC 注释 / 格式。项目级 / 系统级配置仍只读、不修改。
 - 客户端自己的 OAuth Token Vault 完全由客户端管理。AirBridge 不读取、复制、备份、改写或删除其中的 Access Token / Refresh Token。正常升级保留客户端端点及 Broker 状态，使客户端原授权继续有效；若必要迁移导致某个授权失效，必须明确说明并只要求受影响的客户端 / Agent 重新授权。
 - 对旧 schema 中不存在的新字段，只能按版本化迁移表添加明确默认值；现有用户值和未知字段不得被新默认值覆盖。迁移必须幂等，可重复运行而不改变已迁移值。
