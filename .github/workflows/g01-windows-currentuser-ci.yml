@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - ".github/scripts/g01-currentuser-trust.ps1"
+      - ".github/scripts/run-g01-as-standard-user.ps1"
       - ".github/workflows/g01-windows-currentuser-ci.yml"
   workflow_dispatch:
 
@@ -20,7 +21,7 @@ jobs:
   currentuser-https-trust:
     name: CurrentUser CA import + loopback TLS (Windows)
     runs-on: windows-2025
-    timeout-minutes: 5
+    timeout-minutes: 8
 
     steps:
       - name: Checkout exact revision
@@ -43,13 +44,13 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          pwsh -NoLogo -NoProfile -NonInteractive -File ".github/scripts/g01-currentuser-trust.ps1"
+          pwsh -NoLogo -NoProfile -NonInteractive -File ".github/scripts/run-g01-as-standard-user.ps1"
 
       - name: Upload sanitized G-01 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: G01-Windows-CurrentUser-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/airbridge-g01-*/*
+          path: ${{ runner.temp }}/g01-standard-user-*/**/*
           if-no-files-found: warn
           retention-days: 14
