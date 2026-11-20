@@ -183,7 +183,7 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 **首次安装：**
 - 只有确认没有既有 AirBridge 安装 / 实例标记时，才创建全新 Gateway 配置；`gateway.enabled=false`，`gateway.start_with_airbridge=true`，首批 Agent 实例初始为 disabled。
 - 首次安装不得启动任何 Gateway Worker；Gateway 总开关必须由用户在 GUI 中明确开启。
-- 在同一部署流程中执行本机 CA trust bootstrap：由部署流程准备适用于该机 localhost 的 CA 公钥信任材料和服务器证书关联，展示证书指纹 / 用途 / 当前用户信任范围并取得明确 Consent 后，只导入 CA 公钥至该用户 `Cert:\CurrentUser\Root`。具体 CA 签发 / 供应方式由 G-01 技术验证确定，不从固定 Host A / Host B 手工导入。
+- 在同一部署流程中执行本机 CA trust bootstrap：由部署流程提供 / 准备适用于该机 localhost 的 CA 公钥信任材料和服务器证书关联，展示证书指纹 / 用途 / 当前用户信任范围并取得明确 Consent 后，只导入 CA 公钥至该用户 `Cert:\CurrentUser\Root`。具体 CA 签发 / 供应方式由 G-01 技术验证确定，不从固定 Host A / Host B 手工导入，也不把 CA 私钥放入普通安装包。
 - CA trust bootstrap 与 Gateway 开关分离；即使 CA 部署成功，首次安装 `gateway.enabled=false` 仍然生效，不启动 OAuth Broker 或任何 Worker。
 - 若用户拒绝 CA Consent，安装继续完成，Core / Runtime 可用，但 Managed HTTPS / OAuth Gateway 保持不可用。后续只能经显式部署 Repair 流程再次征求 Consent；不得在 Gateway ON 或应用普通启动时静默导入。
 
@@ -192,7 +192,7 @@ Antigravity / OpenCode 的具体 MCP 配置 schema、HTTP transport 支持版本
 - 保留现有 `gateway.enabled`、`gateway.start_with_airbridge`、Agent 实例 ID / 类型 / Adapter / enabled / Scope、Broker / Worker 端口和 endpoint。
 - 保留 M2.4 Credential Provider / Windows Credential Manager 中现有 Agent Service Credential；升级不得自动重签、轮换或撤销。
 - 保留 Broker 客户端注册、Grant / Revocation、issuer / Resource Audience 绑定及维持授权有效所需的持久化数据 / 密钥材料；稳定 issuer、Resource URL、Audience 和有效证书身份，避免正常升级触发无故重新授权。
-- 保留有效的本机 CA、CA 私钥关联、localhost Server Certificate 和 AirBridge CurrentUser 信任状态；升级不重复导入、不扩大信任范围、不无故删除或重建。若旧安装缺少 CA 或证书失效，必须在部署 / Repair 流程明确告知并再次取得用户 Consent 后补建 / 轮换；不得由升级静默导入。
+- 保留有效的本机 CA 信任、localhost Server Certificate 及其所需私钥关联和 AirBridge CurrentUser 信任状态；升级不重复导入、不扩大信任范围、不无故删除或重建。若旧安装缺少 CA 或证书失效，必须在部署 / Repair 流程明确告知并再次取得用户 Consent 后补建 / 轮换；不得由升级静默导入。
 - 保留 Adapter 管理的当前用户级 Antigravity / OpenCode MCP 配置条目；更新时只修改明确归属 AirBridge 的条目，保留其他 MCP Server、未知字段与 JSONC 注释 / 格式。项目级 / 系统级配置仍只读、不修改。
 - 客户端自己的 OAuth Token Vault 完全由客户端管理。AirBridge 不读取、复制、备份、改写或删除其中的 Access Token / Refresh Token。正常升级保留客户端端点及 Broker 状态，使客户端原授权继续有效；若必要迁移导致某个授权失效，必须明确说明并只要求受影响的客户端 / Agent 重新授权。
 - 对旧 schema 中不存在的新字段，只能按版本化迁移表添加明确默认值；现有用户值和未知字段不得被新默认值覆盖。迁移必须幂等，可重复运行而不改变已迁移值。
