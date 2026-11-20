@@ -4,7 +4,7 @@
 - PR: #14 (Draft; not merged)
 - Branch: `feature/m2-4-zero-touch-agent-auth`
 - Scope: exact-revision Windows EXE build and SHA-256 verification, Windows Credential Manager provisioning, Gateway Agent-ID lookup, read-only HTTP/MCP verification, revocation, graceful desktop / HTTP lifecycle validation
-- Explicit exclusions: no forced process termination, no Shell / EDA execution, no Capture / Allegro lifecycle operation, no Host B operation, and no formal OpenCode / Antigravity MCP Host migration
+- Explicit exclusions: no forced process termination, no Shell / EDA execution, no Capture / Allegro lifecycle operation, no manual Host B operation, and no formal OpenCode / Antigravity MCP Host migration
 
 ## 1. Acceptance stages
 
@@ -304,5 +304,6 @@ The acceptance directly verified graceful GUI / parent process exit, release and
 
 - **Stages A–F: PASS** within the scope described in this runbook.
 - The AirBridge desktop application was left running after successful restart, under PID `19740`, with its HTTP listener on `127.0.0.1:8888`.
-- No EDA Execute request, Shell operation, Capture operation, Allegro operation, Host B operation, or formal MCP Host migration was performed.
+- No manual Host B operation, EDA Execute request, Shell operation, Capture operation, Allegro operation, or formal MCP Host migration was performed.
+- The existing desktop startup code schedules `auto_connect_serial` after 100 ms. That routine scans serial ports and may issue a read-only `eda_versions` probe to a discovered candidate. Because Stage F relaunched the desktop application, this built-in startup probe may have run; its outcome was not separately captured. No Host B execution or design modification was initiated.
 - PR #14 remains Draft / Open and requires a separate merge decision.
