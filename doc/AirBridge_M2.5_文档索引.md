@@ -54,6 +54,7 @@
 - OAuth Access Token 与 M2.4 Agent Service Token 不得混用；Service Token 不进入 MCP Host 配置。
 - MCP Authorization Server 和携带 Bearer Token 的 MCP Resource Server endpoint 都使用 HTTPS。
 - 本机 HTTPS 证书只在 CurrentUser 范围建立信任；安装时明确征求同意，不要求管理员权限、不修改 LocalMachine Root；拒绝信任时 Managed HTTPS Gateway 不可用且不得不安全降级。
+- Gateway 默认端口：OAuth Broker 38861、首个 Antigravity Worker 38862、首个 OpenCode Worker 38863；每个 Agent 实例使用独立持久化端口，冲突不随机改端口，端口变更触发 metadata / 客户端配置同步与重新授权。
 - 旧 stdio 暂时保留；不能因 OAuth HTTPS PoC 不通过而降级成无认证 HTTP。
 - Runtime Session 通过可选 `gateway.state.v1` 扩展交换状态；旧版缺失字段视为 UNKNOWN。
 - ON/ON、OFF/OFF 只弹窗提醒，不自动改配置或停止服务。
@@ -62,6 +63,7 @@
 ## 五、实施前置 Gate
 
 - 本机 OAuth Broker + 两个 Worker endpoint 的 HTTPS 证书真实客户端验证；
+- 默认 TCP 端口、loopback-only 监听、实际 bind 冲突检测、Worker / Broker 端口迁移与 OAuth 重新授权验证；
 - Antigravity Authenticate 与 OpenCode `/mcps` / CLI auth 验证；
 - PyInstaller onefile 同 EXE Worker 独立实例及异常退出测试；
 - Python 3.11+ 统一构建与依赖锁定；
