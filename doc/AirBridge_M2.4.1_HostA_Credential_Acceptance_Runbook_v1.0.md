@@ -314,7 +314,7 @@ The acceptance directly verified graceful GUI / parent process exit, release and
 
 After the Host A tests recorded in Section 11, PR #14 added the following code changes:
 
-- Bounded HTTP handler draining during GUI shutdown (default 5-second drain deadline); if an active handler does not finish, the listener is stopped, the SQLite Store is retained, and the GUI close is rejected so shutdown can be retried safely.
+- Bounded HTTP handler draining during GUI shutdown (default 5-second drain deadline); while draining, new accepted connections are closed. If an active handler does not finish before the deadline, normal request acceptance resumes, the listener and SQLite Store remain available, and the GUI close is rejected so shutdown can be retried safely. Only after a successful drain is the listener closed; the serve thread then receives a separate bounded join window.
 - Final audit write failure now returns HTTP 503 / `AGENT_AUDIT_FINALIZATION_FAILED` and an `unknown` outcome instead of returning an apparently successful response. The durable admission audit remains the precondition for Runtime access.
 - Single-token revocation removes the local Credential Manager entry only if its stored Token ID matches the target; another current credential for the same Agent is preserved as `not_current`.
 
