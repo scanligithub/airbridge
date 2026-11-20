@@ -45,11 +45,15 @@ try {
     $psi.RedirectStandardError = $true
 
     Write-Host "Launching G-01 test under standard user: $aclIdentity"
+    Write-Host "Evidence root: $evidenceRoot"
     $process = [System.Diagnostics.Process]::Start($psi)
+    Write-Host "Standard-user child PID: $($process.Id)"
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
 
     if (-not $process.WaitForExit(120000)) {
+        Write-Host 'Standard-user process timeout. Last phase markers:'
+        Get-ChildItem -Path $evidenceRoot -Filter 'phase.txt' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Host (Get-Content -LiteralPath $_.FullName -Raw) }
         try { $process.Kill($true) } catch { }
         throw 'Standard-user G-01 test exceeded the 120-second process timeout.'
     }
