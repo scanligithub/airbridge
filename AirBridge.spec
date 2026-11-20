@@ -2,22 +2,23 @@
 # AirBridge.spec
 # Unified AirBridge.exe: GUI default + MCP STDIO subprocess mode.
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_submodules
 
-mcp_datas, mcp_binaries, mcp_hiddenimports = collect_all('mcp')
+# Collect only MCP server modules; the optional mcp.cli package requires typer.
+mcp_server_hiddenimports = collect_submodules('mcp.server')
 
 block_cipher = None
 
 a = Analysis(
     ['airbridge_entry.py'],
     pathex=['mcp_gateway'],
-    binaries=mcp_binaries,
+    binaries=[],
     datas=[
         ('protocol.py', '.'),
         ('eda_engine.py', '.'),
         ('fs_engine.py', '.'),
         ('shell_engine.py', '.'),
-    ] + mcp_datas,
+    ],
     hiddenimports=[
         'serial',
         'serial.tools.list_ports',
@@ -25,7 +26,7 @@ a = Analysis(
         'PySide6.QtWidgets',
         'PySide6.QtGui',
         'airbridge_mcp_gateway.server',
-    ] + mcp_hiddenimports,
+    ] + mcp_server_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
