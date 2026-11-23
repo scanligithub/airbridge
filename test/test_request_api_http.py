@@ -732,6 +732,70 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(owner_status, 202, visible)
         self.assertEqual(visible["state"], "pending")
 
+    def test_foreign_and_unknown_request_ids_have_same_404_audit(self):
+        # Seed an inert request directly into the temporary stores. This tests
+        # ownership enforcement without granting shell.execute / eda.execute
+        # or submitting any frame to the Runtime.
+        owner = self.security.issue_token("request-owner", ["request.read"])
+        other = self.security.issue_token("request-reader", ["request.read"])
+        request_id = str(uuid.uuid4())
+        unknown_id = str(uuid.uuid4())
+
+        self.security.bind_request_owner(request_id, "request-owner")
+        self.worker.request_tracker.register(request_id, "synthetic.read-only")
+        self.worker.request_tracker.complete(
+            request_id,
+            {"marker": "owner-visible-only"},
+        )
+
+        owner_status, visible = self._request_json(
+            "GET",
+            f"/api/v1/requests/{request_id}",
+            token=owner["token"],
+        )
+        self.assertEqual(owner_status, 200, visible)
+        self.assertEqual(visible["result"]["marker"], "owner-visible-only")
+
+        foreign_status, foreign = self._request_json(
+            "GET",
+            f"/api/v1/requests/{request_id}",
+            token=other["token"],
+        )
+        unknown_status, unknown = self._request_json(
+            "GET",
+            f"/api/v1/requests/{unknown_id}",
+            token=other["token"],
+        )
+
+        self.assertEqual(foreign_status, 404, foreign)
+        self.assertEqual(unknown_status, 404, unknown)
+        self.assertEqual(foreign["state"], "not_found")
+        self.assertEqual(unknown["state"], "not_found")
+        self.assertEqual(foreign["error"], "request_id is unknown or expired")
+        self.assertEqual(foreign["error"], unknown["error"])
+        self.assertEqual(foreign["request_id"], request_id)
+        self.assertEqual(unknown["request_id"], unknown_id)
+        self.assertNotIn("result", foreign)
+        self.assertNotIn("owner-visible-only", str(foreign))
+        self.assertEqual(self.worker.frames, [])
+
+        denied = [
+            record
+            for record in self.security.list_audit(agent_id="request-reader", limit=20)
+            if record["path"].startswith("/api/v1/requests/")
+        ]
+        by_request_id = {record["request_id"]: record for record in denied}
+        self.assertEqual(set(by_request_id), {request_id, unknown_id})
+        for denied_id in (request_id, unknown_id):
+            record = by_request_id[denied_id]
+            self.assertEqual(record["decision"], "denied")
+            self.assertEqual(record["http_status"], 404)
+            self.assertEqual(
+                record["reason_code"], "REQUEST_NOT_FOUND_OR_NOT_OWNED"
+            )
+            self.assertIsNone(record["payload_bytes"])
+            self.assertIsNone(record["payload_sha256"])
+
     def test_authorization_attempts_are_audited_without_script_body(self):
         status, _ = self._request_json(
             "POST",
