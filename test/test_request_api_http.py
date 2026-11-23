@@ -641,6 +641,51 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(denial["token_id"], read_only["token_id"])
         self.assertEqual(denial["http_status"], 403)
 
+    def test_scope_denial_precedes_server_kill_switch_and_body_read(self):
+        read_only = self.security.issue_token(
+            "scope-order-agent",
+            ["runtime.read", "eda.versions.read", "request.read"],
+        )
+        blocked = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+            allow_eda_execute=False,
+        )
+        blocked.start()
+        try:
+            status, body = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts scope-order-must-not-run"},
+                token=read_only["token"],
+                base_url=f"http://127.0.0.1:{blocked.port}",
+            )
+            self.assertEqual(status, 403, body)
+            self.assertEqual(body["error"]["code"], "AGENT_SCOPE_DENIED")
+            self.assertEqual(body["error"]["required_scope"], "eda.execute")
+            self.assertEqual(self.worker.frames, [])
+            self.assertEqual(self.worker.request_tracker._records, {})
+
+            denial = next(
+                (
+                    record
+                    for record in self.security.list_audit(limit=20)
+                    if record["agent_id"] == "scope-order-agent"
+                    and record["path"] == "/api/v1/eda/execute"
+                    and record["reason_code"] == "AGENT_SCOPE_DENIED"
+                ),
+                None,
+            )
+            self.assertIsNotNone(denial)
+            self.assertEqual(denial["decision"], "denied")
+            self.assertEqual(denial["http_status"], 403)
+            # The handler rejects in _authorize_api before do_POST reads the body.
+            self.assertIsNone(denial["payload_bytes"])
+            self.assertIsNone(denial["payload_sha256"])
+        finally:
+            blocked.stop()
+
     def test_server_execution_kill_switch_overrides_agent_scope(self):
         blocked = AntigravityIPCServer(
             self.worker,
