@@ -808,7 +808,7 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             token=issued["token"],
         )
         self.assertEqual(first_status, 200, first)
-        self.assertTrue(first["success"])
+        self.assertEqual(first["state"], "negotiated")
 
         self.assertTrue(self.security.revoke_token(issued["token_id"]))
 
