@@ -131,6 +131,94 @@ class ClientAdapterTests(unittest.TestCase):
             self.opencode.install_or_update(path, "opencode", enabled=True)
         self.assertEqual(path.read_text(encoding="utf-8"), original)
 
+    def test_opencode_explicitly_migrates_legacy_airbridge_entry(self):
+        path = self.root / "opencode.jsonc"
+        old_exe = self.root / "previous-install" / "AirBridge.exe"
+        old_exe.parent.mkdir(parents=True)
+        old_exe.write_bytes(b"previous AirBridge build")
+        original = f'''{{
+  // preserve the user's OpenCode configuration
+  "mcp": {{
+    "servers": {{
+      "airbridge-opencode": {{
+        "type": "local",
+        "command": [{json.dumps(str(old_exe.resolve()))}, "mcp", "stdio"],
+        "environment": {{ "AIRBRIDGE_AGENT_ID": "opencode" }},
+        "disabled": true,
+        "operatorMetadata": {{ "note": "keep this field" }}
+      }},
+      "other-server": {{ "type": "local", "command": ["other.exe"] }}
+    }}
+  }}
+}}
+'''
+        path.write_text(original, encoding="utf-8")
+
+        candidate = self.opencode.inspect_migration_candidate(path, "opencode")
+        self.assertEqual(candidate, str(old_exe.resolve()))
+        before = self.opencode.inspect(path, "opencode")
+        self.assertTrue(before.present)
+        self.assertFalse(before.owned)
+
+        result = self.opencode.migrate_legacy(path, "opencode", enabled=True)
+
+        payload = self.read_jsonc(path)
+        entry = payload["mcp"]["servers"]["airbridge-opencode"]
+        self.assertEqual(
+            entry["command"],
+            [str(self.exe.resolve()), "mcp", "stdio"],
+        )
+        self.assertEqual(entry["environment"], {"AIRBRIDGE_AGENT_ID": "opencode"})
+        self.assertFalse(entry["disabled"])
+        self.assertEqual(entry["operatorMetadata"], {"note": "keep this field"})
+        self.assertIn("// preserve the user's OpenCode configuration", path.read_text(encoding="utf-8"))
+        self.assertIn("other-server", payload["mcp"]["servers"])
+        self.assertTrue(result.changed)
+        self.assertTrue(result.enabled)
+        self.assertIsNotNone(result.backup_path)
+        self.assertEqual(Path(result.backup_path).read_text(encoding="utf-8"), original)
+
+        after = self.opencode.inspect(path, "opencode")
+        self.assertTrue(after.owned)
+        self.assertTrue(after.enabled)
+
+    def test_opencode_migration_candidate_rejects_unrecognized_or_missing_binary(self):
+        path = self.root / "opencode.json"
+        old_exe = self.root / "old" / "AirBridge.exe"
+        old_exe.parent.mkdir(parents=True)
+        old_exe.write_bytes(b"old exe")
+        invalid_entries = [
+            {
+                "type": "local",
+                "command": [str(old_exe.resolve()), "mcp", "stdio"],
+                "environment": {"AIRBRIDGE_AGENT_ID": "different-agent"},
+                "disabled": True,
+            },
+            {
+                "type": "local",
+                "command": [str(old_exe.resolve()), "mcp", "other"],
+                "environment": {"AIRBRIDGE_AGENT_ID": "opencode"},
+                "disabled": True,
+            },
+            {
+                "type": "local",
+                "command": [str(self.root / "missing" / "AirBridge.exe"), "mcp", "stdio"],
+                "environment": {"AIRBRIDGE_AGENT_ID": "opencode"},
+                "disabled": True,
+            },
+        ]
+        for entry in invalid_entries:
+            path.write_text(json.dumps({
+                "mcp": {"servers": {"airbridge-opencode": entry}}
+            }), encoding="utf-8")
+            original = path.read_bytes()
+            self.assertIsNone(
+                self.opencode.inspect_migration_candidate(path, "opencode")
+            )
+            with self.assertRaises(AdapterConflictError):
+                self.opencode.migrate_legacy(path, "opencode", enabled=False)
+            self.assertEqual(path.read_bytes(), original)
+
     def test_inspect_reports_opencode_owned_entry_and_does_not_create_missing_config(self):
         path = self.root / "opencode.json"
         missing_status = self.opencode.inspect(path, "opencode")
