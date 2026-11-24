@@ -151,6 +151,35 @@ class ClientAdapterTests(unittest.TestCase):
         self.assertTrue(after.owned)
         self.assertFalse(after.enabled)
 
+    def test_antigravity_legacy_migration_preserves_utf8_bom(self):
+        path = self.root / "mcp_config.json"
+        old_exe = self.root / "previous-install" / "AirBridge.exe"
+        old_exe.parent.mkdir(parents=True)
+        old_exe.write_bytes(b"previous AirBridge build")
+        source = {
+            "mcpServers": {
+                "airbridge-antigravity": {
+                    "command": str(old_exe.resolve()),
+                    "args": ["mcp", "stdio"],
+                    "env": {"AIRBRIDGE_AGENT_ID": "antigravity"},
+                    "disabled": True,
+                }
+            }
+        }
+        original = b"\xef\xbb\xbf" + json.dumps(source).encode("utf-8")
+        path.write_bytes(original)
+
+        result = self.antigravity.migrate_legacy(path, "antigravity", enabled=True)
+
+        updated = path.read_bytes()
+        self.assertTrue(updated.startswith(b"\xef\xbb\xbf"))
+        self.assertEqual(
+            json.loads(updated.decode("utf-8-sig"))["mcpServers"]["airbridge-antigravity"]["command"],
+            str(self.exe.resolve()),
+        )
+        self.assertTrue(result.changed)
+        self.assertEqual(Path(result.backup_path).read_bytes(), original)
+
     def test_antigravity_migration_rejects_invalid_shape_missing_binary_and_enabled_type(self):
         path = self.root / "mcp_config.json"
         old_exe = self.root / "old" / "AirBridge.exe"
@@ -606,6 +635,33 @@ class ClientAdapterTests(unittest.TestCase):
             "airbridge-antigravity",
             self.read_jsonc(path)["mcpServers"],
         )
+
+    def test_concurrent_config_edit_is_not_overwritten_during_update(self):
+        from unittest.mock import patch
+        import os
+
+        path = self.root / "mcp_config.json"
+        original = b'{"mcpServers": {}}'
+        concurrent = b'{"mcpServers": {}, "userEdit": true}'
+        path.write_bytes(original)
+
+        real_fsync = os.fsync
+        changed = False
+
+        def fsync_then_edit(fd):
+            nonlocal changed
+            real_fsync(fd)
+            if not changed:
+                path.write_bytes(concurrent)
+                changed = True
+
+        with patch("airbridge_mcp_gateway.client_adapters.os.fsync", side_effect=fsync_then_edit):
+            with self.assertRaises(AdapterConflictError):
+                self.antigravity.install_or_update(path, "antigravity", enabled=True)
+
+        self.assertEqual(path.read_bytes(), concurrent)
+        self.assertEqual(list(self.root.glob("mcp_config.json.airbridge-*.bak")), [])
+        self.assertEqual(list(self.root.glob(".airbridge-*.tmp")), [])
 
     def test_invalid_jsonc_does_not_modify_original(self):
         path = self.root / "opencode.jsonc"
