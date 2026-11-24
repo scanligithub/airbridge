@@ -764,8 +764,7 @@ class OpenCodeAdapter(_BaseAdapter):
             "disabled": not enabled,
         }
 
-    @staticmethod
-    def _legacy_executable(config: Any, agent_id: str) -> str | None:
+    def _legacy_executable(self, config: Any, agent_id: str) -> str | None:
         """Return a structurally valid prior AirBridge path for explicit migration.
 
         This is deliberately a *candidate*, not proof of ownership. The caller
@@ -791,7 +790,7 @@ class OpenCodeAdapter(_BaseAdapter):
             return None
         try:
             old_path = Path(raw_path).expanduser().resolve(strict=True)
-            current_path = Path(__file__).resolve()
+            current_path = Path(self.executable).resolve()
         except (OSError, RuntimeError, ValueError):
             return None
         if (
