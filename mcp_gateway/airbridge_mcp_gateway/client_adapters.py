@@ -689,6 +689,95 @@ class AntigravityAdapter(_BaseAdapter):
             and env.get("AIRBRIDGE_AGENT_ID") == agent_id
         )
 
+    def _legacy_executable(self, config: Any, agent_id: str) -> str | None:
+        """Return a validated old Antigravity STDIO executable as a migration candidate."""
+        if not isinstance(config, dict):
+            return None
+        args = config.get("args")
+        env = config.get("env")
+        if (
+            not isinstance(args, list)
+            or args != ["mcp", "stdio"]
+            or not isinstance(env, dict)
+            or env.get("AIRBRIDGE_AGENT_ID") != agent_id
+        ):
+            return None
+        disabled = config.get("disabled", False)
+        if not isinstance(disabled, bool):
+            return None
+        raw_path = config.get("command")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return None
+        try:
+            old_path = Path(raw_path).expanduser().resolve(strict=True)
+            current_path = Path(self.executable).resolve()
+        except (OSError, RuntimeError, ValueError):
+            return None
+        if (
+            old_path == current_path
+            or old_path.name.casefold() != "airbridge.exe"
+            or not old_path.is_file()
+        ):
+            return None
+        return str(old_path)
+
+    def inspect_migration_candidate(
+        self, path: str | os.PathLike[str], agent_id: str
+    ) -> str | None:
+        """Read-only detection; the returned path requires explicit user confirmation."""
+        normalized_id = _validate_agent_id(agent_id)
+        _config_path, _raw, _source, root = self._read(path)
+        container = self._existing_server_container(root)
+        if container is None:
+            return None
+        entry = container.properties.get(self.server_name)
+        if entry is None:
+            return None
+        return self._legacy_executable(entry.value, normalized_id)
+
+    def migrate_legacy(
+        self,
+        path: str | os.PathLike[str],
+        agent_id: str,
+        *,
+        enabled: bool,
+    ) -> AdapterResult:
+        """Migrate only a validated legacy entry after explicit user confirmation."""
+        normalized_id = _validate_agent_id(agent_id)
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a Boolean")
+        config_path, original_bytes, source, root = self._read(path)
+        container = self._existing_server_container(root)
+        entry = container.properties.get(self.server_name) if container else None
+        if entry is None:
+            raise AdapterConflictError(
+                f"Cannot migrate missing Antigravity server {self.server_name!r}"
+            )
+        old_executable = self._legacy_executable(entry.value, normalized_id)
+        if old_executable is None:
+            raise AdapterConflictError(
+                f"Antigravity server {self.server_name!r} is not a valid legacy AirBridge migration candidate"
+            )
+
+        prefix = ("mcpServers", self.server_name)
+        updated = _patch_jsonc_property(
+            source, prefix + ("command",), self.executable
+        )
+        updated = _patch_jsonc_property(
+            updated, prefix + ("disabled",), not enabled
+        )
+        _JsoncParser(updated).parse()
+        has_bom = original_bytes.startswith(b"\\xef\\xbb\\xbf")
+        updated_bytes = (b"\\xef\\xbb\\xbf" if has_bom else b"") + updated.encode("utf-8")
+        backup = _backup_and_replace(config_path, original_bytes, updated_bytes)
+        return AdapterResult(
+            changed=(updated_bytes != original_bytes),
+            config_path=str(config_path),
+            backup_path=backup,
+            server_name=self.server_name,
+            enabled=enabled,
+        )
+
     def _managed_updates(self, agent_id: str, enabled: bool) -> list[tuple[tuple[str, ...], Any]]:
         prefix = ("mcpServers", self.server_name)
         return [

@@ -3481,7 +3481,7 @@ class AirBridgeMainWindow(QMainWindow):
       try:
         status = adapter.inspect(path, agent_id)
         migration_path = None
-        if status.present and not status.owned and agent_id == "opencode":
+        if status.present and not status.owned:
           migration_path = adapter.inspect_migration_candidate(path, agent_id)
         if not status.present:
           text = "未安装"
@@ -3559,7 +3559,7 @@ class AirBridgeMainWindow(QMainWindow):
     migration_path = None
     try:
       status = adapter.inspect(path, agent_id)
-      if status.present and not status.owned and agent_id == "opencode":
+      if status.present and not status.owned:
         migration_path = adapter.inspect_migration_candidate(path, agent_id)
       if status.present and not status.owned and not migration_path:
         QMessageBox.warning(
@@ -3575,7 +3575,7 @@ class AirBridgeMainWindow(QMainWindow):
     migration_notice = ""
     if migration_path:
       migration_notice = (
-          "\n\n检测到旧版 OpenCode Adapter 候选："
+          "\n\n检测到旧版 AirBridge Adapter 候选："
           f"\n旧程序：{migration_path}"
           f"\n新程序：{adapter.executable}"
           "\n\n仅凭配置结构不能证明旧程序来源。请确认该路径确实是此前安装的 AirBridge.exe。"

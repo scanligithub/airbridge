@@ -102,6 +102,98 @@ class ClientAdapterTests(unittest.TestCase):
             self.antigravity.install_or_update(path, "antigravity", enabled=True)
         self.assertEqual(path.read_text(encoding="utf-8"), original)
 
+    def test_antigravity_explicitly_migrates_legacy_entry_disabled_and_preserves_config(self):
+        path = self.root / "mcp_config.json"
+        old_exe = self.root / "previous-install" / "AirBridge.exe"
+        old_exe.parent.mkdir(parents=True)
+        old_exe.write_bytes(b"previous AirBridge build")
+        original = f'''{{
+  // preserve Antigravity user configuration
+  "mcpServers": {{
+    "airbridge-antigravity": {{
+      "command": {json.dumps(str(old_exe.resolve()))},
+      "args": ["mcp", "stdio"],
+      "env": {{ "AIRBRIDGE_AGENT_ID": "antigravity" }},
+      "disabled": true,
+      "operatorMetadata": {{ "note": "keep this field" }}
+    }},
+    "airbridge": {{ "command": "other.exe" }}
+  }},
+  "userSetting": true
+}}
+'''
+        path.write_text(original, encoding="utf-8")
+
+        candidate = self.antigravity.inspect_migration_candidate(path, "antigravity")
+        self.assertEqual(candidate, str(old_exe.resolve()))
+        before = self.antigravity.inspect(path, "antigravity")
+        self.assertTrue(before.present)
+        self.assertFalse(before.owned)
+
+        result = self.antigravity.migrate_legacy(path, "antigravity", enabled=False)
+
+        payload = self.read_jsonc(path)
+        entry = payload["mcpServers"]["airbridge-antigravity"]
+        self.assertEqual(entry["command"], str(self.exe.resolve()))
+        self.assertEqual(entry["args"], ["mcp", "stdio"])
+        self.assertEqual(entry["env"], {"AIRBRIDGE_AGENT_ID": "antigravity"})
+        self.assertTrue(entry["disabled"])
+        self.assertEqual(entry["operatorMetadata"], {"note": "keep this field"})
+        self.assertIn("// preserve Antigravity user configuration", path.read_text(encoding="utf-8"))
+        self.assertIn("airbridge", payload["mcpServers"])
+        self.assertTrue(payload["userSetting"])
+        self.assertTrue(result.changed)
+        self.assertFalse(result.enabled)
+        self.assertIsNotNone(result.backup_path)
+        self.assertEqual(Path(result.backup_path).read_text(encoding="utf-8"), original)
+
+        after = self.antigravity.inspect(path, "antigravity")
+        self.assertTrue(after.owned)
+        self.assertFalse(after.enabled)
+
+    def test_antigravity_migration_rejects_invalid_shape_missing_binary_and_enabled_type(self):
+        path = self.root / "mcp_config.json"
+        old_exe = self.root / "old" / "AirBridge.exe"
+        old_exe.parent.mkdir(parents=True)
+        old_exe.write_bytes(b"old exe")
+        invalid_entries = [
+            {
+                "command": str(old_exe.resolve()),
+                "args": ["mcp", "other"],
+                "env": {"AIRBRIDGE_AGENT_ID": "antigravity"},
+                "disabled": True,
+            },
+            {
+                "command": str(old_exe.resolve()),
+                "args": ["mcp", "stdio"],
+                "env": {"AIRBRIDGE_AGENT_ID": "wrong-agent"},
+                "disabled": True,
+            },
+            {
+                "command": str(self.root / "missing" / "AirBridge.exe"),
+                "args": ["mcp", "stdio"],
+                "env": {"AIRBRIDGE_AGENT_ID": "antigravity"},
+                "disabled": True,
+            },
+            {
+                "command": str(old_exe.resolve()),
+                "args": ["mcp", "stdio"],
+                "env": {"AIRBRIDGE_AGENT_ID": "antigravity"},
+                "disabled": "true",
+            },
+        ]
+        for entry in invalid_entries:
+            path.write_text(json.dumps({
+                "mcpServers": {"airbridge-antigravity": entry}
+            }), encoding="utf-8")
+            original = path.read_bytes()
+            self.assertIsNone(
+                self.antigravity.inspect_migration_candidate(path, "antigravity")
+            )
+            with self.assertRaises(AdapterConflictError):
+                self.antigravity.migrate_legacy(path, "antigravity", enabled=False)
+            self.assertEqual(path.read_bytes(), original)
+
     def test_opencode_other_airbridge_binary_path_is_not_owned(self):
         path = self.root / "opencode.json"
         other_exe = self.root / "other-install" / "AirBridge.exe"
