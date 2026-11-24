@@ -184,5 +184,67 @@ class GatewayGuiSmokeTests(unittest.TestCase):
                     window.close()
 
 
+    def test_legacy_opencode_adapter_is_offered_for_explicit_migration(self):
+        with tempfile.TemporaryDirectory(prefix="airbridge-gateway-legacy-opencode-") as temp:
+            root = Path(temp)
+            config_dir = root / "opencode"
+            config_dir.mkdir()
+            old_exe = root / "previous-install" / "AirBridge.exe"
+            old_exe.parent.mkdir()
+            old_exe.write_bytes(b"previous AirBridge build")
+            config_path = config_dir / "opencode.json"
+            config_path.write_text(
+                __import__("json").dumps({
+                    "mcp": {
+                        "servers": {
+                            "airbridge-opencode": {
+                                "type": "local",
+                                "command": [str(old_exe.resolve()), "mcp", "stdio"],
+                                "environment": {"AIRBRIDGE_AGENT_ID": "opencode"},
+                                "disabled": True,
+                            }
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            env = {
+                "LOCALAPPDATA": str(root / "local-app-data"),
+                "OPENCODE_CONFIG_DIR": str(config_dir),
+            }
+            with (
+                patch.dict(os.environ, env, clear=False),
+                patch(
+                    "airbridge_mcp_gateway.credential_store.default_credential_store",
+                    return_value=_CredentialStoreProbe(),
+                ),
+                patch.object(airbridge_app.SerialWorker, "start", lambda _self: None),
+                patch.object(airbridge_app, "RequestBroker", _NoopRequestBroker),
+                patch.object(
+                    airbridge_app,
+                    "AntigravityIPCServer",
+                    _NoopAntigravityIPCServer,
+                ),
+            ):
+                window = airbridge_app.AirBridgeMainWindow()
+                try:
+                    # The source-mode guard is normally false; enable only the
+                    # UI branch under test, without performing a config write.
+                    window.gateway_adapter_actions_enabled = True
+                    window.refresh_gateway_adapter_statuses()
+                    self.assertIn(
+                        "检测到旧版 AirBridge STDIO Adapter",
+                        window.lbl_gateway_opencode_adapter_status.text(),
+                    )
+                    self.assertTrue(window.btn_gateway_opencode_install.isEnabled())
+                    self.assertFalse(window.btn_gateway_opencode_remove.isEnabled())
+                    self.assertEqual(
+                        window.gateway_opencode_config_path,
+                        config_path,
+                    )
+                finally:
+                    window.close()
+
+
 if __name__ == "__main__":
     unittest.main()
