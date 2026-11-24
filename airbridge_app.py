@@ -3480,10 +3480,18 @@ class AirBridgeMainWindow(QMainWindow):
       path_label.setText(f"当前用户全局配置：{path}")
       try:
         status = adapter.inspect(path, agent_id)
+        migration_path = None
+        if status.present and not status.owned and agent_id == "opencode":
+          migration_path = adapter.inspect_migration_candidate(path, agent_id)
         if not status.present:
           text = "未安装"
+        elif migration_path:
+          text = (
+              "检测到旧版 AirBridge STDIO Adapter；需确认迁移。"
+              f"旧程序路径：{migration_path}"
+          )
         elif not status.owned:
-          text = "名称冲突：该条目不是此 Agent 的 AirBridge STDIO 配置，未触碰"
+          text = "名称冲突：该条目不是可识别的 AirBridge STDIO 配置，未触碰"
         elif status.enabled is None:
           text = "AirBridge 条目存在，但 disabled 字段类型无效"
         elif status.enabled:
@@ -3495,7 +3503,8 @@ class AirBridgeMainWindow(QMainWindow):
             self.gateway_adapter_actions_enabled and status.present and status.owned
         )
         install_button.setEnabled(
-            self.gateway_adapter_actions_enabled and (not status.present or status.owned)
+            self.gateway_adapter_actions_enabled
+            and (not status.present or status.owned or bool(migration_path))
         )
       except Exception as exc:
         status_label.setText(f"配置状态：读取失败 / 配置无效（未修改）：{exc}")
@@ -3547,20 +3556,49 @@ class AirBridgeMainWindow(QMainWindow):
       )
       return
 
+    migration_path = None
+    try:
+      status = adapter.inspect(path, agent_id)
+      if status.present and not status.owned and agent_id == "opencode":
+        migration_path = adapter.inspect_migration_candidate(path, agent_id)
+      if status.present and not status.owned and not migration_path:
+        QMessageBox.warning(
+            self, "MCP Adapter 名称冲突",
+            "该条目不符合可识别的旧版 AirBridge STDIO 配置结构，未修改客户端配置。",
+        )
+        return
+    except Exception as exc:
+      QMessageBox.warning(self, "MCP Adapter 检查失败", f"未修改客户端配置。{exc}")
+      self.refresh_gateway_adapter_statuses()
+      return
+
+    migration_notice = ""
+    if migration_path:
+      migration_notice = (
+          "\n\n检测到旧版 OpenCode Adapter 候选："
+          f"\n旧程序：{migration_path}"
+          f"\n新程序：{adapter.executable}"
+          "\n\n仅凭配置结构不能证明旧程序来源。请确认该路径确实是此前安装的 AirBridge.exe。"
+          "确认后将先备份配置，再只更新 AirBridge command 路径和 disabled 状态。"
+      )
     answer = QMessageBox.question(
         self,
         "更新本机 MCP 配置",
         f"将只修改当前用户全局配置中的 {agent_id} AirBridge 专用条目：\n"
         f"{path}\n\n"
         f"本次写入状态：{'启用' if desired_enabled else '禁用'}。"
-        "如文件已存在会先备份；其它 MCP 条目和注释将保留。是否继续？",
+        "如文件已存在会先备份；其它 MCP 条目和注释将保留。"
+        f"{migration_notice}\n\n是否继续？",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         QMessageBox.StandardButton.No,
     )
     if answer != QMessageBox.StandardButton.Yes:
       return
     try:
-      result = adapter.install_or_update(path, agent_id, enabled=desired_enabled)
+      if migration_path:
+        result = adapter.migrate_legacy(path, agent_id, enabled=desired_enabled)
+      else:
+        result = adapter.install_or_update(path, agent_id, enabled=desired_enabled)
     except Exception as exc:
       QMessageBox.warning(
           self, "MCP Adapter 更新失败",
