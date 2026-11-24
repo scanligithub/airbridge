@@ -796,6 +796,44 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             self.assertIsNone(record["payload_bytes"])
             self.assertIsNone(record["payload_sha256"])
 
+    def test_revoked_token_is_rejected_by_existing_http_server(self):
+        issued = self.security.issue_token(
+            "revocation-live-http",
+            ["runtime.read"],
+        )
+
+        first_status, first = self._request_json(
+            "GET",
+            "/api/v1/runtime/capabilities",
+            token=issued["token"],
+        )
+        self.assertEqual(first_status, 200, first)
+        self.assertTrue(first["success"])
+
+        self.assertTrue(self.security.revoke_token(issued["token_id"]))
+
+        second_status, second = self._request_json(
+            "GET",
+            "/api/v1/runtime/capabilities",
+            token=issued["token"],
+        )
+        self.assertEqual(second_status, 401, second)
+        self.assertEqual(second["error"]["code"], "INVALID_AGENT_TOKEN")
+        self.assertEqual(self.worker.frames, [])
+
+        audit = self.security.list_audit(
+            agent_id="revocation-live-http",
+            limit=10,
+        )
+        self.assertTrue(
+            any(
+                record["decision"] == "denied"
+                and record["reason_code"] == "AGENT_TOKEN_REVOKED"
+                and record["http_status"] == 401
+                for record in audit
+            )
+        )
+
     def test_authorization_attempts_are_audited_without_script_body(self):
         status, _ = self._request_json(
             "POST",
