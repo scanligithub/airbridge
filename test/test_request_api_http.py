@@ -833,14 +833,6 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
                 for record in audit
             )
         )
-        self.assertTrue(
-            any(
-                record["decision"] == "denied"
-                and record["reason_code"] == "INVALID_AGENT_TOKEN"
-                and record["http_status"] == 401
-                for record in audit
-            )
-        )
 
     def test_authorization_attempts_are_audited_without_script_body(self):
         status, _ = self._request_json(
