@@ -308,20 +308,37 @@ def _property_value_indent(source: str, obj: _Node, key: str) -> str:
 
 
 def _backup_and_replace(path: Path, source_bytes: bytes, updated_bytes: bytes) -> str | None:
+    """Replace a config only while it still matches the snapshot we edited.
+
+    The final byte comparison narrows the read/modify/write race and prevents
+    ordinary concurrent edits from being silently overwritten. This is not a
+    cross-process compare-and-swap: another writer that ignores our checks can
+    still race in the tiny interval between the final read and os.replace().
+    """
     if updated_bytes == source_bytes:
         return None
 
     path.parent.mkdir(parents=True, exist_ok=True)
     backup_path: Path | None = None
-    if path.exists():
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        backup_path = path.with_name(
-            f"{path.name}.airbridge-{stamp}-{uuid.uuid4().hex[:8]}.bak"
-        )
-        shutil.copy2(path, backup_path)
-
     temp_path: Path | None = None
     try:
+        current_bytes = path.read_bytes() if path.exists() else b""
+        if current_bytes != source_bytes:
+            raise AdapterConflictError(
+                f"MCP configuration changed since it was read; refusing to overwrite concurrent edits: {path}"
+            )
+
+        if path.exists():
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            backup_path = path.with_name(
+                f"{path.name}.airbridge-{stamp}-{uuid.uuid4().hex[:8]}.bak"
+            )
+            shutil.copy2(path, backup_path)
+            if backup_path.read_bytes() != source_bytes:
+                raise AdapterConflictError(
+                    f"MCP configuration changed while its backup was being created; refusing to overwrite: {path}"
+                )
+
         with tempfile.NamedTemporaryFile(
             mode="wb", prefix=".airbridge-", suffix=".tmp",
             dir=path.parent, delete=False,
@@ -330,16 +347,28 @@ def _backup_and_replace(path: Path, source_bytes: bytes, updated_bytes: bytes) -
             stream.write(updated_bytes)
             stream.flush()
             os.fsync(stream.fileno())
+
         if path.exists():
             try:
                 shutil.copystat(path, temp_path)
             except OSError:
                 pass
+
+        # Recheck after staging the replacement, immediately before commit.
+        current_bytes = path.read_bytes() if path.exists() else b""
+        if current_bytes != source_bytes:
+            raise AdapterConflictError(
+                f"MCP configuration changed during update; refusing to overwrite concurrent edits: {path}"
+            )
+
         os.replace(temp_path, path)
         temp_path = None
     except Exception:
-        if backup_path is not None and backup_path.exists() and not path.exists():
-            shutil.copy2(backup_path, path)
+        if backup_path is not None:
+            try:
+                backup_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise
     finally:
         if temp_path is not None:
@@ -767,8 +796,8 @@ class AntigravityAdapter(_BaseAdapter):
             updated, prefix + ("disabled",), not enabled
         )
         _JsoncParser(updated).parse()
-        has_bom = original_bytes.startswith(b"\\xef\\xbb\\xbf")
-        updated_bytes = (b"\\xef\\xbb\\xbf" if has_bom else b"") + updated.encode("utf-8")
+        has_bom = original_bytes.startswith(b"\xef\xbb\xbf")
+        updated_bytes = (b"\xef\xbb\xbf" if has_bom else b"") + updated.encode("utf-8")
         backup = _backup_and_replace(config_path, original_bytes, updated_bytes)
         return AdapterResult(
             changed=(updated_bytes != original_bytes),
