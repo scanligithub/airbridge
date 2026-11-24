@@ -764,6 +764,118 @@ class OpenCodeAdapter(_BaseAdapter):
             "disabled": not enabled,
         }
 
+    @staticmethod
+    def _legacy_executable(config: Any, agent_id: str) -> str | None:
+        """Return a structurally valid prior AirBridge path for explicit migration.
+
+        This is deliberately a *candidate*, not proof of ownership. The caller
+        must obtain explicit user confirmation before replacing the path.
+        """
+        if not isinstance(config, dict) or config.get("type") != "local":
+            return None
+        command = config.get("command")
+        environment = config.get("environment")
+        if (
+            not isinstance(command, list)
+            or len(command) != 3
+            or command[1:] != ["mcp", "stdio"]
+            or not isinstance(environment, dict)
+            or environment.get("AIRBRIDGE_AGENT_ID") != agent_id
+        ):
+            return None
+        disabled = config.get("disabled", False)
+        if not isinstance(disabled, bool):
+            return None
+        raw_path = command[0]
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return None
+        try:
+            old_path = Path(raw_path).expanduser().resolve(strict=True)
+            current_path = Path(__file__).resolve()
+        except (OSError, RuntimeError, ValueError):
+            return None
+        if (
+            old_path == current_path
+            or old_path.name.casefold() != "airbridge.exe"
+            or not old_path.is_file()
+        ):
+            return None
+        return str(old_path)
+
+    def inspect_migration_candidate(
+        self, path: str | os.PathLike[str], agent_id: str
+    ) -> str | None:
+        """Read-only detection of an older OpenCode AirBridge entry.
+
+        A returned path is only a candidate. It is never treated as owned by
+        this installation unless the user explicitly confirms migration.
+        """
+        normalized_id = _validate_agent_id(agent_id)
+        _config_path, _raw, _source, root = self._read(path)
+        container = self._existing_server_container(root)
+        if container is None:
+            return None
+        entry = container.properties.get(self.server_name)
+        if entry is None:
+            return None
+        return self._legacy_executable(entry.value, normalized_id)
+
+    def migrate_legacy(
+        self,
+        path: str | os.PathLike[str],
+        agent_id: str,
+        *,
+        enabled: bool,
+    ) -> AdapterResult:
+        """Explicitly migrate one verified-shape legacy entry to this EXE.
+
+        The prior binary must still exist and the dedicated entry must match
+        OpenCode's local STDIO schema and this Agent ID. The caller is
+        responsible for obtaining explicit user confirmation first.
+        """
+        normalized_id = _validate_agent_id(agent_id)
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a Boolean")
+        config_path, original_bytes, source, root = self._read(path)
+        container = self._existing_server_container(root)
+        if container is None:
+            raise AdapterConflictError(
+                f"Cannot migrate missing OpenCode server {self.server_name!r}"
+            )
+        entry = container.properties.get(self.server_name)
+        if entry is None:
+            raise AdapterConflictError(
+                f"Cannot migrate missing OpenCode server {self.server_name!r}"
+            )
+        old_executable = self._legacy_executable(entry.value, normalized_id)
+        if old_executable is None:
+            raise AdapterConflictError(
+                f"OpenCode server {self.server_name!r} is not a valid legacy AirBridge migration candidate"
+            )
+
+        prefix = ("mcp", "servers", self.server_name)
+        updated = _patch_jsonc_property(
+            source,
+            prefix + ("command",),
+            [self.executable, "mcp", "stdio"],
+        )
+        updated = _patch_jsonc_property(
+            updated,
+            prefix + ("disabled",),
+            not enabled,
+        )
+        _JsoncParser(updated).parse()
+        has_bom = original_bytes.startswith(b"\\xef\\xbb\\xbf")
+        updated_bytes = (b"\\xef\\xbb\\xbf" if has_bom else b"") + updated.encode("utf-8")
+        backup = _backup_and_replace(config_path, original_bytes, updated_bytes)
+        return AdapterResult(
+            changed=(updated_bytes != original_bytes),
+            config_path=str(config_path),
+            backup_path=backup,
+            server_name=self.server_name,
+            enabled=enabled,
+        )
+
     def _is_owned(self, config: Any, agent_id: str) -> bool:
         if not isinstance(config, dict):
             return False
