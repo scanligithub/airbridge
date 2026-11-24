@@ -133,11 +133,9 @@ access control) and attempts to remove the local Credential Manager entry.
 The legacy manual issue path is still available only with explicit
 `--reveal-token` opt-in; it is not the normal provisioning workflow.
 
-The AirBridge server has a separate global execution kill switch,
-`AIRBRIDGE_ALLOW_EDA_EXECUTE`, which defaults to `0`. Even when enabled,
-execution still requires both a Gateway opt-in and an Agent token with
-`eda.execute`. The initial Antigravity / OpenCode credentials above are
-read-only and do not receive that scope.
+EDA execution is separately gated by the local Gateway opt-in and the
+Agent token's \`eda.execute\` scope. The initial Antigravity / OpenCode
+credentials above are read-only and do not receive that scope.
 
 Loopback binding is not an OS-level isolation boundary for processes running
 under the same Windows account. Do not expose port 8888 to a LAN or the
@@ -145,14 +143,13 @@ Internet. Per-Agent tokens do not create independent Runtime Sessions or
 Capture interpreters.
 
 
-## AirBridge server-side security policy
+## AirBridge Agent security and rate-limit policy
 
 Configure these variables in the environment of the AirBridge desktop process on Host A (not in the Gateway MCP host config):
 
 | Variable | Default | Meaning |
 |---|---:|---|
 | AIRBRIDGE_AGENT_SECURITY_DB | `%LOCALAPPDATA%\\AirBridge\\agent_security.sqlite3` | Local credential, ownership, quota reservation and audit database |
-| AIRBRIDGE_ALLOW_EDA_EXECUTE | `0` | Server-wide EDA execution kill switch; keep off during read-only operation |
 | AIRBRIDGE_AGENT_READ_RPM | `60` | Per-Agent ordinary API requests per minute |
 | AIRBRIDGE_AGENT_STATUS_RPM | `120` | Per-Agent request-status lookups per minute |
 | AIRBRIDGE_AGENT_EXECUTE_RPM | `5` | Per-Agent EDA submission attempts per minute |
