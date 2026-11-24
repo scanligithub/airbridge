@@ -864,8 +864,8 @@ class OpenCodeAdapter(_BaseAdapter):
             not enabled,
         )
         _JsoncParser(updated).parse()
-        has_bom = original_bytes.startswith(b"\\xef\\xbb\\xbf")
-        updated_bytes = (b"\\xef\\xbb\\xbf" if has_bom else b"") + updated.encode("utf-8")
+        has_bom = original_bytes.startswith(b"\xef\xbb\xbf")
+        updated_bytes = (b"\xef\xbb\xbf" if has_bom else b"") + updated.encode("utf-8")
         backup = _backup_and_replace(config_path, original_bytes, updated_bytes)
         return AdapterResult(
             changed=(updated_bytes != original_bytes),
