@@ -498,7 +498,7 @@ class ClientAdapterTests(unittest.TestCase):
             payload["mcp"]["servers"]["other"],
             {"type": "local", "command": ["other.exe"]},
         )
-        self.assertIn("// operator note adjacent to the managed entry", updated)
+        self.assertIn("// operator note belonging to the unrelated server", updated)
         self.assertTrue(result.changed)
         self.assertIsNotNone(result.backup_path)
         self.assertEqual(Path(result.backup_path).read_text(encoding="utf-8"), source)
