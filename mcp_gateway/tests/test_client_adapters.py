@@ -475,8 +475,8 @@ class ClientAdapterTests(unittest.TestCase):
         source = f'''{{
   "mcp": {{
     "servers": {{
+      // operator note belonging to the unrelated server
       "other": {{"type": "local", "command": ["other.exe"]}},
-      // operator note adjacent to the managed entry
       "airbridge-opencode": {{
         "type": "local",
         "command": [{json.dumps(str(self.exe.resolve()))}, "mcp", "stdio"],
