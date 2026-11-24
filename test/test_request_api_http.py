@@ -827,8 +827,16 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                record["decision"] == "denied"
+                record["decision"] == "revoked"
                 and record["reason_code"] == "AGENT_TOKEN_REVOKED"
+                and record["http_status"] == 200
+                for record in audit
+            )
+        )
+        self.assertTrue(
+            any(
+                record["decision"] == "denied"
+                and record["reason_code"] == "INVALID_AGENT_TOKEN"
                 and record["http_status"] == 401
                 for record in audit
             )
