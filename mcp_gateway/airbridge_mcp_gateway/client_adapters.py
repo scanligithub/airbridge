@@ -188,7 +188,7 @@ class _JsoncParser:
                     properties=properties, property_spans=spans,
                     close_pos=close, trailing_comma=True,
                     property_comma_positions=property_comma_positions,
-                    trailing_comma_pos=self.index - 1,
+                    trailing_comma_pos=comma_pos,
                 )
             trailing_comma = False
 
