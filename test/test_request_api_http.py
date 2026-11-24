@@ -145,7 +145,6 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             self.worker,
             port=0,
             security_store=self.security,
-            allow_eda_execute=True,
         )
         self.server.start()
         self.base_url = f"http://127.0.0.1:{self.server.port}"
@@ -641,7 +640,7 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(denial["token_id"], read_only["token_id"])
         self.assertEqual(denial["http_status"], 403)
 
-    def test_scope_denial_precedes_server_kill_switch_and_body_read(self):
+    def test_scope_denial_precedes_body_read(self):
         read_only = self.security.issue_token(
             "scope-order-agent",
             ["runtime.read", "eda.versions.read", "request.read"],
@@ -650,7 +649,6 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             self.worker,
             port=0,
             security_store=self.security,
-            allow_eda_execute=False,
         )
         blocked.start()
         try:
@@ -683,27 +681,6 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             # The handler rejects in _authorize_api before do_POST reads the body.
             self.assertIsNone(denial["payload_bytes"])
             self.assertIsNone(denial["payload_sha256"])
-        finally:
-            blocked.stop()
-
-    def test_server_execution_kill_switch_overrides_agent_scope(self):
-        blocked = AntigravityIPCServer(
-            self.worker,
-            port=0,
-            security_store=self.security,
-            allow_eda_execute=False,
-        )
-        blocked.start()
-        try:
-            status, body = self._request_json(
-                "POST",
-                "/api/v1/eda/execute",
-                {"script": "puts should_not_run"},
-                base_url=f"http://127.0.0.1:{blocked.port}",
-            )
-            self.assertEqual(status, 403, body)
-            self.assertEqual(body["error"]["code"], "EDA_EXECUTION_DISABLED_SERVER")
-            self.assertEqual(self.worker.frames, [])
         finally:
             blocked.stop()
 
@@ -876,7 +853,6 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             self.worker,
             port=0,
             security_store=self.security,
-            allow_eda_execute=True,
             max_pending_eda_per_agent=1,
         )
         limited.start()
