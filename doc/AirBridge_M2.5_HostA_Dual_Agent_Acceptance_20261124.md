@@ -18,7 +18,7 @@
 5. GUI 中单独关闭 Antigravity 时，其 Adapter 配置同步禁用，而 OpenCode 不受影响；
 6. 重新启用 Antigravity 后，配置持久化且真实 MCP 调用恢复。
 
-本轮严格未执行 EDA Tcl / SKILL、Shell、文件写入或其他修改性操作。未调用 `airbridge_eda_execute` 以外的执行类工具；所有 EDA Execute 拒绝证据来自此前已产生的审计记录，不代表本轮实际执行了设计脚本。
+本轮严格未执行 EDA Tcl / SKILL、Shell、文件写入或其他修改性操作，也未调用 `airbridge_eda_execute` 或任何其他执行类工具。所有 EDA Execute 拒绝证据均来自此前已产生的审计记录，不代表本轮实际执行了设计脚本。
 
 ## 2. 测试环境与凭据配置
 
