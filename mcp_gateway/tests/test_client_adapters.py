@@ -470,6 +470,39 @@ class ClientAdapterTests(unittest.TestCase):
         self.assertTrue(result.changed)
         self.assertIsNotNone(result.backup_path)
 
+    def test_remove_last_opencode_property_with_trailing_comma_keeps_valid_jsonc(self):
+        path = self.root / "opencode.jsonc"
+        source = f'''{{
+  "mcp": {{
+    "servers": {{
+      "other": {{"type": "local", "command": ["other.exe"]}},
+      // operator note adjacent to the managed entry
+      "airbridge-opencode": {{
+        "type": "local",
+        "command": [{json.dumps(str(self.exe.resolve()))}, "mcp", "stdio"],
+        "environment": {{"AIRBRIDGE_AGENT_ID": "opencode"}},
+        "disabled": true
+      }},
+    }}
+  }}
+}}
+'''
+        path.write_text(source, encoding="utf-8")
+
+        result = self.opencode.remove_owned(path, "opencode")
+
+        updated = path.read_text(encoding="utf-8")
+        payload = self.read_jsonc(path)
+        self.assertNotIn("airbridge-opencode", payload["mcp"]["servers"])
+        self.assertEqual(
+            payload["mcp"]["servers"]["other"],
+            {"type": "local", "command": ["other.exe"]},
+        )
+        self.assertIn("// operator note adjacent to the managed entry", updated)
+        self.assertTrue(result.changed)
+        self.assertIsNotNone(result.backup_path)
+        self.assertEqual(Path(result.backup_path).read_text(encoding="utf-8"), source)
+
     def test_jsonc_utf8_bom_is_preserved(self):
         path = self.root / "mcp_config.json"
         path.write_bytes(b"\xef\xbb\xbf" + b'{"mcpServers": {}}')
