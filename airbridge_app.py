@@ -1753,9 +1753,6 @@ class AntigravityIPCServer:
     self._active_handlers = 0
     self._shutting_down = False
     self._shutdown_timeout_seconds = 5.0
-    # EDA execution is authorized by the Agent token's eda.execute scope.
-    # No separate server-wide environment-variable gate is applied.
-    self.allow_eda_execute = True
 
     def _positive_limit(value: Optional[int], env_name: str, default: int) -> int:
       raw = os.environ.get(env_name, str(default)) if value is None else value
