@@ -62,7 +62,7 @@ SHA-256：
 当前用户级配置：
 
 ```text
-%USERPROFILE%\\.config\\opencode\\opencode.json
+%USERPROFILE%\.config\opencode\opencode.json
 ```
 
 将 `airbridge-opencode` 的 command 从旧版 `bf085142...` 更新为本记录第 2 节的新版 EXE，保留：
@@ -114,7 +114,7 @@ OpenCode 启动的 AirBridge MCP 进程均使用新版路径，且命令参数�
 当前用户级配置：
 
 ```text
-%USERPROFILE%\\.gemini\\config\\mcp_config.json
+%USERPROFILE%\.gemini\config\mcp_config.json
 ```
 
 迁移前核对确认 `airbridge-antigravity` 仍指向旧版：
@@ -133,7 +133,7 @@ AirBridge-Windows-x64-bf0851422f631a4f1bc755cf61a1ff25934ca130
 更新前自动创建备份：
 
 ```text
-mcp_config.json.airbridge-m25-migration-20261125T101147787Z.bak
+mcp_config.json.airbridge-m25-migration-20261125T101147787.bak
 ```
 
 新版 EXE 哈希校验、配置写入后回读校验均通过。更新后配置 SHA-256：
