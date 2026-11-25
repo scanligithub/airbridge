@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feature/m3-2-6-capture-authorized-exit
+      - feature/m2.5-mcp-schema-constraints
     paths:
       - "AirBridge.spec"
       - "airbridge_entry.py"
