@@ -714,6 +714,27 @@ class SerialWorker(threading.Thread):
       response = make_session_capabilities(hello["message_id"], CLIENT_VERSION)
       encoded = encode_session_message(FrameType.SESSION_CAPABILITIES, response)
       self.send_frame(FrameType.SESSION_CAPABILITIES, encoded)
+
+      # If this peer previously exhausted its startup attempts before the
+      # remote Runtime became ready, an inbound HELLO proves the peer is now
+      # participating. Re-negotiate so this side can learn the peer's feature
+      # set too; replying to the inbound HELLO alone only informs the peer.
+      with self.session_protocol_lock:
+        recover_unconfirmed_peer = (
+            self.session_peer_status.get("state") == "unconfirmed"
+            and not self.session_pending_handshakes
+        )
+        if recover_unconfirmed_peer:
+          # Prevent multiple inbound HELLOs from starting duplicate recovery
+          # threads in the short interval before the worker sends its HELLO.
+          self.session_peer_status["state"] = "negotiating"
+          self.session_peer_status["error"] = None
+      if recover_unconfirmed_peer:
+        self.sig.sig_rx_log.emit(
+            "INFO",
+            "收到对端 Runtime Session HELLO；本机先前握手未确认，重新发起能力协商。",
+        )
+        self._start_auto_session_negotiation()
     except SessionProtocolError as exc:
       self.sig.sig_rx_log.emit("WARN", f"Runtime Session HELLO 无效: {exc}")
 

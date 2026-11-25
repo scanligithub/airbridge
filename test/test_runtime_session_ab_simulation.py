@@ -9,6 +9,7 @@ Cadence installation, or physical Windows host is required.
 """
 import json
 import threading
+import time
 import uuid
 import unittest
 from types import SimpleNamespace
@@ -165,7 +166,42 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertFalse(status_a["can_create_session"])
         self.assertFalse(status_b["can_create_session"])
         self.assertEqual(status_a["profiles"], [])
-        self.assertEqual(status_b["profiles"], [])
+        self.assertEqual(status_b["profi    def test_late_peer_hello_recovers_unconfirmed_local_handshake(self):
+        host_a = _new_worker()
+        host_b = _new_worker()
+        _connect_duplex(host_a, host_b)
+
+        # Host A's startup HELLO is sent before Host B is ready, so it is lost.
+        host_a.send_frame = lambda *_args, **_kwargs: None
+        early_request = host_a.begin_session_negotiation()
+        self.assertTrue(early_request["success"], early_request)
+        timed_out = host_a._wait_session_negotiation(
+            early_request["message_id"], timeout=0
+        )
+        self.assertEqual(timed_out["state"], "unconfirmed", timed_out)
+        self.assertFalse(timed_out["negotiated"])
+
+        # Restore the duplex link. Host B comes online later and initiates its
+        # own HELLO. Host A must answer and also re-initiate to learn B's
+        # capabilities, otherwise Host A remains stuck in unconfirmed.
+        _connect_duplex(host_a, host_b)
+        late_request = host_b.begin_session_negotiation()
+        self.assertTrue(late_request["success"], late_request)
+        late_result = host_b._wait_session_negotiation(
+            late_request["message_id"], timeout=0.1
+        )
+        self.assertEqual(late_result["state"], "negotiated", late_result)
+
+        deadline = time.monotonic() + 1.0
+        status_a = host_a.get_session_peer_status()
+        while status_a["state"] != "negotiated" and time.monotonic() < deadline:
+            time.sleep(0.005)
+            status_a = host_a.get_session_peer_status()
+
+        self.assertEqual(status_a["state"], "negotiated", status_a)
+        self.assertTrue(status_a["negotiated"])
+        self.assertIn("request.correlation", status_a["features"])
+        self.assertIn("request.deduplication", status_a["features"])
 
     def test_unmatched_capabilities_correlation_is_ignored(self):
         host = _new_worker()
