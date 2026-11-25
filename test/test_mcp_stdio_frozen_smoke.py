@@ -49,6 +49,87 @@ class _FakeAirBridgeHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
 
+
+def _get_tool_input_schema(tool):
+    """Return the wire-level MCP inputSchema across SDK model naming styles."""
+    if isinstance(tool, dict):
+        schema = tool.get("inputSchema", tool.get("input_schema"))
+    else:
+        schema = getattr(tool, "inputSchema", None)
+        if schema is None:
+            schema = getattr(tool, "input_schema", None)
+        if schema is None and hasattr(tool, "model_dump"):
+            payload = tool.model_dump(by_alias=True)
+            schema = payload.get("inputSchema", payload.get("input_schema"))
+    if not isinstance(schema, dict):
+        raise AssertionError(
+            f"MCP tool {getattr(tool, 'name', '<unknown>')} has no inputSchema: "
+            f"{schema!r}"
+        )
+    return schema
+
+
+def _assert_m2_5_input_schemas(tools) -> None:
+    """Verify constraints published by the frozen EXE through tools/list."""
+    by_name = {tool.name: tool for tool in tools}
+
+    request_schema = _get_tool_input_schema(
+        by_name["airbridge_request_status"]
+    )
+    if request_schema.get("required") != ["request_id"]:
+        raise AssertionError(
+            f"request_status required fields mismatch: {request_schema!r}"
+        )
+    request_id = request_schema.get("properties", {}).get("request_id", {})
+    if request_id.get("type") != "string" or request_id.get("format") != "uuid":
+        raise AssertionError(
+            f"request_id must be published as a UUID string: {request_id!r}"
+        )
+
+    execute_schema = _get_tool_input_schema(by_name["airbridge_eda_execute"])
+    if execute_schema.get("required") != ["script"]:
+        raise AssertionError(
+            f"eda_execute required fields mismatch: {execute_schema!r}"
+        )
+    properties = execute_schema.get("properties", {})
+
+    for name in ("script", "hint", "version"):
+        field = properties.get(name, {})
+        if (
+            field.get("type") != "string"
+            or field.get("minLength") != 1
+            or field.get("pattern") != r"\S"
+        ):
+            raise AssertionError(
+                f"{name} must reject empty/whitespace-only strings: {field!r}"
+            )
+
+    expected = {
+        "target_file": {"type": "string", "default": ""},
+        "timeout": {
+            "type": "integer",
+            "default": 60,
+            "minimum": 1,
+            "maximum": 300,
+        },
+        "keep_open": {"type": "boolean", "default": True},
+        "wait_timeout_ms": {
+            "type": "integer",
+            "default": 60_000,
+            "minimum": 0,
+            "maximum": 300_000,
+        },
+    }
+    for name, constraints in expected.items():
+        field = properties.get(name, {})
+        for key, value in constraints.items():
+            if field.get(key) != value:
+                raise AssertionError(
+                    f"{name}.{key} expected {value!r}, got {field.get(key)!r}; "
+                    f"field={field!r}"
+                )
+
+
 async def exercise_frozen_stdio(
     executable: Path,
     agent_id: str,
@@ -81,6 +162,10 @@ async def exercise_frozen_stdio(
                 f"Frozen STDIO tool registry mismatch; missing={sorted(missing)}, "
                 f"extra={sorted(extra)}"
             )
+
+        # Inspect the schema returned by the actual frozen child process,
+        # not the source server's in-process tool objects.
+        _assert_m2_5_input_schemas(listed.tools)
 
         allowed = await client.call_tool("airbridge_get_capabilities", {})
         if allowed.is_error or allowed.structured_content.get("state") != "negotiated":
