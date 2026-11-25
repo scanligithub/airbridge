@@ -1,7 +1,7 @@
 # AirBridge M2.5 文档索引
 
 - 当前决策版本：STDIO pivot（2026-11-20）
-- 状态：M2.5 首版实现已提交；Host A Antigravity / OpenCode 真实只读验收通过，PR 当前 HEAD 的六项 GitHub Actions 全部通过；PR 仍为 Draft，尚未合并
+- 状态：M2.5 首版实现已提交至 PR #16；Host A 上 Antigravity / OpenCode 已通过 PR 构建版 EXE 的真实 STDIO 只读调用验收；PR 当前 HEAD 的六项 GitHub Actions 全部通过；Host B AirBridge.exe 哈希与 A/B 二进制一致性尚未独立核实；PR 仍为 Draft，尚未合并
 - 文档分支：docs/m2.5-architecture
 - 文档 PR：[PR #16](https://github.com/scanligithub/airbridge/pull/16)（Draft）
 
@@ -28,7 +28,7 @@
 4. [ADR-012：Agent 扩展与 MCP Client Adapter 注册机制](ADR-012_M2.5_Agent扩展与MCP_Client_Adapter注册机制.md) — 首批专用 Adapter 仅 Antigravity / OpenCode；Generic / Manual 不纳入首版。
 5. [ADR-011：Runtime Session Gateway 状态扩展与旧版兼容](ADR-011_RuntimeSession_Gateway_State_Extension.md) — 复用 0x15 / 0x16，新增可选 gateway.state.v1；旧版缺失字段视为 UNKNOWN。
 
-## 三、历史提案（不得作为当前实施要求）
+## 三、实机验收记录\n\n1. [Host A 双 Agent 独立配置、权限与启停验收（2026-11-24）](AirBridge_M2.5_HostA_Dual_Agent_Acceptance_20261124.md) — 独立凭据、只读 Scope、GUI 启停与恢复的实机记录。\n2. [Host A 双客户端新版 STDIO 实机验收（2026-11-25）](AirBridge_M2.5_HostA_Real_Client_STDIO_Acceptance_20261125.md) — 记录 PR #16 构建版 EXE 的 SHA-256、OpenCode / Antigravity 配置迁移、实际 STDIO 子进程路径和真实只读 Tool 调用，并明确 Host B EXE 哈希与最新 capabilities 握手的未验收边界。\n\n## 四、历史提案（不得作为当前实施要求）
 
 以下文档保留设计过程，冲突内容全部以 ADR-013 为准：
 
@@ -40,7 +40,7 @@
 - [架构评审决策清单 v0.1](AirBridge_M2.5_架构评审决策清单_v0.1.md) — 其中 CA / OAuth / G-01 决策已被 ADR-013 取代。
 - [G-01 Windows HTTPS / CA PoC 手册](G-01_Windows_CurrentUser_HTTPS信任PoC操作手册_v0.1.md) — 已取消，仅保留历史记录；不可执行。
 
-## 四、实施前置 Gate
+## 五、实施前置 Gate
 
 - Antigravity App / IDE 与 OpenCode 目标版本的 STDIO 启动实测；
 - 统一 AirBridge.exe 显式 STDIO 入口与 Python 3.11+ frozen build；
