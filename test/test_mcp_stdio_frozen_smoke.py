@@ -73,6 +73,17 @@ def _assert_m2_5_input_schemas(tools) -> None:
     """Verify constraints published by the frozen EXE through tools/list."""
     by_name = {tool.name: tool for tool in tools}
 
+    for name in ("airbridge_get_capabilities", "airbridge_get_eda_versions"):
+        schema = _get_tool_input_schema(by_name[name])
+        if schema.get("type") != "object" or schema.get("properties") != {}:
+            raise AssertionError(
+                f"{name} must expose an empty object schema: {schema!r}"
+            )
+        if "required" in schema:
+            raise AssertionError(
+                f"{name} must not declare required arguments: {schema!r}"
+            )
+
     request_schema = _get_tool_input_schema(
         by_name["airbridge_request_status"]
     )
@@ -243,6 +254,7 @@ def main() -> int:
         store.delete(agent_id)
 
     print("Frozen AirBridge.exe STDIO initialize + tools/list: PASS")
+    print("Frozen AirBridge.exe publishes M2.5 parameter constraints: PASS")
     print("Frozen AirBridge.exe reads M2.4 Agent credential: PASS")
     print("Gateway OFF blocks an already-running STDIO process: PASS")
     print("Agent OFF blocks an already-running STDIO process: PASS")
