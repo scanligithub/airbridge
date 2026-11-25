@@ -49,7 +49,6 @@ class _FakeAirBridgeHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
 
-
 def _get_tool_input_schema(tool):
     """Return the wire-level MCP inputSchema across SDK model naming styles."""
     if isinstance(tool, dict):
@@ -182,6 +181,18 @@ async def exercise_frozen_stdio(
         if allowed.is_error or allowed.structured_content.get("state") != "negotiated":
             raise AssertionError(f"Enabled Gateway call failed: {allowed.structured_content!r}")
 
+        # Strict integer fields must reject JSON booleans instead of coercing
+        # True to 1. The EDA execution feature remains disabled in this smoke test.
+        for field_name in ("timeout", "wait_timeout_ms"):
+            invalid_args = {"script": "schema validation smoke"}
+            invalid_args[field_name] = True
+            rejected = await client.call_tool("airbridge_eda_execute", invalid_args)
+            if not rejected.is_error:
+                raise AssertionError(
+                    f"Boolean value was accepted for integer field {field_name}: "
+                    f"{rejected.structured_content!r}"
+                )
+
         # Simulate Gateway OFF while this already-running MCP child is retained.
         policy.write(enabled=False, agents={agent_id: True})
         gateway_off = await client.call_tool("airbridge_get_capabilities", {})
@@ -244,7 +255,8 @@ def main() -> int:
             )
         if len(_FakeAirBridgeHandler.requests) != 2:
             raise AssertionError(
-                "Gateway OFF, Agent OFF, or malformed policy reached the AirBridge API: "
+                "Gateway OFF, Agent OFF, malformed policy, or invalid arguments "
+                "reached the AirBridge API: "
                 f"{_FakeAirBridgeHandler.requests!r}"
             )
     finally:
@@ -255,6 +267,7 @@ def main() -> int:
 
     print("Frozen AirBridge.exe STDIO initialize + tools/list: PASS")
     print("Frozen AirBridge.exe publishes M2.5 parameter constraints: PASS")
+    print("Frozen AirBridge.exe rejects booleans for integer parameters: PASS")
     print("Frozen AirBridge.exe reads M2.4 Agent credential: PASS")
     print("Gateway OFF blocks an already-running STDIO process: PASS")
     print("Agent OFF blocks an already-running STDIO process: PASS")
