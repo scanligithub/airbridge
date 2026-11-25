@@ -78,7 +78,7 @@ if __name__ == "__main__":
         # In a frozen windowed process, emit only to the inherited stderr pipe.
         try:
             if sys.stderr is not None:
-                sys.stderr.write((f"PROBE_ERROR: {type(exc).__name__}: {exc}\n").encode("utf-8"))
+                sys.stderr.write(f"PROBE_ERROR: {type(exc).__name__}: {exc}\\n")
         except Exception:
             pass
         raise
