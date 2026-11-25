@@ -166,7 +166,9 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertFalse(status_a["can_create_session"])
         self.assertFalse(status_b["can_create_session"])
         self.assertEqual(status_a["profiles"], [])
-        self.assertEqual(status_b["profi    def test_late_peer_hello_recovers_unconfirmed_local_handshake(self):
+        self.assertEqual(status_b["profiles"], [])
+
+    def test_late_peer_hello_recovers_unconfirmed_local_handshake(self):
         host_a = _new_worker()
         host_b = _new_worker()
         _connect_duplex(host_a, host_b)
