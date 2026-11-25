@@ -20,6 +20,16 @@ MAX_POLICY_BYTES = 64 * 1024
 _AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject ambiguous JSON objects instead of silently accepting the last key."""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class PolicyDecision:
     allowed: bool
@@ -49,7 +59,7 @@ class GatewayPolicyStore:
         return cls(Path(local_app_data) / "AirBridge" / "gateway.json")
 
     def check(self, agent_id: str) -> PolicyDecision:
-        """Re-read from disk on every call; absent/invalid policy denies access."""
+        """Re-read and validate the complete policy on every call; invalid state denies access."""
         if self.path is None:
             return PolicyDecision(
                 False,
@@ -86,12 +96,15 @@ class GatewayPolicyStore:
             )
 
         try:
-            payload = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+            payload = json.loads(
+                raw.decode("utf-8"),
+                object_pairs_hook=_reject_duplicate_json_keys,
+            )
+        except (UnicodeDecodeError, ValueError):
             return PolicyDecision(
                 False,
                 "GATEWAY_POLICY_INVALID",
-                "Gateway policy is malformed; access is denied until it is repaired.",
+                "Gateway policy is malformed or contains duplicate keys; access is denied until it is repaired.",
             )
 
         schema_version = payload.get("schema_version") if isinstance(payload, dict) else None
@@ -123,15 +136,37 @@ class GatewayPolicyStore:
                 "AirBridge Gateway is OFF. Enable it in the AirBridge GUI before using MCP tools.",
             )
 
+        normalized_agents: dict[str, bool] = {}
+        for raw_agent_id, agent in agents.items():
+            if not isinstance(raw_agent_id, str):
+                return PolicyDecision(
+                    False,
+                    "GATEWAY_POLICY_INVALID",
+                    "Gateway policy Agent IDs must be strings; access is denied.",
+                )
+            normalized_id = raw_agent_id.strip().lower()
+            if not _AGENT_ID_RE.fullmatch(normalized_id) or normalized_id in normalized_agents:
+                return PolicyDecision(
+                    False,
+                    "GATEWAY_POLICY_INVALID",
+                    "Gateway policy contains an invalid or duplicate Agent ID; access is denied.",
+                )
+            if not isinstance(agent, dict) or not isinstance(agent.get("enabled"), bool):
+                return PolicyDecision(
+                    False,
+                    "GATEWAY_POLICY_INVALID",
+                    f"Gateway policy Agent '{normalized_id}' enabled must be a Boolean; access is denied.",
+                )
+            normalized_agents[normalized_id] = agent["enabled"]
+
         normalized_agent_id = agent_id.strip().lower()
-        agent = agents.get(normalized_agent_id)
-        if not isinstance(agent, dict) or not isinstance(agent.get("enabled"), bool):
+        if normalized_agent_id not in normalized_agents:
             return PolicyDecision(
                 False,
                 "GATEWAY_POLICY_INVALID",
-                f"Gateway policy for Agent '{normalized_agent_id}' is missing or malformed; access is denied.",
+                f"Gateway policy for Agent '{normalized_agent_id}' is missing; access is denied.",
             )
-        if not agent["enabled"]:
+        if not normalized_agents[normalized_agent_id]:
             return PolicyDecision(
                 False,
                 "AGENT_DISABLED",
@@ -151,9 +186,12 @@ class GatewayPolicyStore:
         if len(raw) > MAX_POLICY_BYTES:
             raise ValueError("Gateway policy exceeds the supported size")
         try:
-            payload = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("Gateway policy is malformed") from exc
+            payload = json.loads(
+                raw.decode("utf-8"),
+                object_pairs_hook=_reject_duplicate_json_keys,
+            )
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ValueError("Gateway policy is malformed or contains duplicate keys") from exc
 
         schema_version = payload.get("schema_version") if isinstance(payload, dict) else None
         if type(schema_version) is not int or schema_version != POLICY_SCHEMA_VERSION:
@@ -191,6 +229,8 @@ class GatewayPolicyStore:
             agent_id = raw_agent_id.strip().lower()
             if not _AGENT_ID_RE.fullmatch(agent_id):
                 raise ValueError(f"Invalid Agent ID: {raw_agent_id!r}")
+            if agent_id in normalized_agents:
+                raise ValueError(f"Duplicate Agent ID after normalization: {agent_id!r}")
             if not isinstance(agent_enabled, bool):
                 raise ValueError(f"Agent '{agent_id}' enabled must be a Boolean")
             normalized_agents[agent_id] = {"enabled": agent_enabled}
