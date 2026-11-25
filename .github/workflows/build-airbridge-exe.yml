@@ -26,7 +26,6 @@ on:
       - "test/test_airbridge_entry.py"
       - "test/test_mcp_stdio_frozen_smoke.py"
       - "test/test_m2_5_gateway_gui_smoke.py"
-      - "test/test_m2_5_gateway_gui_smoke.py"
       - ".github/workflows/build-airbridge-exe.yml"
   pull_request:
     branches:
