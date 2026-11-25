@@ -49,9 +49,9 @@ def create_server(gateway: AirBridgeGateway | None = None) -> MCPServer:
         )
     )
     def airbridge_eda_execute(
-        script: Annotated[str, Field(min_length=1, pattern=r"\\S")],
-        hint: Annotated[str, Field(min_length=1, pattern=r"\\S")] = "agent_request.tcl",
-        version: Annotated[str, Field(min_length=1, pattern=r"\\S")] = "auto",
+        script: Annotated[str, Field(min_length=1, pattern=r"\S")],
+        hint: Annotated[str, Field(min_length=1, pattern=r"\S")] = "agent_request.tcl",
+        version: Annotated[str, Field(min_length=1, pattern=r"\S")] = "auto",
         target_file: str = "",
         timeout: Annotated[int, Field(ge=1, le=300)] = 60,
         keep_open: bool = True,
