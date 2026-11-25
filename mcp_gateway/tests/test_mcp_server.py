@@ -73,7 +73,7 @@ class McpServerRegistrationTests(unittest.TestCase):
         for name in ("script", "hint", "version"):
             self.assertEqual(properties[name]["type"], "string")
             self.assertEqual(properties[name]["minLength"], 1)
-            self.assertEqual(properties[name]["pattern"], r"\\S")
+            self.assertEqual(properties[name]["pattern"], r"\S")
 
         self.assertEqual(properties["script"]["title"], "Script")
         self.assertEqual(properties["hint"]["default"], "agent_request.tcl")
