@@ -55,18 +55,18 @@ class McpServerRegistrationTests(unittest.TestCase):
         )
 
         for name in ("airbridge_get_capabilities", "airbridge_get_eda_versions"):
-            schema = by_name[name].inputSchema
+            schema = by_name[name].input_schema
             self.assertEqual(schema["type"], "object")
             self.assertEqual(schema["properties"], {})
             self.assertNotIn("required", schema)
 
-        request_schema = by_name["airbridge_request_status"].inputSchema
+        request_schema = by_name["airbridge_request_status"].input_schema
         self.assertEqual(request_schema["required"], ["request_id"])
         request_id = request_schema["properties"]["request_id"]
         self.assertEqual(request_id["type"], "string")
         self.assertEqual(request_id["format"], "uuid")
 
-        execute_schema = by_name["airbridge_eda_execute"].inputSchema
+        execute_schema = by_name["airbridge_eda_execute"].input_schema
         self.assertEqual(execute_schema["required"], ["script"])
         properties = execute_schema["properties"]
 
