@@ -188,6 +188,61 @@ class GatewayPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "enabled must be a Boolean"):
             self.policy.read_snapshot()
 
+    def test_malformed_unrelated_agent_entry_fails_closed_for_current_agent(self):
+        self.policy_path.parent.mkdir(parents=True, exist_ok=True)
+        self.policy_path.write_text(
+            json.dumps({
+                "schema_version": 1,
+                "gateway": {"enabled": True},
+                "agents": {
+                    "antigravity": {"enabled": True},
+                    "opencode": {"enabled": "yes"},
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        result = self.gateway.get_capabilities()
+
+        self.assertEqual(result["state"], "unavailable")
+        self.assertEqual(result["error"]["code"], "GATEWAY_POLICY_INVALID")
+        self.assertEqual(self.client.calls, [])
+
+    def test_case_insensitive_duplicate_agent_ids_fail_closed(self):
+        self.policy_path.parent.mkdir(parents=True, exist_ok=True)
+        self.policy_path.write_text(
+            json.dumps({
+                "schema_version": 1,
+                "gateway": {"enabled": True},
+                "agents": {
+                    "antigravity": {"enabled": True},
+                    "ANTIGRAVITY": {"enabled": False},
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        result = self.gateway.get_capabilities()
+
+        self.assertEqual(result["state"], "unavailable")
+        self.assertEqual(result["error"]["code"], "GATEWAY_POLICY_INVALID")
+        self.assertEqual(self.client.calls, [])
+
+    def test_duplicate_json_object_keys_fail_closed(self):
+        self.policy_path.parent.mkdir(parents=True, exist_ok=True)
+        self.policy_path.write_text(
+            '{"schema_version":1,"gateway":{"enabled":true},'
+            '"agents":{"antigravity":{"enabled":false},'
+            '"antigravity":{"enabled":true}}}',
+            encoding="utf-8",
+        )
+
+        result = self.gateway.get_capabilities()
+
+        self.assertEqual(result["state"], "unavailable")
+        self.assertEqual(result["error"]["code"], "GATEWAY_POLICY_INVALID")
+        self.assertEqual(self.client.calls, [])
+
     def test_policy_writer_is_atomic_and_does_not_store_credentials(self):
         self.policy.write(enabled=True, agents={"Antigravity": True, "OpenCode": False})
 
