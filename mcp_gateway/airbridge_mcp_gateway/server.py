@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Annotated, Any
+from uuid import UUID
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 from . import __version__
 from .config import GatewayConfig
@@ -47,13 +49,13 @@ def create_server(gateway: AirBridgeGateway | None = None) -> MCPServer:
         )
     )
     def airbridge_eda_execute(
-        script: str,
-        hint: str = "agent_request.tcl",
-        version: str = "auto",
+        script: Annotated[str, Field(min_length=1, pattern=r"\\S")],
+        hint: Annotated[str, Field(min_length=1, pattern=r"\\S")] = "agent_request.tcl",
+        version: Annotated[str, Field(min_length=1, pattern=r"\\S")] = "auto",
         target_file: str = "",
-        timeout: int = 60,
+        timeout: Annotated[int, Field(ge=1, le=300)] = 60,
         keep_open: bool = True,
-        wait_timeout_ms: int = 60_000,
+        wait_timeout_ms: Annotated[int, Field(ge=0, le=300_000)] = 60_000,
     ) -> dict[str, Any]:
         """Submit opaque script text to the currently managed remote EDA runtime.
 
@@ -71,9 +73,9 @@ def create_server(gateway: AirBridgeGateway | None = None) -> MCPServer:
         )
 
     @server.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
-    def airbridge_request_status(request_id: str) -> dict[str, Any]:
+    def airbridge_request_status(request_id: UUID) -> dict[str, Any]:
         """Read the state/result for a previously returned AirBridge request_id."""
-        return service.get_request_status(request_id)
+        return service.get_request_status(str(request_id))
 
     return server
 
