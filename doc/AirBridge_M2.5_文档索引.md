@@ -1,7 +1,7 @@
 # AirBridge M2.5 文档索引
 
 - 当前决策版本：STDIO pivot（2026-11-20）
-- 状态：架构重新评审；尚未进入产品代码实施
+- 状态：M2.5 首版实现已提交；Host A Antigravity / OpenCode 真实只读验收通过，PR 当前 HEAD 的六项 GitHub Actions 全部通过；PR 仍为 Draft，尚未合并
 - 文档分支：docs/m2.5-architecture
 - 文档 PR：[PR #16](https://github.com/scanligithub/airbridge/pull/16)（Draft）
 
