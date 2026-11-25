@@ -39,6 +39,59 @@ class McpServerRegistrationTests(unittest.TestCase):
             },
         )
 
+    def test_generated_input_schemas_include_gateway_constraints(self):
+        server = create_server(_FakeGateway())
+        tools = asyncio.run(server.list_tools())
+        by_name = {tool.name: tool for tool in tools}
+
+        self.assertEqual(
+            set(by_name),
+            {
+                "airbridge_get_capabilities",
+                "airbridge_get_eda_versions",
+                "airbridge_eda_execute",
+                "airbridge_request_status",
+            },
+        )
+
+        for name in ("airbridge_get_capabilities", "airbridge_get_eda_versions"):
+            schema = by_name[name].inputSchema
+            self.assertEqual(schema["type"], "object")
+            self.assertEqual(schema["properties"], {})
+            self.assertNotIn("required", schema)
+
+        request_schema = by_name["airbridge_request_status"].inputSchema
+        self.assertEqual(request_schema["required"], ["request_id"])
+        request_id = request_schema["properties"]["request_id"]
+        self.assertEqual(request_id["type"], "string")
+        self.assertEqual(request_id["format"], "uuid")
+
+        execute_schema = by_name["airbridge_eda_execute"].inputSchema
+        self.assertEqual(execute_schema["required"], ["script"])
+        properties = execute_schema["properties"]
+
+        for name in ("script", "hint", "version"):
+            self.assertEqual(properties[name]["type"], "string")
+            self.assertEqual(properties[name]["minLength"], 1)
+            self.assertEqual(properties[name]["pattern"], r"\\S")
+
+        self.assertEqual(properties["script"]["title"], "Script")
+        self.assertEqual(properties["hint"]["default"], "agent_request.tcl")
+        self.assertEqual(properties["version"]["default"], "auto")
+
+        self.assertEqual(properties["target_file"]["type"], "string")
+        self.assertEqual(properties["target_file"]["default"], "")
+        self.assertEqual(properties["timeout"]["type"], "integer")
+        self.assertEqual(properties["timeout"]["default"], 60)
+        self.assertEqual(properties["timeout"]["minimum"], 1)
+        self.assertEqual(properties["timeout"]["maximum"], 300)
+        self.assertEqual(properties["keep_open"]["type"], "boolean")
+        self.assertEqual(properties["keep_open"]["default"], True)
+        self.assertEqual(properties["wait_timeout_ms"]["type"], "integer")
+        self.assertEqual(properties["wait_timeout_ms"]["default"], 60_000)
+        self.assertEqual(properties["wait_timeout_ms"]["minimum"], 0)
+        self.assertEqual(properties["wait_timeout_ms"]["maximum"], 300_000)
+
     def test_execution_tool_is_annotated_as_destructive(self):
         server = create_server(_FakeGateway())
         tools = asyncio.run(server.list_tools())
