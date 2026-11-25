@@ -75,6 +75,7 @@ class GatewayConfig:
     max_request_body_bytes: int = 60_000
     agent_id: str = ""
     agent_token: str = field(default="", repr=False)
+    enforce_gateway_policy: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_url", _validate_loopback_http_url(self.base_url))
@@ -85,6 +86,8 @@ class GatewayConfig:
             )
         if has_agent_id:
             object.__setattr__(self, "agent_id", _validate_agent_id(self.agent_id))
+        if not isinstance(self.enforce_gateway_policy, bool):
+            raise GatewayConfigurationError("enforce_gateway_policy must be a Boolean")
         if not 1.0 <= self.http_timeout_seconds <= 60.0:
             raise GatewayConfigurationError(
                 "AIRBRIDGE_HTTP_TIMEOUT_SECONDS must be between 1 and 60"
@@ -109,10 +112,24 @@ class GatewayConfig:
             ) from exc
         agent_id = env.get("AIRBRIDGE_AGENT_ID", "").strip()
         agent_token = env.get("AIRBRIDGE_AGENT_TOKEN", "").strip()
-        if agent_id and agent_token:
+        m2_5_stdio_mode = env.get("AIRBRIDGE_M2_5_GATEWAY_POLICY") == "1"
+
+        if m2_5_stdio_mode:
+            if agent_token:
+                raise GatewayConfigurationError(
+                    "AIRBRIDGE_AGENT_TOKEN is forbidden in M2.5 STDIO; "
+                    "configure AIRBRIDGE_AGENT_ID and store the secret in Windows Credential Manager"
+                )
+            if not agent_id:
+                raise GatewayConfigurationError(
+                    "AIRBRIDGE_AGENT_ID is required in M2.5 STDIO; "
+                    "the Agent credential must be loaded from Windows Credential Manager"
+                )
+        elif agent_id and agent_token:
             raise GatewayConfigurationError(
                 "Do not configure both AIRBRIDGE_AGENT_ID and legacy AIRBRIDGE_AGENT_TOKEN"
             )
+
         if agent_id:
             try:
                 provider = credential_store or default_credential_store()
@@ -129,4 +146,8 @@ class GatewayConfig:
             ),
             agent_id=agent_id,
             agent_token=agent_token,
+            # The unified AirBridge.exe STDIO entrypoint sets this internal
+            # process flag. It also disables the legacy token-in-environment
+            # compatibility path above. Standalone M2.1/M2.2 remains compatible.
+            enforce_gateway_policy=m2_5_stdio_mode,
         )

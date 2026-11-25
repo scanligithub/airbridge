@@ -72,9 +72,11 @@ class CredentialStoreTests(unittest.TestCase):
         token = "abg1." + uuid.uuid4().hex + ".credential-probe"
         try:
             store.store(agent_id, token)
+            self.assertTrue(store.exists(agent_id))
             self.assertEqual(store.load(agent_id), token)
         finally:
             store.delete(agent_id)
+        self.assertFalse(store.exists(agent_id))
         with self.assertRaises(CredentialStoreError):
             store.load(agent_id)
 

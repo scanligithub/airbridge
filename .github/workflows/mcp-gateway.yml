@@ -4,13 +4,52 @@ on:
   push:
     paths:
       - "mcp_gateway/**"
+      - ".github/scripts/stdio_windowed_pipe_probe_child.py"
+      - ".github/scripts/run_stdio_windowed_pipe_probe.py"
       - ".github/workflows/mcp-gateway.yml"
   pull_request:
     paths:
       - "mcp_gateway/**"
+      - ".github/scripts/stdio_windowed_pipe_probe_child.py"
+      - ".github/scripts/run_stdio_windowed_pipe_probe.py"
       - ".github/workflows/mcp-gateway.yml"
 
 jobs:
+  windowed-exe-stdio-pipes:
+    name: Frozen windowed EXE inherited stdin/stdout/stderr pipes (Windows)
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install PyInstaller
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          python -m pip install "pyinstaller>=6.9,<7"
+          python -m PyInstaller --version
+      - name: Build one-file windowed probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dist = Join-Path $env:RUNNER_TEMP "stdio-probe-dist"
+          $work = Join-Path $env:RUNNER_TEMP "stdio-probe-work"
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --noupx --name AirBridgeStdioPipeProbe --distpath $dist --workpath $work ".github/scripts/stdio_windowed_pipe_probe_child.py"
+          $exe = Join-Path $dist "AirBridgeStdioPipeProbe.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "PyInstaller did not produce the windowed probe EXE."
+          }
+      - name: Verify inherited standard handles and clean protocol stdout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = Join-Path $env:RUNNER_TEMP "stdio-probe-dist/AirBridgeStdioPipeProbe.exe"
+          python ".github/scripts/run_stdio_windowed_pipe_probe.py" --exe $exe
+
   tests:
     runs-on: ubuntu-latest
     strategy:
