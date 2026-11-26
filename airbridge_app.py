@@ -583,6 +583,7 @@ class SerialWorker(threading.Thread):
           "supported_protocols": [],
           "features": [],
           "profiles": [],
+          "peer_build_identity": None,
           "last_handshake_id": None,
           "error": reason,
       }
@@ -596,6 +597,8 @@ class SerialWorker(threading.Thread):
       status["supported_protocols"] = list(status.get("supported_protocols", []))
       status["features"] = list(status.get("features", []))
       status["profiles"] = list(status.get("profiles", []))
+      identity = status.get("peer_build_identity")
+      status["peer_build_identity"] = dict(identity) if isinstance(identity, dict) else None
       status["can_create_session"] = "session.create" in status["features"]
       return status
 
@@ -631,6 +634,7 @@ class SerialWorker(threading.Thread):
             "supported_protocols": [],
             "features": [],
             "profiles": [],
+            "peer_build_identity": None,
             "last_handshake_id": message_id,
             "error": None,
         }
@@ -777,6 +781,7 @@ class SerialWorker(threading.Thread):
             "profiles": list(payload.get("profiles", [])),
             "max_frame_payload": payload.get("max_frame_payload"),
             "peer_version": payload.get("server_version"),
+            "peer_build_identity": payload.get("build_identity"),
             "last_handshake_id": correlation_id,
             "error": None if common else state,
         }
