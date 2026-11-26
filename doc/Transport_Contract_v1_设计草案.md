@@ -655,7 +655,7 @@ AuthenticatedTransport.send(request, binding_handle)
 3. `binding_handle` 是进程内不透明句柄，不是 Token 字符串；不得 JSON 序列化、持久化、复制到 Skill 返回值、日志或异常。若某实现无法提供不透明句柄，必须把秘密的注入限制在 Host/OS 安全集成内部，不能退化为把秘密返回给 Agent。
 4. `AuthenticatedTransport` 是唯一允许把凭据绑定到出站请求的位置。Provider 只能提交请求和句柄，不得读取句柄内部秘密或自行生成 Authorization Header。
 5. 凭据绑定应限定目标 Provider/audience 和用途，并尽可能短生命周期；过期时间是可选诊断信息，不得用于推断 Token 内容、长度或是否存在。
-6. Credential Source 错误只返回稳定错误类别，例如 `CREDENTIAL_UNAVAILABLE`、`CREDENTIAL_BINDING_DENIED`；不得返回秘密或可用于凭据探测的详细元数据。服务端返回的认证/授权失败仍按实际 HTTP/API 语义映射。
+6. Credential Source 错误只返回稳定错误类别，例如 `CREDENTIAL_UNAVAILABLE`、`CREDENTIAL_BINDING_DENIED`；不得返回秘密或可用于凭据探测的详细元数据。不得静默回退到环境变量、默认账户或其他更宽权限凭据；若匹配到多个无法唯一确定的绑定，必须 fail closed。服务端返回的认证/授权失败仍按实际 HTTP/API 语义映射。
 7. 若认证失败发生在请求可能已被远端接收之后，Provider 必须依据服务端响应权威性判断 outcome；不得仅凭本地刷新凭据后自动重放非幂等操作。
 8. 凭据轮换不得改变原请求 ID、载荷摘要或请求所有权；轮换后恢复查询仍按原调用主体和原请求标识执行。
 9. 不定义通用 `get_token()`、`read_secret()`、`is_token_present()` 或 `token_length()` 接口；不得通过探测存在性来决定是否调用 Provider。
@@ -693,7 +693,7 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 13. Filesystem semantics：CREATE_NEW、REPLACE、APPEND、CONDITIONAL_REPLACE；目标已存在/不存在、权限失败、非原子条件写、部分写入、跨卷 move、递归 remove 等边界。
 14. Partial write and effect reporting：验证 FULLY_APPLIED、NOT_APPLIED、PARTIALLY_APPLIED、UNKNOWN 与执行状态分开表达；部分写入不能伪装为成功。
 15. Chunk transfer lifecycle：begin 响应丢失恢复、相同块重试、不同内容同序号冲突、已确认块持久性、断线/重启恢复、长度/摘要校验，以及 abort/complete 并发竞争。
-16. Credential Source and redaction：凭据不可用、过期、撤销；验证秘密不进入日志、异常、能力快照、请求状态或结果，且不会触发凭据探测或 Scope 扩大。
+16. Credential Source and redaction：凭据不可用、过期、撤销；验证 Provider/audience/purpose 与主体上下文不匹配时拒绝绑定、多个匹配凭据时 fail closed、无静默环境变量/默认账户回退；验证不向 Agent 暴露凭据或存在性元数据，秘密不进入日志、异常、能力快照、请求状态或结果，且不会触发凭据探测或 Scope 扩大。
 17. Provider close and resource cleanup：关闭后行为明确；线程、文件句柄、临时传输记录按声明清理。
 
 Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”当成真实 Provider 已具备保证。测试报告应记录 Provider 名称/版本、能力快照、适用 operation_kind、跳过的可选能力测试及原因。
