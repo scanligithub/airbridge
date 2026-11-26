@@ -86,6 +86,7 @@ TransportProvider
   get_info() -> ProviderInfo
   get_capabilities() -> CapabilityList
   shell_execute(command, options, request_id) -> OperationResponse
+  get_operation(request_id) -> OperationResponse  // 只读查询原请求，不重新提交
   filesystem_*() -> OperationResponse   // 可选，按实际需要实现
   close() -> None
 ```
@@ -95,6 +96,8 @@ TransportProvider
 - `get_info()` 返回 Provider 名称、实现版本和支持的 Contract 版本。
 - 第一版 Contract 固定为 `1.0`；不实现复杂版本协商。双方版本不兼容时直接拒绝初始化。
 - `get_capabilities()` 返回当前 Provider 实际支持的操作。
+- `get_operation(request_id)` 只查询原请求的当前记录；不得重新提交命令或生成新 ID。
+- 第一版 `request_id` 使用 UUID 字符串，以兼容当前 AirBridge 请求关联机制；Fake Provider 与 AirBridge Provider 遵守相同格式。
 - Shell 和 Filesystem 是可选能力；未实现的操作明确报告不支持。
 - `close()` 释放本 Provider 实例使用的本地资源，不代表远端请求被取消。
 - 一个 Skill 实例持有自己的 Provider 实例；第一版不要求共享连接池。
@@ -137,7 +140,7 @@ OperationResponse =
 这是第一版必须保留的可靠性要求。
 
 - 每次逻辑远程操作由调用方生成唯一 `request_id`。
-- 查询或恢复同一操作时继续使用原 ID。
+- 查询或恢复同一操作时继续使用原 ID；通过 `get_operation(request_id)` 进行只读查询。
 - 本地提交超时或连接中断，不代表远端没有执行。
 - 如果无法确定远端是否接收或完成请求，返回 `UNKNOWN`。
 - UNKNOWN 状态下不得自动生成新 ID 重放非幂等操作。
