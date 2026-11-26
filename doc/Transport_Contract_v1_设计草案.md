@@ -89,6 +89,63 @@ Provider 必须声明其实现的 Contract 版本范围。Skill 初始化时校�
 
 v1 不要求所有 Provider 支持所有可选能力。必需的基础接口与可选能力必须区分；不得通过返回成功、空结果或虚构默认值伪装能力。
 
+### 3.1 独立发布单元
+
+Contract、Provider、Skill 和 Host Adapter 是不同的版本化发布单元，不得共享一个隐式版本号：
+
+| 发布单元 | 版本负责内容 | 不应导致的连带升级 |
+|---|---|---|
+| Transport Contract | 接口、类型、状态机、错误语义、能力标识和保证 | 不要求 AirBridge Core 或任一 Skill 同步发布 |
+| Contract Conformance Suite | 对某个 Contract 版本的可执行一致性测试与测试夹具 | 不与 AirBridge 的普通应用版本绑定 |
+| Transport Provider | 具体后端适配、支持的 Contract 版本和能力实现 | 不要求 Skill 领域逻辑随 Provider 内部重构升级 |
+| EDA Product Skill | 产品领域工作流及其兼容 Contract 范围 | 不要求其他 EDA Skill 同步升级 |
+| Host Adapter | 特定 Agent Host 的发现、入口和生命周期适配 | 不要求修改 Skill 领域代码或 Transport Contract |
+
+每个发布单元必须有自己的版本、变更记录和兼容性声明。某个单元的发布版本不得被解释为其他单元的版本。
+
+### 3.2 契约版本协商与锁定
+
+为避免“版本范围兼容”被不同实现解释成不同规则，建议 v1 使用保守的显式协商：
+
+1. Contract 版本采用 `MAJOR.MINOR.PATCH`。MAJOR 表示不兼容的接口、状态或保证语义变化；MINOR 只增加可选接口、字段或能力且不改变既有保证；PATCH 只修正文档或不改变规范语义的缺陷。
+2. Skill 发布元数据声明其实现并经过测试的 Contract 版本集合，以及最低必需能力。不得只写 `latest` 或不受约束的 `1.x`。
+3. Provider 声明其实际实现并通过对应 Contract Conformance Suite 的 Contract 版本集合。不得仅根据依赖包版本或源码分支推断支持范围。
+4. 初始化时双方按完整版本号求交集，并选择双方均明确声明支持的最高版本。若没有共同版本，必须在任何远端副作用操作前失败；不得静默降级、忽略未知语义或猜测兼容。
+5. 协商结果必须记录完整的 `contract_version`、Provider 身份/实现版本和能力快照标识。能力快照必须绑定本次协商结果；不能把一个 Contract 版本的能力快照用于另一个版本。
+6. 一次运行会话中，协商版本保持固定。若需重新协商，必须先结束或显式重建会话；不得在请求执行中途静默切换版本。
+7. Contract PATCH 发布可在不改变语义的前提下替换同一 MAJOR.MINOR 的勘误版本，但 Provider 与 Skill 仍须声明其验证过的完整版本。若 PATCH 实际改变行为保证，则该变更不是 PATCH，必须提升 MINOR 或 MAJOR。
+8. 能力支持是独立于版本兼容性的第二道门槛：版本协商成功不代表某项可选能力受支持；每个操作仍必须执行能力检查。
+
+### 3.3 规范源文件、发布制品与依赖方式
+
+建议将 Contract 的规范内容与具体实现解耦，形成可独立获取、不可变引用的发布制品：
+
+- 规范源文件定义接口、字段、状态机、错误类别、能力语义和兼容性规则；采用语言无关的规范描述。具体语言 SDK 或类型绑定可以生成，但不能成为唯一规范来源。
+- 每个 Contract 版本发布不可变的规范制品，并包含版本号、变更记录和内容摘要。已发布版本不得原地修改；错误通过新的 PATCH/MINOR/MAJOR 版本修正。
+- 与该 Contract 版本对应的公共 Conformance Suite 必须一同标记版本，并明确测试套件版本与 Contract 版本的映射。Fake Provider、AirBridge Provider 和未来 Provider 使用同一套测试定义；允许各 Provider 增加专有集成测试，但不得以专有测试替代公共契约测试。
+- Skill 依赖稳定的 Contract 接口定义或其语言绑定，不得 import AirBridge 仓库内部模块、内部路径或 Provider 私有类。Provider 依赖 Contract 定义，不得反向把 AirBridge 私有实现暴露给 Skill。
+- Skill 的发布元数据声明允许的 Contract 版本和已验证 Provider/Host 组合；Provider 的发布元数据声明支持的 Contract 版本及逐项能力。兼容矩阵应分别记录“规范兼容”“CI 契约测试通过”和“真实 Provider/Host 集成验收”，不能合并成一个含糊的兼容标记。
+- 初期可以在 AirBridge 仓库内维护规范源文件和公共测试套件，以降低协作成本；但必须独立版本化和发布，不要求 Skill 安装 AirBridge 仓库，也不要求与 AirBridge.exe 同步发布。待 Contract 稳定、出现多个独立 Provider/Skill 消费者或独立发布确有必要时，再评估迁移到独立仓库/包。迁移不得改变已发布 Contract 的版本身份和内容摘要。
+- 本草案不指定具体包管理器、注册表、仓库 URL、SDK 语言或自动生成工具；这些属于后续实现决策，不能在未评审前预设。
+
+### 3.4 兼容性声明示例（非冻结格式）
+
+以下仅示意每个组件需要声明哪些信息，不代表当前仓库已创建这些 manifest：
+
+```yaml
+transport_contract:
+  supported_versions:
+    - "1.0.0"
+  required_capabilities:
+    - "shell.execute"
+  tested_provider_versions:
+    - "airbridge-provider:0.1.0"
+  tested_host_adapters:
+    - "opencode-adapter:0.1.0"
+```
+
+Provider 应声明自己的实现版本、支持的 Contract 版本集合和能力快照；Host Adapter 应声明其适配的 Host/版本范围。上例中的 Provider/Adapter 名称和版本均为占位示例，不表示已有这些独立软件包。
+
 ## 4. 能力协商
 
 ### 4.1 能力声明模型
@@ -758,7 +815,10 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 | 非幂等操作重试 | 不允许盲目自动重放 | Proposed |
 | UNKNOWN | 作为一等结果状态，保留原请求标识并只读核实 | Proposed |
 | 凭据来源 | 抽象 Credential Source；不绑定单一 Host 或环境变量 | Proposed |
-| 契约仓库位置 | 初期与 AirBridge 同仓管理，逻辑独立版本化；稳定后再评估独立包 | Proposed |
+| 契约源文件位置 | 初期可与 AirBridge 同仓维护，但 Contract 与公共 Conformance Suite 独立版本化、发布；满足条件后再评估独立仓库/包 | Proposed |
+| 版本协商 | Skill/Provider 显式声明已验证的完整 Contract 版本集合，初始化选择最高共同版本；无交集时 fail closed | Proposed |
+| 发布制品 | 每个 Contract 版本发布不可变规范制品、内容摘要和对应 Conformance Suite | Proposed |
+| 兼容矩阵 | 分别记录规范兼容、CI 契约测试和真实 Provider/Host 集成验收 | Proposed |
 
 这些是供评审的建议，不应在未获批准前视为已冻结的架构决策。
 
@@ -788,6 +848,12 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] 文件覆盖、追加、移动、删除的语义明确。
 - [ ] 分块传输具备明确完整性与恢复规则，或明确不支持。
 - [ ] Credential Source 不泄漏凭据，不扩大 Scope。
+- [ ] Contract、Conformance Suite、Provider、Skill 和 Host Adapter 分别版本化。
+- [ ] Skill 与 Provider 显式声明完整 Contract 版本集合，不使用 latest 或未经验证的宽泛范围。
+- [ ] 初始化选择最高共同版本；无交集时在副作用操作前失败，不静默降级。
+- [ ] 能力快照绑定本次协商的 Contract 版本和 Provider 身份。
+- [ ] 已发布 Contract 制品不可变，并附内容摘要和对应 Conformance Suite。
+- [ ] 兼容矩阵区分规范兼容、CI 契约测试和真实 Provider/Host 集成验收。
 - [ ] Fake Provider 与 AirBridge Provider 使用相同契约测试。
 - [ ] 文档中的目标能力没有被表述为当前已实现能力。
 - [ ] 本文评审通过前，不进行生产 Skill 迁移。
