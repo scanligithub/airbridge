@@ -667,7 +667,7 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 
 以下观察来自本次对 `main` 分支代码的静态检查；只说明代码结构，不代表 Host A/Host B 运行验收：
 
-- `request_broker.py`：B 侧 SQLite RequestBroker 对 UUID request_id 建立唯一记录；payload 使用排序 JSON 和 SHA-256 摘要；同 ID、不同 request_kind 或不同摘要返回冲突；相同请求返回 in-progress 或缓存结果。默认 TTL 为 24 小时，默认最多 10000 条记录，并有运行中请求心跳/过期转 UNKNOWN 逻辑。
+- `request_broker.py`：B 侧 SQLite RequestBroker 对 UUID request_id 建立唯一记录；payload 使用排序 JSON 和 SHA-256 摘要；同 ID、不同 request_kind 或不同摘要返回冲突；相同请求返回 in-progress 或缓存结果。默认 TTL 为 24 小时、默认最多 10000 条记录，并有运行中请求心跳/过期转 UNKNOWN 逻辑。但容量达到上限时，Broker 会提前回收最旧的终态记录，因此 24 小时是 TTL 配置而不是无条件的最短保留承诺；Provider 必须把容量驱逐纳入保留保证。其 SQLite 主键是 request_id，记录本身未包含调用方主体字段；HTTP 层另有 Agent owner 绑定/读取检查，不能仅凭 Broker 表结构声称其自身实现了主体隔离。
 - `airbridge_app.py`：EDA Execute 与 Shell Execute 路径接入 RequestBroker；因此不能将现有 Shell/EDA 请求保护简单描述为“只有客户端 UUID”。但其当前字段是单一 request_id，并非草案中的 client_request_id/provider_request_id 双 ID 模型。
 - `request_tracker.py`：A 侧 RequestTracker 是内存中的 HTTP/ABFP 请求响应关联表，默认 TTL 15 分钟、最多 500 条；它与 B 侧持久化 RequestBroker 是不同层次，不应混为一个具有统一持久性保证的 Tracker。
 - `agent_security.py` 与 HTTP API：存在 Agent 请求 owner 绑定和读取隔离检查；这证明部分 API 路径具备所有权控制实现，但不能替代对所有 Provider 操作类型、跨重启和请求记录保留边界的契约测试。
