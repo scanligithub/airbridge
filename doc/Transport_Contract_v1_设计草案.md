@@ -132,19 +132,37 @@ Contract、Provider、Skill 和 Host Adapter 是不同的版本化发布单元�
 
 以下仅示意每个组件需要声明哪些信息，不代表当前仓库已创建这些 manifest：
 
+Skill 发布元数据示例：
+
 ```yaml
-transport_contract:
-  supported_versions:
-    - "1.0.0"
-  required_capabilities:
-    - "shell.execute"
+skill:
+  version: "0.4.0"
+  transport_contract:
+    accepted_versions:
+      - "1.0.0"
+    required_capabilities:
+      - "shell.execute"
   tested_provider_versions:
     - "airbridge-provider:0.1.0"
   tested_host_adapters:
     - "opencode-adapter:0.1.0"
 ```
 
-Provider 应声明自己的实现版本、支持的 Contract 版本集合和能力快照；Host Adapter 应声明其适配的 Host/版本范围。上例中的 Provider/Adapter 名称和版本均为占位示例，不表示已有这些独立软件包。
+Provider 发布元数据示例：
+
+```yaml
+provider:
+  id: "airbridge"
+  implementation_version: "0.1.0"
+  implemented_contract_versions:
+    - "1.0.0"
+  conformance_suite_version: "1.0.0"
+  capabilities:
+    - name: "shell.execute"
+      support: "supported"
+```
+
+以上仅示意字段职责和版本相互独立的关系，不冻结 manifest 格式，也不表示仓库已创建这些独立软件包。Host Adapter 同样需要独立声明其实现版本及已验证的 Host/版本范围。
 
 ## 4. 能力协商
 
