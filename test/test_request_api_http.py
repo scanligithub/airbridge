@@ -127,29 +127,13 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             "build_timestamp": "2026-11-26T02:30:00Z",
             "build_platform": "windows-x64",
         }
-        self.worker = FakeWorker()
         self.worker.peer_build_identity = identity
-        self.security = AgentSecurityStore(":memory:")
-        issued = self.security.issue_token("build-identity-test", ["runtime.read"])
-        server = AntigravityIPCServer(
-            self.worker,
-            port=0,
-            security_store=self.security,
+        status, body = self._request_json(
+            "GET", "/api/v1/runtime/capabilities"
         )
-        server.start()
-        try:
-            request = urllib.request.Request(
-                f"http://127.0.0.1:{server.port}/api/v1/runtime/capabilities",
-                headers={"Authorization": "Bearer " + issued["token"]},
-                method="GET",
-            )
-            with urllib.request.urlopen(request, timeout=3.0) as response:
-                body = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(body["peer_build_identity"], identity)
-            self.assertEqual(self.worker.frames, [])
-        finally:
-            server.stop()
-            self.security.close()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["peer_build_identity"], identity)
+        self.assertEqual(self.worker.frames, [])
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
