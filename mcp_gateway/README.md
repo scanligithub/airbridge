@@ -1,5 +1,9 @@
 # AirBridge MCP Gateway (M2.1 / M2.2)
 
+> **M2.5 integration note (2026-11-20):** This README documents the currently deployed M2.1 / M2.2 standalone Python-package and virtual-environment setup. M2.5 retains the existing STDIO server, Agent ID → Windows Credential Manager lookup, and domain-neutral Tool layer, but the target is to integrate them into the unified AirBridge.exe / Python 3.11+ runtime. New M2.5 Antigravity / OpenCode adapters must not create a separate virtual environment or write AIRBRIDGE_AGENT_TOKEN; see [ADR-013](../doc/ADR-013_M2.5_Stdio本机MCP接入与客户端托管生命周期.md).
+
+
+
 A standalone MCP stdio server for the existing AirBridge HTTP API on Host A.
 It is intentionally separate from the AirBridge desktop application's Python
 environment and does not import AirBridge internal modules.
@@ -129,11 +133,9 @@ access control) and attempts to remove the local Credential Manager entry.
 The legacy manual issue path is still available only with explicit
 `--reveal-token` opt-in; it is not the normal provisioning workflow.
 
-The AirBridge server has a separate global execution kill switch,
-`AIRBRIDGE_ALLOW_EDA_EXECUTE`, which defaults to `0`. Even when enabled,
-execution still requires both a Gateway opt-in and an Agent token with
-`eda.execute`. The initial Antigravity / OpenCode credentials above are
-read-only and do not receive that scope.
+EDA execution is separately gated by the local Gateway opt-in and the
+Agent token's \`eda.execute\` scope. The initial Antigravity / OpenCode
+credentials above are read-only and do not receive that scope.
 
 Loopback binding is not an OS-level isolation boundary for processes running
 under the same Windows account. Do not expose port 8888 to a LAN or the
@@ -141,18 +143,24 @@ Internet. Per-Agent tokens do not create independent Runtime Sessions or
 Capture interpreters.
 
 
-## AirBridge server-side security policy
+## AirBridge Agent security and rate-limit policy
 
 Configure these variables in the environment of the AirBridge desktop process on Host A (not in the Gateway MCP host config):
 
 | Variable | Default | Meaning |
 |---|---:|---|
 | AIRBRIDGE_AGENT_SECURITY_DB | `%LOCALAPPDATA%\\AirBridge\\agent_security.sqlite3` | Local credential, ownership, quota reservation and audit database |
-| AIRBRIDGE_ALLOW_EDA_EXECUTE | `0` | Server-wide EDA execution kill switch; keep off during read-only operation |
+| AIRBRIDGE_ALLOW_EDA_EXECUTE | `0` | Independent Host-A HTTP API server kill switch; EDA requests are denied unless explicitly enabled, even when the Agent has `eda.execute` |
 | AIRBRIDGE_AGENT_READ_RPM | `60` | Per-Agent ordinary API requests per minute |
 | AIRBRIDGE_AGENT_STATUS_RPM | `120` | Per-Agent request-status lookups per minute |
 | AIRBRIDGE_AGENT_EXECUTE_RPM | `5` | Per-Agent EDA submission attempts per minute |
 | AIRBRIDGE_AGENT_MAX_PENDING_EDA | `1` | Maximum simultaneous uncompleted EDA requests per Agent |
+
+The independent server-side `AIRBRIDGE_ALLOW_EDA_EXECUTE` switch defaults to OFF
+and is configured in the Host-A AirBridge desktop/API process environment. It
+must be explicitly enabled in addition to the Gateway-side
+`AIRBRIDGE_ENABLE_EDA_EXECUTE=1` setting and the Agent's `eda.execute` scope.
+All three controls are required; leaving any one disabled blocks EDA submission.
 
 The sliding-window rate counters are in memory and reset when the AirBridge
 HTTP service process restarts. In-flight EDA reservations and request ownership

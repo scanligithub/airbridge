@@ -641,24 +641,86 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(denial["token_id"], read_only["token_id"])
         self.assertEqual(denial["http_status"], 403)
 
-    def test_server_execution_kill_switch_overrides_agent_scope(self):
+    def test_server_eda_kill_switch_blocks_scoped_agent_by_default(self):
+        with patch.dict(os.environ, {"AIRBRIDGE_ALLOW_EDA_EXECUTE": "0"}):
+            blocked = AntigravityIPCServer(
+                self.worker,
+                port=0,
+                security_store=self.security,
+            )
+        self.assertFalse(blocked.allow_eda_execute)
+        blocked.start()
+        try:
+            frame_count = len(self.worker.frames)
+            status, body = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts must_not_run"},
+                base_url=f"http://127.0.0.1:{blocked.port}",
+            )
+        finally:
+            blocked.stop()
+
+        self.assertEqual(status, 403, body)
+        self.assertEqual(body["state"], "disabled")
+        self.assertEqual(
+            body["error"]["code"], "EDA_EXECUTION_DISABLED_SERVER"
+        )
+        self.assertEqual(len(self.worker.frames), frame_count)
+        denial = next(
+            (
+                record
+                for record in self.security.list_audit(limit=20)
+                if record["path"] == "/api/v1/eda/execute"
+                and record["reason_code"] == "EDA_EXECUTION_DISABLED_SERVER"
+            ),
+            None,
+        )
+        self.assertIsNotNone(denial)
+        self.assertEqual(denial["agent_id"], "test-agent")
+        self.assertEqual(denial["http_status"], 403)
+
+    def test_scope_denial_precedes_body_read(self):
+        read_only = self.security.issue_token(
+            "scope-order-agent",
+            ["runtime.read", "eda.versions.read", "request.read"],
+        )
         blocked = AntigravityIPCServer(
             self.worker,
             port=0,
             security_store=self.security,
-            allow_eda_execute=False,
         )
         blocked.start()
         try:
             status, body = self._request_json(
                 "POST",
                 "/api/v1/eda/execute",
-                {"script": "puts should_not_run"},
+                {"script": "puts scope-order-must-not-run"},
+                token=read_only["token"],
                 base_url=f"http://127.0.0.1:{blocked.port}",
             )
             self.assertEqual(status, 403, body)
-            self.assertEqual(body["error"]["code"], "EDA_EXECUTION_DISABLED_SERVER")
+            self.assertEqual(body["error"]["code"], "AGENT_SCOPE_DENIED")
+            self.assertEqual(body["error"]["required_scope"], "eda.execute")
             self.assertEqual(self.worker.frames, [])
+            self.assertEqual(self.worker.request_tracker._records, {})
+
+            denial = next(
+                (
+                    record
+                    for record in self.security.list_audit(limit=20)
+                    if record["agent_id"] == "scope-order-agent"
+                    and record["path"] == "/api/v1/eda/execute"
+                    and record["reason_code"] == "AGENT_SCOPE_DENIED"
+                ),
+                None,
+            )
+            self.assertIsNotNone(denial)
+            self.assertEqual(denial["decision"], "denied")
+            self.assertEqual(denial["http_status"], 403)
+            # The handler rejects in _authorize_api before do_POST reads the body.
+            self.assertIsNone(denial["payload_bytes"])
+            self.assertIsNone(denial["payload_sha256"])
         finally:
             blocked.stop()
 
@@ -686,6 +748,108 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         )
         self.assertEqual(owner_status, 202, visible)
         self.assertEqual(visible["state"], "pending")
+
+    def test_foreign_and_unknown_request_ids_have_same_404_audit(self):
+        # Seed an inert request directly into the temporary stores. This tests
+        # ownership enforcement without granting shell.execute / eda.execute
+        # or submitting any frame to the Runtime.
+        owner = self.security.issue_token("request-owner", ["request.read"])
+        other = self.security.issue_token("request-reader", ["request.read"])
+        request_id = str(uuid.uuid4())
+        unknown_id = str(uuid.uuid4())
+
+        self.security.bind_request_owner(request_id, "request-owner")
+        self.worker.request_tracker.register(request_id, "synthetic.read-only")
+        self.worker.request_tracker.complete(
+            request_id,
+            {"marker": "owner-visible-only"},
+        )
+
+        owner_status, visible = self._request_json(
+            "GET",
+            f"/api/v1/requests/{request_id}",
+            token=owner["token"],
+        )
+        self.assertEqual(owner_status, 200, visible)
+        self.assertEqual(visible["result"]["marker"], "owner-visible-only")
+
+        foreign_status, foreign = self._request_json(
+            "GET",
+            f"/api/v1/requests/{request_id}",
+            token=other["token"],
+        )
+        unknown_status, unknown = self._request_json(
+            "GET",
+            f"/api/v1/requests/{unknown_id}",
+            token=other["token"],
+        )
+
+        self.assertEqual(foreign_status, 404, foreign)
+        self.assertEqual(unknown_status, 404, unknown)
+        self.assertEqual(foreign["state"], "not_found")
+        self.assertEqual(unknown["state"], "not_found")
+        self.assertEqual(foreign["error"], "request_id is unknown or expired")
+        self.assertEqual(foreign["error"], unknown["error"])
+        self.assertEqual(foreign["request_id"], request_id)
+        self.assertEqual(unknown["request_id"], unknown_id)
+        self.assertNotIn("result", foreign)
+        self.assertNotIn("owner-visible-only", str(foreign))
+        self.assertEqual(self.worker.frames, [])
+
+        denied = [
+            record
+            for record in self.security.list_audit(agent_id="request-reader", limit=20)
+            if record["path"].startswith("/api/v1/requests/")
+        ]
+        by_request_id = {record["request_id"]: record for record in denied}
+        self.assertEqual(set(by_request_id), {request_id, unknown_id})
+        for denied_id in (request_id, unknown_id):
+            record = by_request_id[denied_id]
+            self.assertEqual(record["decision"], "denied")
+            self.assertEqual(record["http_status"], 404)
+            self.assertEqual(
+                record["reason_code"], "REQUEST_NOT_FOUND_OR_NOT_OWNED"
+            )
+            self.assertIsNone(record["payload_bytes"])
+            self.assertIsNone(record["payload_sha256"])
+
+    def test_revoked_token_is_rejected_by_existing_http_server(self):
+        issued = self.security.issue_token(
+            "revocation-live-http",
+            ["runtime.read"],
+        )
+
+        first_status, first = self._request_json(
+            "GET",
+            "/api/v1/runtime/capabilities",
+            token=issued["token"],
+        )
+        self.assertEqual(first_status, 200, first)
+        self.assertEqual(first["state"], "negotiated")
+
+        self.assertTrue(self.security.revoke_token(issued["token_id"]))
+
+        second_status, second = self._request_json(
+            "GET",
+            "/api/v1/runtime/capabilities",
+            token=issued["token"],
+        )
+        self.assertEqual(second_status, 401, second)
+        self.assertEqual(second["error"]["code"], "INVALID_AGENT_TOKEN")
+        self.assertEqual(self.worker.frames, [])
+
+        audit = self.security.list_audit(
+            agent_id="revocation-live-http",
+            limit=10,
+        )
+        self.assertTrue(
+            any(
+                record["decision"] == "revoked"
+                and record["reason_code"] == "AGENT_TOKEN_REVOKED"
+                and record["http_status"] == 200
+                for record in audit
+            )
+        )
 
     def test_authorization_attempts_are_audited_without_script_body(self):
         status, _ = self._request_json(

@@ -24,6 +24,7 @@ class CredentialNotFound(CredentialStoreError):
 class CredentialStore(Protocol):
     def store(self, agent_id: str, token: str) -> None: ...
     def load(self, agent_id: str) -> str: ...
+    def exists(self, agent_id: str) -> bool: ...
     def delete(self, agent_id: str) -> bool: ...
 
 
@@ -131,6 +132,22 @@ class WindowsCredentialStore:
             raise CredentialStoreError(
                 f"Windows Credential Manager write failed (error {code})"
             )
+
+    def exists(self, agent_id: str) -> bool:
+        """Check whether an Agent credential exists without decoding its secret."""
+        target = self._target(agent_id)
+        pointer = ctypes.POINTER(_CREDENTIALW)()
+        if self._advapi32.CredReadW(
+            target, self.CRED_TYPE_GENERIC, 0, ctypes.byref(pointer)
+        ):
+            self._advapi32.CredFree(pointer)
+            return True
+        code = ctypes.get_last_error()
+        if code == self.ERROR_NOT_FOUND:
+            return False
+        raise CredentialStoreError(
+            f"Windows Credential Manager lookup failed (error {code})"
+        )
 
     def load(self, agent_id: str) -> str:
         target = self._target(agent_id)
