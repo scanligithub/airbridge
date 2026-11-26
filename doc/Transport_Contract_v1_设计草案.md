@@ -128,6 +128,40 @@ v1 不要求所有 Provider 支持所有可选能力。必需的基础接口与�
 5. 能力发生变化时，Provider 应提供刷新机制；Skill 不应无限期缓存能力。
 6. 对条件支持的能力，必须明确条件与限制；不满足条件时按不支持处理。
 
+
+### 4.4 能力与接口门控映射（v1 必须明确）
+
+能力声明不是说明性元数据；每个可选接口调用都必须有可判定的能力门控。Provider 在能力缺失、为 `unsupported`、条件不满足或快照过期时，必须在提交任何副作用请求前拒绝调用。不得仅因为某个 HTTP 路由或底层函数存在，就推断对应契约能力已支持。
+
+| 契约接口/操作 | 必需能力 | 说明 |
+|---|---|---|
+| `get_capabilities()` | `runtime.capabilities.read`（初始化协商所需的基础能力） | 能力快照本身必须可读取；不能用快照内的能力声明循环授权首次读取 |
+| `get_runtime_info()` | `runtime.identity.read` | 只描述通用运行时身份；若 Provider 无此信息，应明确不支持，不得用 EDA 版本信息代替 |
+| `ShellTransport.submit()` | `shell.execute` | 仅表示允许提交 Shell 操作，不隐含状态查询、结果查询或去重 |
+| Shell `get_status()` | `shell.status_query` 或明确适用于 SHELL 的 `request.status_query` | 两种声明同时存在时语义保证必须一致 |
+| Shell `get_result()` | `shell.result_query` 或明确适用于 SHELL 的 `request.result_query` | 不得由 status query 推断 result query |
+| `FilesystemTransport.list()` | `filesystem.list` | 不得只凭 `filesystem.read` 推断目录列举 |
+| `FilesystemTransport.stat()` | `filesystem.stat` | 不得只凭 `filesystem.read` 推断元数据查询 |
+| `FilesystemTransport.read()` | `filesystem.read` | 读取能力不隐含写入能力 |
+| `FilesystemTransport.write()` | `filesystem.write` | 具体 write mode 还必须受 capability limits/conditions 约束 |
+| `FilesystemTransport.mkdir()` | `filesystem.mkdir` | 不得由 write 能力推断 |
+| `FilesystemTransport.move()` | `filesystem.move` | 必须声明跨文件系统和原子性语义 |
+| `FilesystemTransport.remove()` | `filesystem.remove` | 必须声明递归删除等边界 |
+| 所有 chunked-transfer 方法 | `filesystem.chunked_transfer` | 该能力必须覆盖 begin/put/status/complete/abort 的完整生命周期及声明的恢复保证；不得只实现上传而宣称完整分块传输 |
+| `find_by_client_request_id()` | `request.lookup_by_client_id` | 仅支持明确声明的 operation_kind |
+| `get_request_status()` | `request.status_query` | 仅支持明确声明的 operation_kind |
+| `get_request_result()` | `request.result_query` | 仅支持明确声明的 operation_kind |
+| 对重复提交提供安全去重保证 | `request.deduplication` | 仅对声明的 operation_kind、键作用域、payload 规范化版本和保留期限有效；不能作为所有操作的全局保证 |
+| 将后续响应关联到原请求 | `request.correlation` | 只保证关联，不代表去重、状态查询或结果查询 |
+
+补充规则：
+
+1. `request.correlation`、`request.lookup_by_client_id`、`request.status_query`、`request.result_query` 和 `request.deduplication` 必须分别声明；任何一个都不能自动推导另一个。
+2. `filesystem.chunked_transfer` 是一个完整扩展能力。Provider 必须声明它覆盖的动作集合、每个动作的请求关联/去重保证、块回执持久性和恢复边界；如果某动作不支持，应将该能力标记为 conditional 并明确条件，或整体标记为 unsupported，不能让调用方误以为五个动作都可用。
+3. 通用请求跟踪能力必须声明支持的 `operation_kind` 集合。能力名称存在但没有覆盖当前操作类型时，视为不支持。
+4. 每个接口的调用方仍须通过服务端认证和授权；能力快照不是授权凭据，也不能扩大服务端 Scope。
+5. Provider 的 conformance tests 必须验证“声明支持的能力确实可调用”和“声明不支持/条件不满足时在提交前拒绝”，不能只测试能力 JSON 的格式。
+
 ## 5. 核心接口草案
 
 以下为语言无关的逻辑接口，不限定 Python、TypeScript 或具体包布局。
@@ -439,7 +473,7 @@ Correlation 只解决“找到同一个请求”，不保证重复提交不会�
 | `COMPLETED_SUCCESS` | 已确认执行成功 |
 | `COMPLETED_FAILURE` | 已确认执行完成但失败 |
 | `REJECTED` | 后端明确拒绝，且能保证没有执行 |
-| `UNKNOWN` | 无法确认请求是否执行或最终结果 |
+| `UNKNOWN` | 已提交请求可能已被接受或执行，但当前无法确认其执行状态或最终结果 |
 
 Provider 可将状态映射为更少的内部状态，但不得丢失“已确认”与“未知”的语义差异。
 
@@ -579,21 +613,27 @@ Credential Source 负责按调用上下文提供凭据；Provider 负责安全�
 
 Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了测试方便而提供生产 Provider 不具备的隐式保证。
 
-建议契约测试套件：
+建议契约测试套件至少覆盖以下场景；标注“仅在声明支持时”的测试必须同时验证支持路径和不支持路径，不能跳过能力门控验证：
 
-1. Contract version compatibility。
-2. Capability declaration and unsupported operation behavior。
-3. Request ID preservation and provider ID mapping。
-4. Lookup by client_request_id after a lost submission response（仅在声明支持时）。
-5. Same-key/same-payload and same-key/different-payload behavior（仅在声明 dedup 时）。
-6. Submission interruption and SUBMISSION_UNKNOWN。
-7. Status/result query consistency（仅在声明支持时）。
-8. UNKNOWN does not trigger blind resubmission。
-9. Read-only / idempotent / non-idempotent retry policy。
-10. File path, overwrite, append and conflict semantics。
-11. Chunk duplicate, conflicting chunk, integrity failure and resume semantics（仅在声明 chunked transfer 时）。
-12. Error redaction and credential non-disclosure。
-13. Provider close and resource cleanup。
+1. Contract version compatibility：兼容版本可初始化；不兼容版本在任何副作用提交前失败。
+2. Capability declaration and operation gating：每个接口与能力映射一致；unsupported、conditional 条件不满足、能力未知或快照过期时，副作用操作在提交前被拒绝。
+3. Request ID preservation and provider ID mapping：首次提交、查询、恢复均保留原 client_request_id；验证 provider_request_id 映射及其作用域。
+4. Lookup after lost submission response：提交响应丢失且调用方尚无 provider_request_id 时，按原 client_request_id 查找；验证 FOUND、AUTHORITATIVE_NOT_FOUND、INDETERMINATE 三种结果的边界。
+5. Same-key/same-payload and same-key/different-payload：仅在声明 dedup 时验证缓存/原请求返回、载荷冲突拒绝及并发重复提交；验证 request_kind、目标资源和语义选项参与 payload digest。
+6. Deduplication retention and expiry：保留期内重复提交不产生第二次副作用；记录过期后不得虚构 AUTHORITATIVE_NOT_FOUND 或安全重放保证。
+7. Submission interruption：提交调用在请求可能已离开调用方后中断，状态进入 SUBMISSION_UNKNOWN；不得把本地异常映射成 REJECTED。
+8. Synchronous and asynchronous providers：同步完成直接返回 OperationResult；异步提交返回 Submission；两条路径保留一致的请求 ID、状态和副作用语义。
+9. Status/result query consistency：分别验证状态查询和结果查询；只支持其中之一时，另一接口必须明确拒绝。
+10. UNKNOWN reconciliation：查询超时、断线、重启和旧快照不得把 UNKNOWN 自动变成失败或未提交；只有权威证据才能推进状态，已确认终态不得被旧观察回退。
+11. Ownership isolation：跨 Agent/主体猜测 request ID 时，不能泄漏请求存在性、状态、结果或 payload digest；同时验证合法所有者可查询。
+12. Retry classification：READ_ONLY、IDEMPOTENT_WRITE、NON_IDEMPOTENT、UNKNOWN_SEMANTICS 分别验证；仅有 correlation 或 result query 时，非幂等操作不得自动重放。
+13. Filesystem semantics：CREATE_NEW、REPLACE、APPEND、CONDITIONAL_REPLACE；目标已存在/不存在、权限失败、非原子条件写、部分写入、跨卷 move、递归 remove 等边界。
+14. Partial write and effect reporting：验证 FULLY_APPLIED、NOT_APPLIED、PARTIALLY_APPLIED、UNKNOWN 与执行状态分开表达；部分写入不能伪装为成功。
+15. Chunk transfer lifecycle：begin 响应丢失恢复、相同块重试、不同内容同序号冲突、已确认块持久性、断线/重启恢复、长度/摘要校验，以及 abort/complete 并发竞争。
+16. Credential Source and redaction：凭据不可用、过期、撤销；验证秘密不进入日志、异常、能力快照、请求状态或结果，且不会触发凭据探测或 Scope 扩大。
+17. Provider close and resource cleanup：关闭后行为明确；线程、文件句柄、临时传输记录按声明清理。
+
+Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”当成真实 Provider 已具备保证。测试报告应记录 Provider 名称/版本、能力快照、适用 operation_kind、跳过的可选能力测试及原因。
 
 测试分层：
 
@@ -615,12 +655,27 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 | Shell 提交 | 已有 HTTP API | 映射到 ShellTransport |
 | Shell 请求跟踪 | 已有 Request Tracker / 状态查询路径 | 核实保留期限、状态语义和去重保证 |
 | Shell 去重 | 不能仅凭 Request ID 宣称完整去重 | 逐项验证键作用域、持久性、载荷冲突和并发行为 |
-| RFS 读写 | 已有同步 RFS 路径 | 映射通用文件操作 |
-| RFS 请求 ID | Host A 内部使用自己的整数请求 ID；Skill 传入 ID 不等同于服务端关联 ID | 定义 client/provider ID 映射或明确声明不支持 |
-| RFS 去重/结果查询 | 当前审计未证实具备与 Shell 等价的保证 | 不声明支持，除非补充实现并验证 |
-| 分块传输 | Skill 有分块上传流程 | 与后端确认、完整性校验、恢复语义分开审计 |
+| RFS 文件操作 | `fs_engine.py` 提供 drives/list/read/write/mkdir/remove/move/stat 等同步原语；HTTP 路由通过现有 RFS 请求路径转发 | 可映射文件原语，但逐项核实路径边界、写模式、部分写入、原子性和删除语义 |
+| RFS 请求 ID | RFS 载荷使用 `req_id`，由 Host A 的请求等待/串口响应路径关联；该 ID 不等同于持久化的契约 client_request_id/provider_request_id 映射 | 当前不声明通用 RequestTracking；先定义并验证映射或明确不支持 |
+| RFS 去重/结果查询 | 静态审计未发现 RFS 操作接入 B 侧 RequestBroker；现有 req_id 响应关联不等于持久化去重或结果查询 | 不声明 request.deduplication、request.lookup_by_client_id 或 request.result_query 覆盖 RFS |
+| RFS 写入语义 | 当前写接口以文本/ Base64 和覆盖/追加模式执行；没有契约级 CREATE_NEW/CONDITIONAL_REPLACE、写入原子性或部分写入回执模型 | 逐项声明实际 write mode 和 effect；未实现的模式必须拒绝 |
+| RFS 删除/移动 | 当前 remove 对目录使用递归删除；move 使用 shutil.move，未在契约层声明跨卷原子性 | 需明确递归删除和跨文件系统语义，不能默认满足 v1 保证 |
+| 分块传输 | Capture Skill 存在分块上传流程，但该流程通过 Shell staging/publish 与独立请求 ID 组织，不等同于 RFS 原生 chunked-transfer API | 不能据此声明 filesystem.chunked_transfer；需单独实现/验证完整 begin/put/status/complete/abort 契约 |
 | 凭据来源 | 当前 Capture Skill 客户端直接处理 Bearer 凭据/环境变量 | 引入 Credential Source 抽象，但不扩大权限 |
 | Fake Provider | 现有测试可进一步盘点 | 建立公共契约测试套件 |
+
+### 12.1 静态代码证据与能力边界
+
+以下观察来自本次对 `main` 分支代码的静态检查；只说明代码结构，不代表 Host A/Host B 运行验收：
+
+- `request_broker.py`：B 侧 SQLite RequestBroker 对 UUID request_id 建立唯一记录；payload 使用排序 JSON 和 SHA-256 摘要；同 ID、不同 request_kind 或不同摘要返回冲突；相同请求返回 in-progress 或缓存结果。默认 TTL 为 24 小时，默认最多 10000 条记录，并有运行中请求心跳/过期转 UNKNOWN 逻辑。
+- `airbridge_app.py`：EDA Execute 与 Shell Execute 路径接入 RequestBroker；因此不能将现有 Shell/EDA 请求保护简单描述为“只有客户端 UUID”。但其当前字段是单一 request_id，并非草案中的 client_request_id/provider_request_id 双 ID 模型。
+- `request_tracker.py`：A 侧 RequestTracker 是内存中的 HTTP/ABFP 请求响应关联表，默认 TTL 15 分钟、最多 500 条；它与 B 侧持久化 RequestBroker 是不同层次，不应混为一个具有统一持久性保证的 Tracker。
+- `agent_security.py` 与 HTTP API：存在 Agent 请求 owner 绑定和读取隔离检查；这证明部分 API 路径具备所有权控制实现，但不能替代对所有 Provider 操作类型、跨重启和请求记录保留边界的契约测试。
+- `fs_engine.py`：RFS 的文件操作由独立同步原语执行；`dispatch` 使用 `req_id` 回传关联，文件操作本身没有接入上述 RequestBroker 的证据。RFS 读、写、删除、移动的行为还存在契约需要明确的限制（例如读取预览截断、追加模式、目录递归删除、跨卷移动）。
+- Capture Skill 的分块上传记录每块请求 ID，并通过 Shell staging/publish 进行传输编排；这不等于 Provider 已提供通用 chunked-transfer 生命周期接口或分块服务端去重保证。
+
+因此，本草案的当前 AirBridge 能力声明应采取保守映射：Shell 可继续验证现有 Broker 能力；RFS 的 correlation、lookup、dedup、result query 和 chunked transfer 均保持未声明/未证实，直至专门的 Provider conformance tests 通过。
 
 ### 12.1 迁移限制
 
