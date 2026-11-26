@@ -173,7 +173,8 @@ ShellTransport
     FOUND {
       client_request_id,
       provider_request_id,
-      status,
+      status?,
+      status_availability,
       payload_digest?,
       accepted_at?,
       result_reference?
@@ -241,7 +242,7 @@ abort_transfer(transfer_id) -> AbortReceipt
 
 - transfer ID 的作用域、有效期和所有权；
 - 分块大小、总块数、序号规则；
-- 相同 transfer ID、块序号和块摘要重复提交时，Provider 是否返回原回执而不重复产生副作用；
+- 相同 transfer ID、块序号和块摘要重复提交时，Provider 必须明确是否返回原回执而不重复产生副作用；若不保证，则不得将块提交描述为可安全重试；
 - 不同内容重复提交相同块序号时必须返回冲突，不能覆盖已确认块；
 - 分块回执是否在断线/进程重启后仍有效，以及查询状态是否能区分已确认、未确认和未知块；
 - 已确认块的持久性及查询方式；
@@ -290,7 +291,9 @@ Correlation 只解决“找到同一个请求”，不保证重复提交不会�
 - 同一键、同一载荷的重复提交行为；
 - 同一键、不同载荷的冲突行为；
 - 并发重复提交的处理；
-- 去重记录过期后的行为。
+- 去重记录过期后的行为；
+- 规范化 payload 的字段集合、编码方式、摘要算法及版本；
+- 去重记录与请求接收/副作用之间的原子性边界；
 
 建议将规范化请求的 payload digest 与请求标识绑定。规范化输入至少应覆盖操作类型、目标资源、命令/内容、影响语义的选项及写入模式；不应纳入易变的传输元数据（如重试计数、连接地址）。Provider 必须声明摘要算法与规范化版本，避免不同实现对同一请求计算出不一致的 digest。相同 key 对应不同 digest 必须明确拒绝，不能悄悄执行第二个请求。
 
@@ -311,7 +314,7 @@ Correlation 只解决“找到同一个请求”，不保证重复提交不会�
 
 | 状态 | 含义 |
 |---|---|
-| `NOT_SUBMITTED` | 已确认请求尚未交给 Provider；或在本地校验阶段被拒绝且没有发生提交 |
+| `NOT_SUBMITTED` | 调用方确认尚未开始提交；仅表示提交前状态，不表示 Provider 已拒绝 |
 | `SUBMISSION_UNKNOWN` | 提交调用发生中断，无法确认后端是否接受 |
 | `ACCEPTED` | Provider 明确确认已接受请求 |
 | `RUNNING` | 后端明确报告正在执行 |
