@@ -8,15 +8,17 @@ Runtime-Adapter execution behavior. Request correlation and deduplication
 are implemented by the Worker / RequestBroker layers using legacy ABFP frames.
 """
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from build_identity import BUILD_VERSION, get_build_identity
 from protocol import FrameType, MAX_PAYLOAD_LEN
 
 SCHEMA_VERSION = 1
 SESSION_PROTOCOL_ID = "runtime-session.v1"
-CLIENT_VERSION = "airbridge-v2.4"
+CLIENT_VERSION = BUILD_VERSION
 IMPLEMENTED_FEATURES = ("handshake", "request.correlation", "request.deduplication", "shell.task.result-query")
 
 
@@ -83,7 +85,9 @@ def make_session_hello(client_version: str = CLIENT_VERSION) -> Dict[str, Any]:
 def make_session_capabilities(
     correlation_id: str,
     server_version: str = CLIENT_VERSION,
+    build_identity: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
+    identity = dict(build_identity or get_build_identity())
     return create_envelope(
         {
             "supported_protocols": [SESSION_PROTOCOL_ID],
@@ -94,10 +98,57 @@ def make_session_capabilities(
             "features": list(IMPLEMENTED_FEATURES),
             "profiles": [],
             "server_version": server_version,
+            "build_identity": identity,
             "max_frame_payload": MAX_PAYLOAD_LEN,
         },
         correlation_id=correlation_id,
     )
+
+
+def _validate_build_identity(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise SessionProtocolError("payload.build_identity must be an object")
+    required = {
+        "build_commit",
+        "build_version",
+        "build_timestamp",
+        "build_platform",
+    }
+    if not required.issubset(value):
+        raise SessionProtocolError("payload.build_identity is missing required fields")
+
+    commit = value.get("build_commit")
+    if not isinstance(commit, str) or not (
+        commit == "unknown" or re.fullmatch(r"[0-9a-f]{40}", commit)
+    ):
+        raise SessionProtocolError(
+            "payload.build_identity.build_commit must be a full Git SHA or 'unknown'"
+        )
+
+    version = value.get("build_version")
+    if not isinstance(version, str) or not version.strip() or len(version) > 64:
+        raise SessionProtocolError("payload.build_identity.build_version is invalid")
+
+    timestamp = value.get("build_timestamp")
+    if not isinstance(timestamp, str) or not timestamp:
+        raise SessionProtocolError("payload.build_identity.build_timestamp is invalid")
+    if timestamp != "unknown":
+        try:
+            parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise SessionProtocolError(
+                "payload.build_identity.build_timestamp must be ISO-8601 UTC"
+            ) from exc
+        if parsed.tzinfo is None or parsed.utcoffset().total_seconds() != 0:
+            raise SessionProtocolError(
+                "payload.build_identity.build_timestamp must be UTC"
+            )
+
+    platform = value.get("build_platform")
+    if not isinstance(platform, str) or not re.fullmatch(
+        r"[a-z0-9][a-z0-9._-]{0,63}", platform
+    ):
+        raise SessionProtocolError("payload.build_identity.build_platform is invalid")
 
 
 def validate_session_envelope(frame_type: int, envelope: Any) -> Dict[str, Any]:
@@ -170,6 +221,8 @@ def validate_session_envelope(frame_type: int, envelope: Any) -> Dict[str, Any]:
         server_version = payload.get("server_version")
         if not isinstance(server_version, str) or not server_version.strip():
             raise SessionProtocolError("payload.server_version is required")
+        if "build_identity" in payload:
+            _validate_build_identity(payload["build_identity"])
 
     return envelope
 
