@@ -150,10 +150,17 @@ Configure these variables in the environment of the AirBridge desktop process on
 | Variable | Default | Meaning |
 |---|---:|---|
 | AIRBRIDGE_AGENT_SECURITY_DB | `%LOCALAPPDATA%\\AirBridge\\agent_security.sqlite3` | Local credential, ownership, quota reservation and audit database |
+| AIRBRIDGE_ALLOW_EDA_EXECUTE | `0` | Independent Host-A HTTP API server kill switch; EDA requests are denied unless explicitly enabled, even when the Agent has `eda.execute` |
 | AIRBRIDGE_AGENT_READ_RPM | `60` | Per-Agent ordinary API requests per minute |
 | AIRBRIDGE_AGENT_STATUS_RPM | `120` | Per-Agent request-status lookups per minute |
 | AIRBRIDGE_AGENT_EXECUTE_RPM | `5` | Per-Agent EDA submission attempts per minute |
 | AIRBRIDGE_AGENT_MAX_PENDING_EDA | `1` | Maximum simultaneous uncompleted EDA requests per Agent |
+
+The independent server-side `AIRBRIDGE_ALLOW_EDA_EXECUTE` switch defaults to OFF
+and is configured in the Host-A AirBridge desktop/API process environment. It
+must be explicitly enabled in addition to the Gateway-side
+`AIRBRIDGE_ENABLE_EDA_EXECUTE=1` setting and the Agent's `eda.execute` scope.
+All three controls are required; leaving any one disabled blocks EDA submission.
 
 The sliding-window rate counters are in memory and reset when the AirBridge
 HTTP service process restarts. In-flight EDA reservations and request ownership

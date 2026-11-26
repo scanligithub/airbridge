@@ -145,6 +145,7 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             self.worker,
             port=0,
             security_store=self.security,
+            allow_eda_execute=True,
         )
         self.server.start()
         self.base_url = f"http://127.0.0.1:{self.server.port}"
@@ -640,6 +641,45 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(denial["token_id"], read_only["token_id"])
         self.assertEqual(denial["http_status"], 403)
 
+    def test_server_eda_kill_switch_blocks_scoped_agent_by_default(self):
+        with patch.dict(os.environ, {"AIRBRIDGE_ALLOW_EDA_EXECUTE": "0"}):
+            blocked = AntigravityIPCServer(
+                self.worker,
+                port=0,
+                security_store=self.security,
+            )
+        self.assertFalse(blocked.allow_eda_execute)
+        blocked.start()
+        try:
+            frame_count = len(self.worker.frames)
+            status, body = self._request_json(
+                "POST",
+                "/api/v1/eda/execute",
+                {"script": "puts must_not_run"},
+                base_url=f"http://127.0.0.1:{blocked.port}",
+            )
+        finally:
+            blocked.stop()
+
+        self.assertEqual(status, 403, body)
+        self.assertEqual(body["state"], "disabled")
+        self.assertEqual(
+            body["error"]["code"], "EDA_EXECUTION_DISABLED_SERVER"
+        )
+        self.assertEqual(len(self.worker.frames), frame_count)
+        denial = next(
+            (
+                record
+                for record in self.security.list_audit(limit=20)
+                if record["path"] == "/api/v1/eda/execute"
+                and record["reason_code"] == "EDA_EXECUTION_DISABLED_SERVER"
+            ),
+            None,
+        )
+        self.assertIsNotNone(denial)
+        self.assertEqual(denial["agent_id"], "test-agent")
+        self.assertEqual(denial["http_status"], 403)
+
     def test_scope_denial_precedes_body_read(self):
         read_only = self.security.issue_token(
             "scope-order-agent",
@@ -853,6 +893,7 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
             self.worker,
             port=0,
             security_store=self.security,
+            allow_eda_execute=True,
             max_pending_eda_per_agent=1,
         )
         limited.start()

@@ -1758,6 +1758,7 @@ class AntigravityIPCServer:
     worker: SerialWorker,
     port: int = 8888,
     security_store: Optional[AgentSecurityStore] = None,
+    allow_eda_execute: Optional[bool] = None,
     read_requests_per_minute: Optional[int] = None,
     status_requests_per_minute: Optional[int] = None,
     execute_requests_per_minute: Optional[int] = None,
@@ -1774,6 +1775,11 @@ class AntigravityIPCServer:
     self._active_handlers = 0
     self._shutting_down = False
     self._shutdown_timeout_seconds = 5.0
+    if allow_eda_execute is None:
+      allow_eda_execute = os.environ.get(
+          "AIRBRIDGE_ALLOW_EDA_EXECUTE", "0"
+      ).strip().lower() in ("1", "true", "yes", "on")
+    self.allow_eda_execute = bool(allow_eda_execute)
 
     def _positive_limit(value: Optional[int], env_name: str, default: int) -> int:
       raw = os.environ.get(env_name, str(default)) if value is None else value
@@ -1812,6 +1818,7 @@ class AntigravityIPCServer:
     worker_ref = self.worker
     server_owner = self
     security_ref = self.security_store
+    allow_eda_execute = self.allow_eda_execute
     read_requests_per_minute = self.read_requests_per_minute
     status_requests_per_minute = self.status_requests_per_minute
     execute_requests_per_minute = self.execute_requests_per_minute
@@ -1973,6 +1980,18 @@ class AntigravityIPCServer:
               "error": {
                   "code": "AGENT_SCOPE_DENIED",
                   "required_scope": required_scope,
+              },
+          })
+          return False
+
+        if required_scope == "eda.execute" and not allow_eda_execute:
+          self._audit_reason = "EDA_EXECUTION_DISABLED_SERVER"
+          self._reply_json(403, {
+              "success": False,
+              "state": "disabled",
+              "error": {
+                  "code": "EDA_EXECUTION_DISABLED_SERVER",
+                  "message": "EDA execution is disabled by the AirBridge server policy.",
               },
           })
           return False
