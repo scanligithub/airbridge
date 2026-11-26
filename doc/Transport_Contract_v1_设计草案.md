@@ -207,6 +207,98 @@ NEW -> NEGOTIATING -> READY -> CLOSING -> CLOSED
 8. 连接短暂中断但 Session 仍可安全恢复时，Session 可保持 READY 但副作用调用必须按连接/能力快照有效性门控；若 Provider 身份、Contract/Profile 版本或安全主体上下文变化，则当前 Session 不得继续 READY，必须 FAILED/CLOSED 并由 Factory 创建新 Session。
 9. 生命周期状态是本地控制状态，不得通过远端 RequestStatus 伪造，也不得把 Session CLOSED 推导为任何远端请求的终态。
 
+### 2.5 多 Agent Host 兼容、隔离与复用边界（提案）
+
+同一个 EDA Product Skill 应保持一份与 Agent Host 无关的领域实现；每个 Agent Host 通过独立 Host Adapter 接入。Host Adapter 负责把宿主的 Skill 加载、工具注册/调用、生命周期和可信主体上下文映射到共同的 Skill/Provider 装配边界。不得因 Host 不同而复制 Capture、Allegro 或其他 EDA 领域逻辑。
+
+**兼容关系分层：**
+
+| 组合关系 | 兼容责任 | 验证内容 |
+|---|---|---|
+| Skill ↔ Transport Contract | Skill 声明接受的 Core Contract 和必需 Profile/Capability | Contract/Profile 版本协商、公共 Conformance 行为 |
+| Skill ↔ Host Adapter | Skill 声明所需的抽象 Host 功能；Adapter 声明其实现的 Host 功能和已验证 Skill API 范围 | Skill 发现/加载、入口注册、输入输出映射、错误传播、取消/关闭语义、主体上下文注入 |
+| Host Adapter ↔ Agent Host | Adapter 声明支持的 Host 产品/版本范围 | 真实 Host 中的安装、加载、工具调用、并发、重载和卸载行为 |
+| Host Adapter ↔ Provider Factory/Runtime | Adapter 装配受信 Provider 配置、Credential Source 和 Runtime 生命周期 | Provider 选择、资源所有权、身份隔离、失败回收 |
+| Provider ↔ Backend | Provider 声明其实现的 Contract/Profile/Capability 及后端范围 | 公共 Conformance、Provider 集成和真实远端运行时验收 |
+
+某个 Skill 与 Contract 兼容，不代表它自动兼容所有 Agent Host；某个 Adapter 能加载 Skill，也不代表其 Provider 或远端后端通过验收。兼容矩阵必须分别记录上述关系，不能用单一 `compatible=true` 概括。
+
+**Host Adapter 的抽象能力声明：**
+
+建议 Host Adapter 声明机器可读的 `host_features`，而不是让 Skill 检查 `host_id == opencode` 或 `host_id == antigravity` 后分支执行领域逻辑。初始可评估的功能标识包括：
+
+- `skill.package.discover`：发现并验证 Skill 包及其 Manifest。
+- `skill.entry.register`：注册 Skill 入口/工具定义。
+- `skill.invocation.structured_input`：传递结构化输入并校验参数。
+- `skill.invocation.structured_output`：返回结构化结果和稳定错误。
+- `skill.lifecycle.unload`：在卸载时停止新调用并执行本地清理。
+- `skill.lifecycle.reload`：支持受控重载或明确声明不支持。
+- `identity.principal_context`：提供可信且不可由模型自由文本伪造的调用主体上下文。
+- `credential.binding`：能够装配符合 Credential Source 边界的受控凭据绑定；不意味着 Host 本身可以把秘密暴露给 Skill。
+- `invocation.concurrent_isolation`：并发调用间具备所需的上下文隔离。
+
+以上是建议的抽象功能名，最终是否全部进入 v1 需评审。Adapter 必须声明 `supported`、`unsupported` 或 `conditional`，并记录适用 Host 版本、条件和限制。Skill 只声明真正需要的抽象功能；缺少必需功能时，在注册可执行入口或执行副作用操作前 fail closed。
+
+**Manifest 示例（非冻结格式）：**
+
+```yaml
+host_adapter:
+  id: opencode-adapter
+  version: 0.1.0
+  host:
+    id: opencode
+    tested_versions: ["<明确测试过的版本范围>"]
+  implements_skill_api_versions: ["1.0.0"]
+  host_features:
+    - name: skill.package.discover
+      support: supported
+    - name: skill.entry.register
+      support: supported
+    - name: identity.principal_context
+      support: conditional
+      conditions: ["Host 提供已认证调用主体上下文"]
+    - name: credential.binding
+      support: conditional
+      conditions: ["配置了受信 Credential Source"]
+```
+
+```yaml
+skill:
+  id: orcad.capture
+  version: 0.4.0
+  host_requirements:
+    required_features:
+      - skill.package.discover
+      - skill.entry.register
+      - invocation.structured_input
+      - invocation.structured_output
+      - identity.principal_context
+      - credential.binding
+    optional_features:
+      - skill.lifecycle.reload
+```
+
+示例中的版本占位符不是可直接发布的兼容声明；实际 Manifest 必须列出明确验证过的 Host 版本范围和 Skill API 版本，不得使用 `latest` 或未验证的宽泛范围。`tested_host_adapters` 可作为发布测试记录，但不应取代基于 `host_features` 的运行时能力检查。
+
+**Runtime 与 Credential Source 的跨 Host 复用：**
+
+1. 不同 Agent Host 通常运行在不同进程或安全边界中；不得假设它们可以共享同一个进程内 Provider Runtime、Provider Session、Credential Source 实例或可变缓存。
+2. 不同 Host Adapter 可以各自连接同一个逻辑远端 Provider，但必须分别创建 Session、分别协商、分别绑定可信主体和凭据。共享同一远端地址不代表共享认证身份或请求所有权。
+3. 只有在明确存在独立、受信、具备主体隔离的 Runtime Manager 服务时，才可讨论跨进程复用底层连接；该服务本身必须成为独立安全边界并通过相应隔离测试。v1 不要求实现此机制。
+4. 同一 Host Adapter 进程内是否允许多个 Skill 共享 Runtime，仍遵守第 2.2 节规则：只能共享底层资源，不能共享 Session、主体上下文、凭据绑定或请求状态。
+5. Credential Source 的实现可以因 Host 而异（例如由宿主提供受控凭据集成，或使用 OS/组织凭据服务），但必须满足相同的 Credential Source 最小语义；不得把 Host 私有凭据 API 暴露给 Skill。
+6. 若 Host 无法提供可信主体上下文或安全凭据绑定，Adapter 必须明确不满足对应必需功能；不得通过把 Token 放入 Prompt、工具参数、Skill Manifest 或普通环境变量回退来“兼容”。
+
+**兼容性测试矩阵：**
+
+- Skill Unit Tests：同一 Skill 领域实现使用 Fake Provider/Fake Host Adapter 测试，不依赖真实 Host。
+- Host Adapter Contract Tests：用标准化 Host Adapter 测试夹具验证发现、注册、结构化输入输出、生命周期、错误映射和主体上下文边界。
+- Host Compatibility Tests：在每个真实 Host 及明确版本上验证安装、加载、调用、并发、重载和卸载；记录 Host/Adapter/Skill 版本。
+- Security Compatibility Tests：验证主体上下文不可伪造、凭据不进入模型上下文、不同 Host/主体之间无 Session 或凭据串用。
+- End-to-End Compatibility：按 Skill × Host Adapter × Agent Host 版本 × Provider × Contract/Profile 组合记录结果；只对实际执行过的组合标记 PASS。
+
+Fake Host Adapter 通过只证明抽象适配契约测试通过，不代表 Antigravity、OpenCode 或其他真实 Host 已通过兼容验收。新增 Host 时应新增/验证 Adapter，而不是复制或修改 EDA Skill 的领域实现。
+
 ## 3. 版本与兼容性
 
 建议使用独立语义版本：
@@ -1206,6 +1298,10 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 24. Skill unload/reload and concurrency：卸载/重载一个 Skill 不影响其他 Session；并发 Skill 实例拥有独立 Session；多主体不得共享主体上下文。
 25. Host Adapter crash/shutdown：验证本地资源回收策略、未完成请求 UNKNOWN 保留，以及本地 shutdown 不产生远端取消/失败结论。
 26. Provider Session state machine and concurrent close：验证 NEW/NEGOTIATING 时业务操作被拒绝，只有门控全部通过才 READY；close 幂等、并发关闭只释放一次，CLOSED 后不自动重建；close 与提交竞争时保留 UNKNOWN 语义。
+27. Host Adapter feature negotiation：验证 Skill 必需 host_features 均满足后才注册入口；conditional 条件未满足时 fail closed；Host 专有 schema/对象不泄漏到 Skill API。
+28. Multi-Host isolation：验证不同 Host Adapter 即使连接同一 Provider，也使用独立 Session/主体/凭据绑定；不得共享进程内 Runtime 或可变缓存，除非通过独立 Runtime Manager 安全验证。
+29. Real Host compatibility matrix：分别验证真实 Host 产品/版本上的安装、加载、结构化调用、并发、重载、卸载和错误传播；Fake Host PASS 不得标记真实 Host PASS。
+30. Cross-Host credential boundary：验证 Host 私有凭据机制只在 Adapter/Credential Source 内部，Token 不进入 Prompt、工具参数、Skill Manifest、普通日志或结果。
 
 Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”当成真实 Provider 已具备保证。测试报告应记录 Provider 名称/版本、能力快照、适用 operation_kind、跳过的可选能力测试及原因。
 
@@ -1280,6 +1376,8 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 | Provider 生命周期 | 每个 Skill/调用上下文独立 Provider Session；底层 Runtime 可选共享，Session close 不关闭共享 Runtime；Runtime 由 Host Adapter/Factory 所有者关闭 | Proposed |
 | Provider 装配 | Provider Factory 属于 Host Adapter 装配层；受信 alias 解析、创建独立 Session；Contract/Profile/Capability bootstrap 成功前 Skill 不 ready | Proposed |
 | Session 状态机 | Provider Session 采用 NEW/NEGOTIATING/READY/FAILED/CLOSING/CLOSED 本地状态；仅 READY 接受已授权操作，CLOSED 不可重开 | Proposed |
+| 多 Host 兼容 | 同一 Skill 领域实现通过独立 Host Adapter 接入；以抽象 host_features 和真实 Host 兼容矩阵验证，不以 Host 名称分支领域逻辑 | Proposed |
+| 跨 Host 资源隔离 | 不同 Host 默认独立 Session/主体/凭据绑定，不假设共享进程内 Runtime；跨进程共享需独立受信 Runtime Manager，v1 不要求 | Proposed |
 | 断线恢复 | 物理连接恢复不改变 UNKNOWN；Provider 身份/版本变化时新建 Session 并重新协商；重连不得隐式重放非幂等操作 | Proposed |
 
 这些是供评审的建议，不应在未获批准前视为已冻结的架构决策。
@@ -1290,8 +1388,9 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 2. 将能力模型、数据类型和错误模型形成可测试的接口定义。
 3. 定义 Core Contract、Optional Profiles 及其版本/Conformance Suite 映射。
 4. 定义 Provider Runtime、Session、Factory 装配、资源所有权、主体隔离和重连语义。
-5. 建立 Fake Provider、Fake Factory 与公共 Contract/Host Adapter lifecycle tests。
-6. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
+5. 建立 Fake Provider、Fake Factory、Fake Host Adapter 与公共 Contract/Host Adapter lifecycle tests。
+6. 定义 Host Adapter feature manifest 和真实 Host 兼容测试矩阵；逐个验证目标 Host，不把 Fake Host 结果当成真实兼容。
+7. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
 7. 在独立测试中验证 Provider 与 Fake Provider 的契约一致性。
 8. 通过兼容性测试后，迁移 OrCAD Capture Skill。
 9. 后续独立迁移 OrCAD PCB Editor、Allegro、AD 等 Skills；它们之间不形成依赖。
@@ -1354,6 +1453,11 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] Skill 卸载/重载和并发实例不会串用 Session 或调用主体。
 - [ ] Host Adapter 崩溃/关闭不把本地退出解释为远端取消或请求失败。
 - [ ] Provider Session 生命周期状态与远端 RequestState 分离；只有 READY 接受操作，close 幂等且 CLOSED 为终态。
+- [ ] Skill 与 Agent Host 通过独立 Host Adapter 解耦，同一 Skill 不复制 Host/EDA 领域实现。
+- [ ] Host Adapter 声明抽象 host_features；Skill 必需功能未满足时不得注册可执行入口。
+- [ ] 不同 Host 默认不共享进程内 Runtime、Session、Credential Source 实例或可变缓存。
+- [ ] Host/Adapter/Skill/Provider/Contract 兼容矩阵分别记录规范、契约测试和真实 Host 验收结果。
+- [ ] Fake Host Adapter PASS 不得替代真实 Agent Host 兼容验收。
 - [ ] 本文评审通过前，不进行生产 Skill 迁移。
 
 ---
