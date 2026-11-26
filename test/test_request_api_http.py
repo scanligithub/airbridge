@@ -29,6 +29,7 @@ class FakeWorker:
         self.frames = []
         self.shell_task_finished = True
         self.shell_task_missing = False
+        self.peer_build_identity = None
 
     def is_serial_connected(self):
         return self.connected
@@ -48,6 +49,7 @@ class FakeWorker:
         return {
             "state": "negotiated",
             "features": ["handshake", "request.correlation", "request.deduplication", "shell.task.result-query"],
+            "peer_build_identity": self.peer_build_identity,
         }
 
     def send_frame(self, frame_type, payload=b""):
@@ -118,6 +120,37 @@ class FakeWorker:
 
 
 class CorrelatedRequestHTTPTests(unittest.TestCase):
+    def test_capabilities_endpoint_exposes_peer_build_identity_read_only(self):
+        identity = {
+            "build_commit": "a" * 40,
+            "build_version": "airbridge-v2.4",
+            "build_timestamp": "2026-11-26T02:30:00Z",
+            "build_platform": "windows-x64",
+        }
+        self.worker = FakeWorker()
+        self.worker.peer_build_identity = identity
+        self.security = AgentSecurityStore(":memory:")
+        issued = self.security.issue_token("build-identity-test", ["runtime.read"])
+        server = AntigravityIPCServer(
+            self.worker,
+            port=0,
+            security_store=self.security,
+        )
+        server.start()
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.port}/api/v1/runtime/capabilities",
+                headers={"Authorization": "Bearer " + issued["token"]},
+                method="GET",
+            )
+            with urllib.request.urlopen(request, timeout=3.0) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(body["peer_build_identity"], identity)
+            self.assertEqual(self.worker.frames, [])
+        finally:
+            server.stop()
+            self.security.close()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.security = AgentSecurityStore(
