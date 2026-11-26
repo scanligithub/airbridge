@@ -18,6 +18,9 @@ on:
       - "capture_tcl_bridge.py"
       - "runtime_adapter.py"
       - "runtime_session_protocol.py"
+      - "build_identity.py"
+      - "scripts/write_build_identity.py"
+      - "test/test_runtime_session_build_identity.py"
       - "request_tracker.py"
       - "request_broker.py"
       - "process_supervisor.py"
@@ -92,7 +95,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python -m py_compile airbridge_entry.py stdio_io.py airbridge_app.py protocol.py eda_engine.py fs_engine.py shell_engine.py capture_tcl_bridge.py runtime_adapter.py runtime_session_protocol.py request_tracker.py request_broker.py process_supervisor.py agent_security.py tools/__init__.py tools/airbridge_agent_admin.py test/test_airbridge_entry.py test/test_mcp_stdio_frozen_smoke.py test/test_m2_5_gateway_gui_smoke.py
+          python -m py_compile build_identity.py scripts/write_build_identity.py test/test_runtime_session_build_identity.py airbridge_entry.py stdio_io.py airbridge_app.py protocol.py eda_engine.py fs_engine.py shell_engine.py capture_tcl_bridge.py runtime_adapter.py runtime_session_protocol.py request_tracker.py request_broker.py process_supervisor.py agent_security.py tools/__init__.py tools/airbridge_agent_admin.py test/test_airbridge_entry.py test/test_mcp_stdio_frozen_smoke.py test/test_m2_5_gateway_gui_smoke.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m compileall -q mcp_gateway/airbridge_mcp_gateway
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -104,6 +107,8 @@ jobs:
           $env:QT_QPA_PLATFORM = "offscreen"
           python -m unittest discover -s test -p "test_airbridge_entry.py" -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s test -p "test_runtime_session_build_identity.py" -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s test -p "test_m2_5_gateway_gui_smoke.py" -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s mcp_gateway/tests -v
@@ -114,6 +119,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python -m PyInstaller --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $buildTimestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss'Z'")
+          python scripts/write_build_identity.py --commit "${{ github.sha }}" --timestamp $buildTimestamp --platform windows-x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m PyInstaller --clean --noconfirm AirBridge.spec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -129,6 +137,8 @@ jobs:
           @(
             "artifact=AirBridge.exe"
             "source_commit=${{ github.sha }}"
+            "build_version=airbridge-v2.4"
+            "build_timestamp=$buildTimestamp"
             "python_version=$((python --version) -join ' ')"
             "pyinstaller_version=$((python -m PyInstaller --version) -join ' ')"
             "sha256=$sha256"
