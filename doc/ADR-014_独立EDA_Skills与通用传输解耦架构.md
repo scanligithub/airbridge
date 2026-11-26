@@ -4,7 +4,7 @@
 - 版本：1.0
 - 日期：2026-11-26
 - 状态：**项目负责人已确认的架构约束；通过 PR 合并后作为后续设计与实施基线**
-- 适用范围：AirBridge Core、Capture Skill、Allegro Skill、未来其他 EDA Skills、Antigravity / OpenCode 等 Agent Host，以及 Skill 与远端运行环境之间的通用访问层
+- 适用范围：AirBridge Core、Capture Skill、Allegro Skill、未来其他 EDA Skills、各类现有及未来 Agent Host（Antigravity、OpenCode 仅为当前示例），以及 Skill 与远端运行环境之间的通用访问层
 
 > 本 ADR 补充并细化 [ADR-006：专业软件生命周期由 Agent Skill 自主掌握](ADR-006_Skill自主掌握专业软件生命周期.md)。ADR-006 规定 AirBridge Core 不拥有专业软件生命周期；本 ADR 进一步规定 EDA Skills 必须是独立、可安装、可演进的软件包，并通过稳定的通用传输契约与远端环境交互。
 >
@@ -20,7 +20,7 @@
 
 1. Capture Skill 专注 OrCAD Capture 的专业软件生命周期、Tcl / Dbo API、工程对象模型、版本差异、Capture 工作流和结果验证。
 2. Allegro Skill 专注 Allegro 的专业软件生命周期、SKILL API、PCB 对象模型、版本差异、PCB 工作流和结果验证。
-3. 两个 Skill 都可安装到 Antigravity、OpenCode 等支持相应 Skill 规范的 Agent Host；不能要求用户必须同时安装另一个 Skill。
+3. 两个 Skill 都应能够安装到不同厂商、不同形态的 Agent Host。支持原生 Skill 规范的 Host 可直接加载；不原生支持的 Host 可通过独立 Host Adapter 接入。Antigravity 和 OpenCode 是当前示例，不构成支持范围上限。不能要求用户必须同时安装另一个 Skill。
 4. Skill 的领域逻辑不得依赖 AirBridge 的内部 Python 模块、内部类、私有目录结构、内部数据库或 AirBridge.exe 进程内代码。
 5. Skill 通过定义清晰、版本化、可替换的通用传输接口访问远端环境。AirBridge 可以作为该接口的一种传输实现，但不得成为 Skill 领域逻辑的组成部分或唯一可理解的运行环境。
 6. 允许存在独立的通用访问适配器、客户端库或本机 Broker，以承接认证、授权、审计和传输；这些组件不得引入 Capture / Allegro 专属业务语义。
@@ -28,7 +28,7 @@
 
 ## 2. 总体架构与依赖方向
 
-    Agent Host（Antigravity / OpenCode / 其他兼容 Host）
+    Agent Host（任意当前或未来的兼容 Agent Host）
            │
            ├── 独立安装：Capture Skill
            │       └── Capture 领域工作流 / Tcl / Dbo / 版本适配
@@ -77,7 +77,7 @@
 
 - Capture Skill 和 Allegro Skill 必须可以分别安装、卸载和升级。
 - 安装 Capture Skill 不得强制安装 Allegro Skill；安装 Allegro Skill 不得强制安装 Capture Skill。
-- 两个 Skill 均应能够分别被 Antigravity 和 OpenCode 发现、加载和使用。
+- 两个 Skill 均应能够被所有声明兼容的 Agent Host 分别发现、加载和使用；新 Host 的接入应通过标准 Skill 契约或独立 Host Adapter 完成，不得要求复制或重写领域逻辑。
 - Skill 包应声明自身名称、版本、入口文件、脚本和资源、依赖、兼容范围及安装说明。
 - Agent Host 特有的元数据或配置应通过薄适配层处理；不得复制两套不同的领域逻辑。
 - Skill 安装或加载成功，只能证明 Host 能发现并加载该 Skill，不能据此声称远端通信、专业软件启动或业务操作已验收。
@@ -122,7 +122,7 @@ Allegro Skill 独占 Allegro 领域知识，包括但不限于：
 4. Skill 只依赖明确公开、版本化的通用 Transport Interface；AirBridge Provider 负责把该接口映射到 AirBridge 当前公开的 HTTP / Shell / RFS / 文件传输能力。
 5. Skill 的领域单元测试必须能够使用 Mock / Fake Transport Provider 执行，不需要启动 AirBridge.exe、连接串口或安装 Cadence 软件。
 6. Skill 的集成测试可以选择 AirBridge Provider，但必须将传输层测试和专业软件领域测试分层报告。
-7. 将来替换 AirBridge、调整 ABFP、修改串口实现或更换 Agent Host 时，不应要求重写 Capture / Allegro 的领域工作流；最多调整相应 Provider 或 Host Adapter。
+7. 将来替换 AirBridge、调整 ABFP、修改串口实现、增加新的 Agent Host 或更换现有 Agent Host 时，不应要求重写 Capture / Allegro 的领域工作流；最多调整相应 Transport Provider 或 Host Adapter。
 8. AirBridge 不可用时，Skill 应报告传输不可用或依赖缺失，不得偷偷绕过认证、权限、审计或安全策略。
 
 ## 5. 通用 Transport Interface 的设计要求
@@ -189,13 +189,16 @@ Transport Interface 是 Skill 与远端执行环境之间的稳定边界。它�
 
 ## 7. Agent Host 兼容原则
 
-- Antigravity、OpenCode 和其他兼容 Agent Host 是 Skill 的宿主，不是 Skill 领域逻辑的所有者。
-- 每个 Skill 应提供 Host 可发现的标准入口和必要元数据。
-- Host 差异应收敛在安装布局、元数据、工具调用或生命周期的薄适配层。
-- Capture / Allegro 领域逻辑不得分别维护 Antigravity 版和 OpenCode 版。
-- 不得把某个 Agent Host 的私有 Token 注入方式、内部工具对象或私有 API 作为 Skill 的唯一认证入口。
-- 若某项 Host 能力无法跨 Host 使用，应通过能力检测和显式适配处理，并清楚声明限制；不得静默降级到不安全路径。
-- Skill 必须能在没有另一款 Agent Host 安装的情况下单独安装和维护。
+本架构面向开放、持续扩展的 Agent Host 生态，不以当前已验证的产品列表限定未来支持范围。Antigravity 和 OpenCode 仅代表当前接入示例。
+
+- **不绑定具体 Agent 产品：** Skill 的领域逻辑、数据模型和工作流不得依赖某个 Agent Host 的私有 API、内部工具对象或专属运行时。
+- **标准优先：** 优先采用公开、稳定、可跨 Host 使用的 Skill 包格式、入口约定和工具调用契约；对不同 Host 的能力差异进行显式声明。
+- **Adapter 扩展：** 对不原生支持相应 Skill 规范的 Agent Host，可以增加独立的 Host Adapter，负责安装布局转换、入口注册、工具调用适配和必要的生命周期衔接。Adapter 不得承载 Capture / Allegro 领域逻辑，也不得成为 Skill 的强制组成部分。
+- **能力检测：** Skill 或 Host Adapter 应检测所需能力并给出明确诊断；不能因为 Host 名称或版本而假定某项能力必然存在。
+- **按能力声明兼容：** 每个 Skill 应声明最低 Host 能力要求、可选能力和已验证的 Host / 版本矩阵。未测试的 Host 应标记为“待验证”，不得宣传为已验收。
+- **新增 Host 的接入成本：** 增加一种 Agent Host，原则上只需验证标准兼容性或新增 / 更新 Host Adapter，不应复制 Skill 领域代码，也不应要求修改 AirBridge Core。
+- **认证解耦：** 不得把某个 Agent Host 的私有 Token 注入方式、内部工具对象或私有 API 作为 Skill 的唯一认证入口。凭据获取应通过独立、受控、可替换的凭据提供机制。
+- **独立维护：** Skill 必须能在不同兼容 Agent Host 上独立安装和维护；不得依赖另一款 Agent Host 的安装。
 
 ## 8. 认证、权限和安全边界
 
@@ -226,7 +229,7 @@ Transport Interface 是 Skill 与远端执行环境之间的稳定边界。它�
 
 必须分别报告 Skill 包安装 / 加载结果、Skill 单元测试结果、Transport Contract 测试结果、Provider 集成结果、真实 Capture / Allegro 版本和主机环境验收结果。
 
-任何一层 PASS 不得替代其他层 PASS。特别是 Skill 被 Antigravity / OpenCode 发现并加载，不代表它已经取得远端权限、成功调用 AirBridge 或执行过 Capture / Allegro 操作。
+任何一层 PASS 不得替代其他层 PASS。特别是 Skill 被某一个或多个 Agent Host 发现并加载，不代表它已经取得远端权限、成功调用 Transport Provider / AirBridge 或执行过 Capture / Allegro 操作。
 
 ## 10. 后续架构与实施顺序
 
