@@ -22,40 +22,55 @@ Transport Contract 为 Skill 提供一个简单、统一的远程操作接口。
 
 ## 2. 最小架构
 
+**Host A 和 Host B 运行的是同一份 AirBridge 软件（同一个 AirBridge.exe 构建产物）。** 两端不是不同产品；差异只在运行位置、配置和承担的角色。
+
 ```text
-Agent Host
-    |
-Host Adapter
-    |
-EDA Skill
-    |
-Transport Interface
-    |
-    +---- Fake Provider（测试）
-    |
-    +---- AirBridge Provider（实际使用）
-              |
-          AirBridge API
-              |
-        ABFP / Serial
-              |
-        Host B AirBridge
-              |
-       Generic Remote Operations
+主机 A
++------------------------------------------------------+
+| Agent Host                                           |
+|   +-- Host Adapter                                   |
+|   +-- EDA Skills（Capture / Allegro / AD 等）        |
+|          |                                           |
+|     Transport Interface                              |
+|          |                                           |
+|     AirBridge Provider                               |
+|          |                                           |
+|     AirBridge.exe（Host A 角色）                     |
++----------|-------------------------------------------+
+           |
+       ABFP / Serial（115200 baud）
+           |
++----------|-------------------------------------------+
+| 主机 B                                               |
+|     AirBridge.exe（与 Host A 同一份软件）            |
+|          |                                           |
+|     Generic Remote Operations（Shell / RFS）         |
+|          |                                           |
+|     EDA 应用（Capture / Allegro 等）                 |
++------------------------------------------------------+
+
+Fake Provider：在 Host A 的 Skill 测试中替代 AirBridge Provider，
+不需要 AirBridge 或 EDA 环境。
 ```
 
 职责：
 
-| 组件 | 负责内容 |
-|---|---|
-| Skill | EDA 产品业务逻辑和操作流程 |
-| Host Adapter | Skill 加载、工具注册、Host 调用适配 |
-| Transport Interface | 定义通用远程操作接口和返回结果 |
-| Provider | 将接口映射到具体远程通信实现 |
-| AirBridge Core | 通用通信、Shell/RFS、认证、请求关联和审计 |
+| 组件 | 所在位置 | 负责内容 |
+|---|---|---|
+| Agent Host | Host A | 运行 OpenCode、Antigravity 等智能体 |
+| Host Adapter | Host A | Skill 加载、工具注册、Host 调用适配 |
+| EDA Skill | Host A | EDA 产品业务逻辑、脚本生成、操作流程和结果判断 |
+| Transport Interface / Provider | Host A | 为 Skill 提供通用远程操作接口，并映射到 AirBridge |
+| AirBridge.exe | Host A、Host B | 两端运行同一份软件；按各自角色配置承担通信两端职责 |
+| Generic Remote Operations | Host B | 提供通用 Shell/RFS 等远程操作能力 |
+| EDA 应用 | Host B | 实际运行 Capture、Allegro 等专业软件 |
 
 约束：
 
+- EDA Skills 安装在 Host A 的 Agent Host 中；Host B 不安装 Agent 或 EDA Skill。
+- Skill 的领域逻辑留在 Host A；需要在 Host B 执行的命令或脚本作为请求数据传输，不代表把 Skill 安装或迁移到 Host B。
+- Host A 的 AirBridge Provider 调用 Host A 上运行的 AirBridge.exe；两端 AirBridge.exe 通过 ABFP/Serial 通信。
+- Host B 的 AirBridge.exe 只提供通用远程操作能力，不承担 EDA 领域逻辑。
 - Capture、OrCAD PCB Editor、Allegro、AD 等保持独立 Skill。
 - Skill 不调用 AirBridge 内部模块或内部 HTTP 路由。
 - AirBridge Core 不增加 EDA 专用 API，不承担 EDA 生命周期逻辑。
@@ -186,6 +201,8 @@ Filesystem 作为可选能力，按实际 Skill 需要逐项实现：
 
 ## 7. Skill 与 Host Adapter
 
+EDA Skill、Host Adapter、Transport Interface 和 AirBridge Provider 均位于 Host A 的 Agent Host 环境中。Host B 不安装 Agent、Host Adapter 或 EDA Skill；Host B 运行与 Host A 完全相同的 AirBridge.exe 软件，以及需要被远程操作的 EDA 应用。
+
 Skill 保持简单、独立：
 
 ```text
@@ -237,8 +254,8 @@ required_capabilities:
 1. **精简并评审本 Contract。**
 2. **实现 Fake Provider**，用最小测试验证 Skill 与 Provider 解耦。
 3. **实现 AirBridge Provider**，先映射现有 Shell API，不修改 AirBridge Core 的 EDA 职责边界。
-4. **验证 Host A 到 Host B** 的真实 Shell 调用、请求 ID 和 UNKNOWN 行为。
-5. **把 OrCAD Capture Skill 接入 Transport Interface**，先完成一个只读、低风险的实际操作。
+4. **验证 Host A 到 Host B** 的真实 Shell 调用、请求 ID 和 UNKNOWN 行为；确认两端运行的是同一份 AirBridge.exe 软件。
+5. **在 Host A 的 Agent Host 中把 OrCAD Capture Skill 接入 Transport Interface**，由 Skill 通过 Provider 调用 Host B 上的 Capture；先完成一个只读、低风险的实际操作。
 6. 验证通过后，再逐步加入 Filesystem 和更多 Skill。
 7. 后续独立开发 OrCAD PCB Editor、Allegro、AD Skills。
 
@@ -266,7 +283,9 @@ required_capabilities:
 
 - Fake Provider 可以独立运行并通过基础测试。
 - AirBridge Provider 能通过既有 AirBridge API 通信。
+- Host A、Host B 运行同一份 AirBridge.exe 软件，按各自角色配置完成通信。
 - Host A 能经 AirBridge 与 Host B 完成一次真实远程 Shell 操作。
+- EDA Skill 安装并运行在 Host A 的 Agent Host 中；Host B 不安装 Agent 或 EDA Skill。
 - request_id 能贯穿调用和结果。
 - 发生不确定情况时返回 UNKNOWN，不盲目重放。
 - 一个最小 Capture Skill 能通过 Transport Interface 调用 Provider。
