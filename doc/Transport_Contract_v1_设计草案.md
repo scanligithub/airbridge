@@ -112,6 +112,7 @@ v1 不要求所有 Provider 支持所有可选能力。必需的基础接口与�
 - `filesystem.chunked_transfer`
 - `request.correlation`
 - `request.lookup_by_client_id`
+- `request.status_query`
 - `request.deduplication`
 - `request.result_query`
 
@@ -138,6 +139,11 @@ TransportProvider
   get_capabilities(refresh=false) -> CapabilitySnapshot
   get_runtime_info() -> RuntimeInfo
   close() -> None
+
+RequestTracking (optional capability; applies to any request-bearing transport operation)
+  find_by_client_request_id(operation_kind, client_request_id) -> RequestLookupResult
+  get_request_status(provider_request_id) -> RequestStatus
+  get_request_result(provider_request_id) -> OperationResult
 ```
 
 `RuntimeInfo` 仅描述通用远端运行环境身份与版本，不包含 EDA 生命周期信息。
@@ -150,8 +156,6 @@ ShellTransport
   get_status(provider_request_id) -> RequestStatus
   get_result(provider_request_id) -> OperationResult
 
-RequestTracking (optional capability)
-  find_by_client_request_id(client_request_id) -> RequestLookupResult
 ```
 
 约束：
@@ -159,7 +163,8 @@ RequestTracking (optional capability)
 - Shell 是通用远端命令能力，不提供 Capture/Allegro 专用方法。
 - 命令执行必须由 Provider 的授权策略和后端权限控制；客户端接口不能取代服务端授权。
 - `get_status` 与 `get_result` 是可选能力，必须由能力声明确认。
-- `request.lookup_by_client_id` 是独立可选能力，适用于任何声明支持请求跟踪的操作，不限于 Shell。
+- `request.lookup_by_client_id`、`request.status_query` 和 `request.result_query` 是通用请求跟踪能力，适用于 Provider 明确声明支持跟踪的请求类型；它们不隐含所有 Shell/RFS 操作都支持查询。
+- Shell 专属能力标识（如 `shell.status_query`、`shell.result_query`）只描述 Shell 操作范围；通用请求跟踪能力不能仅凭 Shell 能力推断，也不能反向推断。
 - `find_by_client_request_id` 用于提交响应丢失、调用方未取得 `provider_request_id` 时恢复原请求映射；它不是重新提交操作。
 - 查询结果必须区分“找到原请求”“权威确认不存在”和“无法判断”；不具备权威查询保证时不得返回“未提交”。
 - 建议将结果结构固定为：
@@ -236,8 +241,9 @@ abort_transfer(transfer_id) -> AbortReceipt
 
 - transfer ID 的作用域、有效期和所有权；
 - 分块大小、总块数、序号规则；
-- 相同块重复提交的行为；
-- 不同内容重复提交相同块序号时的冲突行为；
+- 相同 transfer ID、块序号和块摘要重复提交时，Provider 是否返回原回执而不重复产生副作用；
+- 不同内容重复提交相同块序号时必须返回冲突，不能覆盖已确认块；
+- 分块回执是否在断线/进程重启后仍有效，以及查询状态是否能区分已确认、未确认和未知块；
 - 已确认块的持久性及查询方式；
 - 完成时完整文件长度与摘要校验；
 - 中断后恢复和清理策略；
@@ -286,7 +292,7 @@ Correlation 只解决“找到同一个请求”，不保证重复提交不会�
 - 并发重复提交的处理；
 - 去重记录过期后的行为。
 
-建议将规范化请求的 payload digest 与请求标识绑定。相同 key 对应不同 digest 必须明确拒绝，不能悄悄执行第二个请求。
+建议将规范化请求的 payload digest 与请求标识绑定。规范化输入至少应覆盖操作类型、目标资源、命令/内容、影响语义的选项及写入模式；不应纳入易变的传输元数据（如重试计数、连接地址）。Provider 必须声明摘要算法与规范化版本，避免不同实现对同一请求计算出不一致的 digest。相同 key 对应不同 digest 必须明确拒绝，不能悄悄执行第二个请求。
 
 ### 6.4 不支持去重时
 
@@ -324,12 +330,15 @@ UNKNOWN 是一种真实结果，不是普通异常，也不等于失败。
 
 建议状态转换约束：
 
-- `NOT_SUBMITTED -> ACCEPTED`：Provider 明确确认接受。
-- `NOT_SUBMITTED -> REJECTED`：Provider 明确拒绝且保证未执行。
-- `NOT_SUBMITTED -> SUBMISSION_UNKNOWN`：提交调用中断，接受情况无法确认。
-- `ACCEPTED -> RUNNING`：后端明确报告开始执行。
-- `ACCEPTED/RUNNING -> COMPLETED_SUCCESS/COMPLETED_FAILURE`：取得权威终态结果。
-- 任一已提交但无法核实的状态可转入 `UNKNOWN`。
+- `NOT_SUBMITTED -> SUBMISSION_UNKNOWN`：调用方开始提交后，提交是否已交付无法确认。
+- `SUBMISSION_UNKNOWN -> ACCEPTED`：Provider 的权威证据确认已接受。
+- `SUBMISSION_UNKNOWN -> REJECTED`：Provider 的权威证据确认拒绝且保证未执行。
+- 若调用方在提交前本地校验失败，保持 `NOT_SUBMITTED` 并返回本地错误；这不是 Provider 的 `REJECTED`。
+- `ACCEPTED -> RUNNING`：后端明确报告开始执行；同步操作也可从 `ACCEPTED` 直接进入已确认终态。
+- `RUNNING -> COMPLETED_SUCCESS/COMPLETED_FAILURE`：取得权威终态结果。
+- 任一已提交但无法核实的非终态可转入 `UNKNOWN`。
+- `COMPLETED_FAILURE` 表示操作以失败结果结束，不代表没有副作用；副作用是否部分发生必须由操作结果/错误详情明确说明。
+- `REJECTED` 仅表示后端拒绝且保证未执行；若不能保证未执行，应报告 `UNKNOWN`，而不是 `REJECTED`。
 - `UNKNOWN` 不能仅因查询超时、连接恢复或本地重启而自动转成失败或未提交；只能由权威查询结果或业务层证据更新。
 - `UNKNOWN` 可依据权威证据恢复为 `ACCEPTED`、`RUNNING`、`COMPLETED_SUCCESS`、`COMPLETED_FAILURE` 或 `REJECTED`；每次恢复必须保留证据来源和观察时间。若证据只能证明请求映射存在、不能证明执行状态，则只能恢复到已证实的最低状态。
 - 已确认终态（`COMPLETED_SUCCESS`、`COMPLETED_FAILURE`、`REJECTED`）不得因普通查询失败、超时或较旧快照而回退。若 Provider 发现先前终态报告本身错误，必须返回明确的纠正/冲突诊断，而不是静默回退。
