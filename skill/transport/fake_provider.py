@@ -11,6 +11,7 @@ from .contract import (
     ProviderClosedError,
     ProviderInfo,
     UnsupportedCapabilityError,
+    normalize_request_id,
 )
 
 
@@ -31,9 +32,10 @@ class FakeProvider:
         self._supported = frozenset(
             supported_capabilities
             if supported_capabilities is not None
-            else ("shell.execute",)
+            else ("shell.execute", "request.read")
         )
         self._closed = False
+        self._operations: dict[str, OperationResponse] = {}
         self.executed_commands: list[dict[str, Any]] = []
 
     def _ensure_open(self) -> None:
@@ -44,7 +46,7 @@ class FakeProvider:
         self._ensure_open()
         return ProviderInfo(
             provider_name="fake",
-            provider_version="0.1.0",
+            provider_version="0.2.0",
             contract_version=CONTRACT_VERSION,
         )
 
@@ -65,8 +67,7 @@ class FakeProvider:
         self._ensure_open()
         if not isinstance(command, str) or not command.strip():
             raise ValueError("command must be a non-empty string")
-        if not isinstance(request_id, str) or not request_id.strip():
-            raise ValueError("request_id must be a non-empty string")
+        normalized_id = normalize_request_id(request_id)
         if options is not None and not isinstance(options, Mapping):
             raise TypeError("options must be a mapping or None")
         if "shell.execute" not in self._supported:
@@ -77,22 +78,36 @@ class FakeProvider:
         self.executed_commands.append({
             "command": command,
             "options": dict(options or {}),
-            "request_id": request_id,
+            "request_id": normalized_id,
         })
-        configured = self._responses.get(request_id)
+        configured = self._responses.get(normalized_id)
         if configured is not None:
-            if configured.request_id != request_id:
+            if configured.request_id != normalized_id:
                 raise ValueError("configured response request_id does not match")
-            return configured
+            response = configured
+        else:
+            response = OperationResponse.completed(
+                request_id=normalized_id,
+                success=True,
+                result={
+                    "exit_code": 0,
+                    "stdout": "FAKE: " + command,
+                    "stderr": "",
+                },
+            )
+        self._operations[normalized_id] = response
+        return response
 
-        return OperationResponse.completed(
-            request_id=request_id,
-            success=True,
-            result={
-                "exit_code": 0,
-                "stdout": "FAKE: " + command,
-                "stderr": "",
-            },
+    def get_operation(self, request_id: str) -> OperationResponse:
+        self._ensure_open()
+        normalized_id = normalize_request_id(request_id)
+        if "request.read" not in self._supported:
+            raise UnsupportedCapabilityError(
+                "Provider does not support request.read"
+            )
+        return self._operations.get(
+            normalized_id,
+            OperationResponse.unknown(normalized_id, "operation not found in Fake Provider"),
         )
 
     def close(self) -> None:
