@@ -432,6 +432,105 @@ skill:
 
 Manifest 必须固定声明字段和 Schema 版本；示例中的 operation 只是说明结构，不代表本仓库已实现这些入口。Skill Manifest 不得包含 Token、密码、Authorization Header 或凭据文件路径。
 
+### 2.7 Skill Package / Manifest 的完整性、依赖与配置边界（关联提案，非 Transport Contract 组成部分）
+
+本节是 Skill Package / Manifest 规范的关联设计提案，不属于 Transport Contract v1，也不冻结包格式、签名算法或具体 Host Adapter API。Skill Package、Skill Manifest、Skill Lifecycle/Invocation API 应作为相互关联但独立版本化的规范/制品定义；不得把它们的版本合并进 Transport Contract 版本协商。以下规则用于明确安全边界和后续独立规范评审的必答项。
+
+**1. 包身份、完整性与发布者信任**
+
+- 每个可安装包必须具有稳定 `skill_id`、不可混淆的 `skill_version`、`manifest_version` 和包格式版本。包身份不得仅由文件名、目录名或 Host 中的显示名称决定。
+- 发布制品必须有可验证的完整性摘要；摘要覆盖 Manifest、入口代码、Schema、资源文件和依赖锁定材料。必须定义规范化、文件排序、路径编码和摘要算法版本，不能让不同实现对同一包计算出不同摘要。
+- 正式发布包应有独立于包内容的数字签名/签名信封，签名覆盖规范化 Manifest 与完整文件摘要清单。签名材料不得通过把签名字段本身递归纳入待签名内容形成循环依赖；具体封装格式和算法由独立 Package Trust 规范评审决定。
+- 信任根、允许的发布者/签名密钥、撤销信息和允许安装的发布渠道由 Host/部署管理员的受信策略配置；不能由 Skill 包自行声明并信任自己的公钥，也不能由 Agent 在单次调用中选择信任根。
+- Host Adapter/安装器必须在加载或执行任何 Skill 代码前验证包摘要、签名、发布者信任和撤销状态。验证失败、缺少必需签名或信任状态无法确定时 fail closed；不得降级为“仅警告后继续”。
+- 签名只证明制品与受信发布者/签名密钥的关联及完整性，不自动授予 Skill 运行权限、Transport Scope、文件访问权、EDA 操作授权或 Credential Source 访问权。安装许可、运行许可和服务端授权仍是独立决策。
+- Manifest 中声明的版本、能力、依赖和测试矩阵属于发布者声明；Host 必须验证包内结构与策略约束，但不得把这些声明当成服务端授权或运行时 CapabilitySnapshot。
+
+**2. Manifest 依赖声明与依赖图**
+
+- Manifest 可以声明对经批准的通用 Skill API、共享基础库/基础设施包以及必要运行时的依赖；每项依赖必须具有稳定 package ID、明确版本约束、依赖类型和是否必需等信息。
+- OrCAD Capture、OrCAD PCB Editor、Allegro、AD 等 EDA Product Skills 之间禁止直接依赖。一个 EDA Product Skill 不得通过可选依赖、插件发现、动态导入或运行时回调隐式依赖另一个 EDA Product Skill。
+- 共享库只能承载真正通用的基础设施，不得把某个 EDA 产品的业务逻辑抽到共享库，再由其他 Skill 间接依赖；共享库自身也必须独立版本化和发布。
+- 安装/构建时必须解析完整传递依赖图并生成可复现的依赖锁定材料，固定每个依赖的确切版本和制品摘要。运行时不得根据宽泛版本范围临时下载或静默升级依赖。
+- 必需依赖缺失、版本不兼容、摘要不匹配、依赖图循环或策略禁止时，Skill 不得进入 READY。可选依赖缺失只能禁用 Manifest 明确关联的可选入口/功能，不能改变必需功能的安全保证。
+- 禁止未声明依赖、依赖路径逃逸、从包外任意目录加载代码，以及通过 `latest`、无界范围或未锁定 Git 分支作为可复现发布依赖。
+
+**3. 配置 Schema 与秘密材料隔离**
+
+- Manifest 必须引用有版本的配置 Schema；Host Adapter 在初始化前验证配置类型、必填字段、枚举、范围和未知字段策略。配置 Schema 必须随包发布并纳入完整性摘要，不得在运行时从不受信任的网络地址动态加载。
+- 普通配置只承载非秘密参数。Token、密码、私钥、Authorization Header、凭据文件路径和可反推出秘密的内容不得写入 Manifest、普通配置文件、入口参数、日志或 Skill 输出。
+- 需要秘密的配置项只能声明逻辑 Credential Reference/需求标识；实际秘密由受信任 Host Adapter / Credential Source 根据部署策略绑定。Skill 不得自行解析凭据路径、搜索环境变量、选择密钥或输出秘密内容。
+- Credential Reference 不是凭据本身，也不授予访问权。Host Adapter 必须验证调用主体、Skill 身份、所请求的凭据用途和管理员策略后才可建立受控绑定；缺少可信主体或绑定条件时 fail closed。
+- Schema 错误、未知配置字段、秘密字段误入普通配置、Credential Reference 无法解析或权限不满足时，初始化必须失败并提供脱敏诊断。
+
+**4. 入口与包内资源验证**
+
+- 每个入口必须使用 Manifest 中唯一、稳定的 operation ID，并绑定包内输入/输出 Schema。Host Adapter 在注册入口前必须验证引用存在、格式受支持且位于包根目录内。
+- Schema、代码和资源引用必须使用包内相对路径；拒绝绝对路径、`..` 路径穿越、符号链接逃逸和解压后覆盖包外文件。验证与加载之间必须避免可被替换的 TOCTOU 窗口，或使用不可变、已验证的安装目录。
+- 未在已验证 Manifest 中声明的入口不得注册或被调用；不得因 Host 工具注册便利而暴露通用任意代码执行入口。
+- Manifest 解析器和 Schema 验证器本身属于受信安装/Host Adapter 攻击面；必须限制输入大小、嵌套深度、别名/引用扩展和资源消耗，拒绝重复或歧义字段，避免不同解析器对同一 Manifest 产生不同解释。
+
+**5. 版本兼容与升级策略**
+
+- `skill_version`、`manifest_version`、Skill API 版本、Transport Contract 版本、Profile 版本、Host Adapter 版本和共享库版本必须分别声明、分别记录；不得以一个版本字段代替其他组件兼容性。
+- Manifest Schema 版本必须精确识别；不认识的 MAJOR 版本必须拒绝。对新增字段采用明确的未知字段策略：安全敏感字段不得静默忽略；普通扩展字段是否允许忽略须由该 Manifest Schema 版本明确规定。
+- 兼容范围必须采用可确定解析的版本规则并由锁定的解析器实现；正式发布不能使用 `latest`、空范围或依赖未声明的宽松解析行为。测试过的 Host/Adapter/Provider 版本范围应与声明的理论兼容范围分开记录。
+- 升级必须验证新制品的身份、签名、完整性、依赖图、配置 Schema 和兼容矩阵；不得在原地覆盖仍在运行的包文件。应先准备并验证新实例，再按 Host 能力执行入口切换和旧实例 drain/shutdown。
+- 若 Host 不支持原子入口切换，升级流程必须明确停机窗口、回滚限制和在途调用处理；不能声称无中断升级。回滚到旧版本也必须重新验证其签名、撤销状态和依赖摘要。
+- 防降级策略由受信部署策略明确规定；若组织要求禁止回退到存在已知安全问题的版本，安装器必须验证受信最低版本/撤销策略，而不能只比较 SemVer 大小。
+
+**6. Host Adapter 的验证责任与顺序**
+
+Host Adapter/安装器应按以下顺序完成验证，全部必需步骤成功前不得加载 Skill 代码或注册可执行入口：
+
+1. 从受信安装源取得包，验证包格式、大小限制和安全解包路径。
+2. 使用管理员配置的信任根验证发布者签名、签名状态和撤销策略。
+3. 验证完整包摘要及文件清单，确保 Manifest、代码、Schema、资源和锁定依赖未被替换。
+4. 解析并验证 Manifest Schema 版本、必填字段、入口唯一性、路径约束和未知字段策略。
+5. 解析依赖图，拒绝 EDA Product Skill 间接/直接依赖、循环、未声明或未锁定依赖，并验证所有依赖制品摘要。
+6. 验证 Skill API、Host Features、Provider Contract/Profile 要求和部署兼容策略；Transport 能力检查仍须在 Provider Session bootstrap 时执行，不能由静态 Manifest 取代。
+7. 验证普通配置 Schema，并将秘密需求交由受控 Credential Source 绑定；不得把秘密值传入普通配置对象。
+8. 创建隔离的 Skill 实例，完成 initialize/bootstrap；只有进入 READY 后才注册/启用对应入口。
+9. 记录可审计但已脱敏的包摘要、发布者身份、版本、依赖锁定摘要、Host Adapter 版本和验证结果。
+
+上述流程中，Host Adapter 负责包和 Manifest 的本地信任/结构验证；Provider 负责 Transport Contract 的远端语义；服务端继续独立执行 Token Scope、主体所有权和资源授权。任何一层的 PASS 都不能替代其他层的验证。
+
+**Manifest 结构示意（非冻结格式）：**
+
+```yaml
+skill:
+  id: orcad.capture
+  version: 0.4.0
+  manifest_version: 1.0.0
+  skill_api:
+    compatible_versions: ["1.0.0"]
+  package:
+    format_version: 1.0.0
+    integrity:
+      digest_algorithm: sha256
+      file_manifest: META-INF/files.sha256
+      signature_envelope: META-INF/skill.sig
+  dependencies:
+    required:
+      - package_id: generic.skill-runtime
+        version: "1.2.3"
+        artifact_digest: "sha256:<发布制品摘要>"
+    optional: []
+  configuration:
+    schema: schemas/config.schema.json
+    schema_version: 1.0.0
+    credential_requirements:
+      - reference: cadence.session
+        purpose: approved-provider-binding
+  entrypoints:
+    - operation: capture.get_design_info
+      input_schema: schemas/get_design_info.input.json
+      output_schema: schemas/get_design_info.output.json
+      concurrency: isolated
+```
+
+该示例仅说明字段职责，不规定摘要清单/签名信封的最终编码格式，也不表示仓库已经存在 Skill Package 安装器、签名验证器或上述依赖包。`artifact_digest`、签名信封、发布者身份和撤销状态的权威来源必须由独立 Package Trust 规范定义；示例中的占位值不是可发布凭据。
+
 ## 3. 版本与兼容性
 
 建议使用独立语义版本：
@@ -1440,6 +1539,11 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 33. Skill cancellation/deadline semantics：验证本地取消/超时不被解释为远端取消；可能已提交的请求保留原 client_request_id 和 UNKNOWN。
 34. Skill Manifest/entrypoint validation：验证 operation 与结构化 Schema 匹配，拒绝未声明入口、任意 Host 对象和秘密配置字段。
 35. Skill error mapping：验证稳定错误 code 在 Host Adapter 映射后保留，Transport UNKNOWN 不被改写为普通失败或未执行。
+36. Skill package integrity/signature：验证 Manifest、代码、Schema、资源和锁定依赖摘要覆盖完整；签名/发布者信任失败或撤销状态不确定时，在加载代码前 fail closed。
+37. Skill dependency graph：验证传递依赖完整锁定、循环/未声明依赖被拒绝，且不同 EDA Product Skills 之间不存在直接或间接依赖。
+38. Skill configuration/secret boundary：验证配置 Schema、未知字段策略和 Credential Reference；秘密不进入普通配置、入口参数、日志或输出。
+39. Skill package path containment：验证入口/Schema/资源只能引用包内路径，拒绝绝对路径、路径穿越、符号链接逃逸和 TOCTOU 替换。
+40. Skill manifest/upgrade compatibility：验证 Manifest/API/依赖版本分别解析；升级前验证签名、摘要、依赖和配置，非原子切换时正确执行 drain/停机策略。
 
 Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”当成真实 Provider 已具备保证。测试报告应记录 Provider 名称/版本、能力快照、适用 operation_kind、跳过的可选能力测试及原因。
 
@@ -1517,6 +1621,9 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 | 多 Host 兼容 | 同一 Skill 领域实现通过独立 Host Adapter 接入；以抽象 host_features 和真实 Host 兼容矩阵验证，不以 Host 名称分支领域逻辑 | Proposed |
 | Skill API | Skill 通过语言无关 Lifecycle/Invocation Contract 暴露 initialize/invoke/shutdown；Host Adapter 映射宿主调用，Skill 不依赖 Host 私有对象 | Proposed |
 | Skill 并发与取消 | 并发需显式声明并通过隔离测试；deadline/cancellation 仅约束本地调用，不隐含远端取消 | Proposed |
+| Skill Package / Manifest 信任 | 包摘要、发布者签名、管理员信任根、依赖锁定、配置 Schema 和包内路径验证在加载代码前完成；不替代运行授权 | Proposed |
+| Skill 依赖 | EDA Product Skills 不互相依赖；只允许受批准、锁定版本的通用基础库依赖 | Proposed |
+| Skill 配置与秘密 | 普通配置经随包 Schema 验证；秘密仅经受控 Credential Source 绑定 | Proposed |
 | 跨 Host 资源隔离 | 不同 Host 默认独立 Session/主体/凭据绑定，不假设共享进程内 Runtime；跨进程共享需独立受信 Runtime Manager，v1 不要求 | Proposed |
 | 断线恢复 | 物理连接恢复不改变 UNKNOWN；Provider 身份/版本变化时新建 Session 并重新协商；重连不得隐式重放非幂等操作 | Proposed |
 
@@ -1605,6 +1712,14 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] caller_context 只能由 Host Adapter 作为可信调用元数据注入，不能由 Agent/模型通过 input 或工具参数伪造。
 - [ ] Skill Lifecycle/Invocation Contract 不暴露 Host/Provider 私有对象。
 - [ ] Skill Manifest 声明版本、入口、结构化输入输出 Schema 和并发策略。
+- [ ] Skill Package 完整性摘要覆盖 Manifest、代码、Schema、资源和锁定依赖；签名在加载代码前由管理员信任根验证。
+- [ ] 签名/发布者信任不被误认为 Skill 运行授权、Transport Scope 或 EDA 操作授权。
+- [ ] EDA Product Skills 不存在直接或间接依赖；共享库仅承载通用基础设施。
+- [ ] 依赖图完整锁定版本和制品摘要，拒绝未声明依赖、循环和运行时静默下载/升级。
+- [ ] 配置 Schema 随包发布并验证；秘密仅通过受控 Credential Source 绑定，不进入普通配置或日志。
+- [ ] Manifest 入口、Schema 和资源引用均限制在已验证包根目录内，拒绝路径穿越和符号链接逃逸。
+- [ ] Host Adapter 在代码加载/入口注册前完成签名、摘要、Manifest、依赖、配置和兼容性验证。
+- [ ] Skill 升级验证新制品后再切换入口；非原子切换时明确停机窗口和在途调用策略。
 - [ ] initialize/invoke/shutdown 生命周期状态和失败清理规则明确。
 - [ ] deadline/cancellation 只表达本地调用语义，不隐含远端请求取消。
 - [ ] invocation_id 与 Transport client_request_id 分离，调用关联不替代远端请求幂等/恢复。
