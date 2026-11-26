@@ -275,7 +275,7 @@ Core Contract 只定义 Provider 生命周期、契约发现/协商、能力快�
 | transport.shell | Shell 命令提交及该 Profile 明确列出的查询接口 | 不默认包含状态查询、结果查询或去重；仍按能力逐项声明 |
 | transport.request-tracking | 通用请求关联、Client ID 查找、状态查询、结果查询及服务端去重 | 各子能力独立声明，并限定 operation_kind、主体范围和保证 |
 | transport.filesystem | list/stat/read/write/mkdir/move/remove | 每个文件操作独立声明能力及语义保证 |
-| transport.filesystem.chunked-transfer | begin/put/status/complete/abort | 作为 Filesystem Profile 的可选扩展 Profile；必须声明完整生命周期和恢复保证 |
+| transport.filesystem.chunked-transfer | begin/put/status/complete/abort | 作为 Filesystem Profile 的可选扩展 Profile；必须声明完整生命周期和恢复保证，且依赖兼容的 Filesystem Profile 版本 |
 
 Profile ID 是稳定的命名空间标识；Profile 自身采用独立的 MAJOR.MINOR.PATCH 版本，不与 Core Contract 版本或 Provider 软件版本共用版本号。Profile 的语义变更按其自身兼容性规则升级版本。
 
@@ -287,7 +287,7 @@ Profile ID 是稳定的命名空间标识；Profile 自身采用独立的 MAJOR.
 4. 任一必需 Profile 没有共同版本时，Skill 初始化失败；不得静默降级到另一个 Profile 或将 Profile 缺失解释为能力 unsupported 后继续运行。
 5. 一次 Provider 会话内，已协商的 Core Contract 版本和每个 Profile 版本固定。重新协商必须重建会话，并刷新能力快照。
 6. Profile 版本兼容与 Profile 内具体能力支持是两道门槛：实现 Profile 不代表其所有可选能力都支持；操作前仍须逐项检查能力、条件、限制及服务端授权。
-7. Profile 可声明依赖 Core Contract 的公共类型/语义，但不得依赖另一个 EDA Product Skill，也不得把 AirBridge 私有接口作为 Profile 要求。
+7. Profile 可声明依赖 Core Contract 的公共类型/语义，但不得依赖另一个 EDA Product Skill，也不得把 AirBridge 私有接口作为 Profile 要求。Chunked Transfer Profile 必须声明其依赖的 Filesystem Profile 版本范围；不得在没有兼容 Filesystem Profile 的情况下单独协商成功。
 
 **能力快照的 Profile 绑定：**
 
@@ -537,6 +537,7 @@ ProviderSession
   get_contract_info() -> ContractInfo
   negotiate_contract(client_supported_versions[]) -> ContractNegotiationResult
   get_capabilities(refresh=false) -> CapabilitySnapshot
+  close() -> None
 
 Optional RuntimeInfo
   get_runtime_info() -> RuntimeInfo
@@ -1103,7 +1104,10 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 14. Partial write and effect reporting：验证 NOT_APPLICABLE（只读）、FULLY_APPLIED、NOT_APPLIED、PARTIALLY_APPLIED、UNKNOWN 与执行状态分开表达；部分写入不能伪装为成功。
 15. Chunk transfer lifecycle：begin 响应丢失恢复、相同块重试、不同内容同序号冲突、已确认块持久性、断线/重启恢复、长度/摘要校验，以及 abort/complete 并发竞争。
 16. Credential Source and redaction：凭据不可用、过期、撤销；验证 Provider/audience/purpose 与主体上下文不匹配时拒绝绑定、多个匹配凭据时 fail closed、无静默环境变量/默认账户回退；验证不向 Agent 暴露凭据或存在性元数据，秘密不进入日志、异常、能力快照、请求状态或结果，且不会触发凭据探测或 Scope 扩大。
-17. Provider close and resource cleanup：关闭后行为明确；线程、文件句柄、临时传输记录按声明清理。
+17. Provider Session close and resource cleanup：关闭一个 Session 不影响其他 Session 或共享 Runtime；关闭后行为明确；线程、文件句柄、临时传输记录按声明清理。
+18. Runtime sharing and principal isolation：多个 Skill Session 共享 Runtime 时，协商版本/能力快照/请求上下文隔离；不同主体凭据与响应不串线；连接无法隔离主体时禁止跨主体复用。
+19. Reconnect and renegotiation：验证短暂断线恢复、Provider 实例变化、能力快照过期、旧请求 UNKNOWN 保留；重连不触发自动非幂等重放。
+20. Host Adapter lifecycle：卸载一个 Skill 只关闭其 Session；Runtime 只由所有者按资源策略关闭，且关闭不隐含远端取消。
 
 Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”当成真实 Provider 已具备保证。测试报告应记录 Provider 名称/版本、能力快照、适用 operation_kind、跳过的可选能力测试及原因。
 
@@ -1174,7 +1178,9 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 | 规范描述方式 | 规范文档定义语义，JSON Schema 校验结构，公共 Conformance Suite 验证行为；OpenAPI 仅作可选 Provider 绑定描述 | Proposed |
 | 规范权威边界 | 三类材料职责分离；发生冲突时阻断该版本发布并通过正式勘误解决 | Proposed |
 | v1 最小核心 | 所有 Provider 必须支持契约发现、版本协商、能力快照和关闭；Shell、Filesystem、RequestTracking、Chunked Transfer 均为可选能力 | Proposed |
-| Optional Profiles | Shell、Filesystem、Chunked Transfer 通过独立版本化 Profile 声明；Skill/Provider 分别声明所需/实现的完整版本集合 | Proposed |
+| Optional Profiles | Shell、RequestTracking、Filesystem、Chunked Transfer 通过独立版本化 Profile 声明；Skill/Provider 分别声明所需/实现的完整版本集合 | Proposed |
+| Provider 生命周期 | 每个 Skill/调用上下文独立 Provider Session；底层 Runtime 可选共享，Session close 不关闭共享 Runtime；Runtime 由 Host Adapter/Factory 所有者关闭 | Proposed |
+| 断线恢复 | 物理连接恢复不改变 UNKNOWN；Provider 身份/版本变化时新建 Session 并重新协商；重连不得隐式重放非幂等操作 | Proposed |
 
 这些是供评审的建议，不应在未获批准前视为已冻结的架构决策。
 
@@ -1182,12 +1188,13 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 
 1. 评审并冻结 v1 的请求状态、关联、去重、UNKNOWN 和重试语义。
 2. 将能力模型、数据类型和错误模型形成可测试的接口定义。
-3. 定义 Core Contract 与 Shell/Filesystem/Chunked Transfer Profile 的边界、版本及 Conformance Suite 映射。
-4. 建立 Fake Provider 与公共 Contract Tests。
-5. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
-6. 在独立测试中验证 Provider 与 Fake Provider 的契约一致性。
-7. 通过兼容性测试后，迁移 OrCAD Capture Skill。
-8. 后续独立迁移 OrCAD PCB Editor、Allegro、AD 等 Skills；它们之间不形成依赖。
+3. 定义 Core Contract、Optional Profiles 及其版本/Conformance Suite 映射。
+4. 定义 Provider Runtime、Session、资源所有权、主体隔离和重连语义。
+5. 建立 Fake Provider 与公共 Contract Tests。
+6. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
+7. 在独立测试中验证 Provider 与 Fake Provider 的契约一致性。
+8. 通过兼容性测试后，迁移 OrCAD Capture Skill。
+9. 后续独立迁移 OrCAD PCB Editor、Allegro、AD 等 Skills；它们之间不形成依赖。
 
 ## 15. 评审检查表
 
@@ -1234,6 +1241,12 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] Profile 声明与运行时 CapabilitySnapshot 一致；Profile 实现不推导其全部可选能力受支持。
 - [ ] Skill 的 required_profiles、optional_profiles 和 required_capabilities 语义明确。
 - [ ] Profile Conformance Suite 独立版本化，并与 Profile 版本建立映射。
+- [ ] Provider Runtime 与 Provider Session 的生命周期、所有权和共享边界明确。
+- [ ] 每个 Skill/调用主体拥有隔离的 Session 协商状态、能力快照和请求上下文。
+- [ ] Session close 不会关闭其他 Session 使用的共享 Runtime，也不隐含远端取消。
+- [ ] Credential Binding 和连接复用不会跨主体泄漏认证上下文或响应。
+- [ ] 重连不改变原请求 ID/UNKNOWN；Provider 实例或契约版本变化时重新协商。
+- [ ] Runtime shutdown 由 Host Adapter/Provider Factory 所有者管理，不暴露为 Skill 操作。
 - [ ] 本文评审通过前，不进行生产 Skill 迁移。
 
 ---
