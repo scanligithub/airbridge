@@ -175,6 +175,38 @@ ProviderFactory.shutdown() -> None
 
 Factory 的具体类名、依赖注入容器、线程模型、连接池实现和 Host 生命周期 Hook 留给 Host Adapter 实现；Transport Contract 只要求最终交付的 Provider Session 遵守 Core/Profile 语义。
 
+### 2.4 Provider Session 生命周期状态机（提案）
+
+为避免 Factory 已返回 Session 就被误认为可以立即执行远端操作，建议明确 Session 的本地生命周期状态。该状态机描述本地对象是否允许接收调用，不替代远端 RequestState（ACCEPTED/RUNNING/UNKNOWN 等）。
+
+```text
+NEW -> NEGOTIATING -> READY -> CLOSING -> CLOSED
+  \          \
+   \          -> FAILED -> CLOSING -> CLOSED
+    -> CLOSING -> CLOSED
+```
+
+| Session 状态 | 含义 | 允许的行为 |
+|---|---|---|
+| NEW | Factory 已创建 Session，但尚未完成协商 | 仅允许 Contract discovery / bootstrap 所需接口；禁止 Shell/Filesystem 等操作提交 |
+| NEGOTIATING | 正在协商 Core Contract、Profiles 并验证能力快照 | 仅允许 bootstrap 流程；禁止业务操作提交 |
+| READY | Core/Profile/Capability 门控全部通过 | 可调用已协商 Profile 中且能力/条件/授权均满足的操作 |
+| FAILED | 初始化失败或 Session 已无法安全继续 | 不允许新的业务操作；只允许清理/关闭 |
+| CLOSING | 正在关闭，已停止接收新操作 | 仅允许已进入调用的本地收尾和清理 |
+| CLOSED | 本地 Session 资源已关闭 | 所有接口调用均返回明确的生命周期错误；不得自动重建 |
+
+状态转换和并发规则：
+
+1. Factory 返回的 Session 初始状态必须是 NEW；不得在未完成 bootstrap 时向 Skill 暴露为 READY。
+2. 只有 Core Contract 协商、全部 required_profiles 协商、能力快照验证和 Skill 必需能力检查全部成功，才可从 NEGOTIATING 转为 READY。可选 Profile 缺失只能禁用对应可选功能，不得放宽 required_profile/required_capability。
+3. bootstrap 任一步失败，Session 转为 FAILED，停止业务操作，并执行本地清理；不得自动切换到未配置 Provider、降低权限或静默选择其他版本。
+4. `close()` 对同一 Session 必须幂等；并发 close 调用只能导致一次资源释放。关闭开始后不得接收新的业务操作。
+5. 从 NEW、NEGOTIATING、READY 或 FAILED 均可进入 CLOSING；完成本地清理后进入 CLOSED。CLOSED 是终态，不允许 reopen；需要恢复时必须由 Factory 创建新 Session 并重新协商。
+6. 若 close 与业务操作并发，Provider 必须定义本地调用的 drain 策略（等待、有限等待后返回明确本地错误，或拒绝未开始调用）。无论采用哪种策略，都不得把本地中断解释为远端取消或失败；请求可能已提交时仍按 SUBMISSION_UNKNOWN/UNKNOWN 处理。
+7. close 不得悄悄重放、取消或删除远端请求。调用方必须保留尚未确定请求的原始 client_request_id，以便后续获授权的 Session 查询。
+8. 连接短暂中断但 Session 仍可安全恢复时，Session 可保持 READY 但副作用调用必须按连接/能力快照有效性门控；若 Provider 身份、Contract/Profile 版本或安全主体上下文变化，则当前 Session 不得继续 READY，必须 FAILED/CLOSED 并由 Factory 创建新 Session。
+9. 生命周期状态是本地控制状态，不得通过远端 RequestStatus 伪造，也不得把 Session CLOSED 推导为任何远端请求的终态。
+
 ## 3. 版本与兼容性
 
 建议使用独立语义版本：
@@ -1173,6 +1205,7 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 23. Partial initialization cleanup：Runtime 创建、Provider 构造、Session 创建和 bootstrap 各阶段注入失败；验证独占资源释放且共享 Runtime 不被误关闭。
 24. Skill unload/reload and concurrency：卸载/重载一个 Skill 不影响其他 Session；并发 Skill 实例拥有独立 Session；多主体不得共享主体上下文。
 25. Host Adapter crash/shutdown：验证本地资源回收策略、未完成请求 UNKNOWN 保留，以及本地 shutdown 不产生远端取消/失败结论。
+26. Provider Session state machine and concurrent close：验证 NEW/NEGOTIATING 时业务操作被拒绝，只有门控全部通过才 READY；close 幂等、并发关闭只释放一次，CLOSED 后不自动重建；close 与提交竞争时保留 UNKNOWN 语义。
 
 Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”当成真实 Provider 已具备保证。测试报告应记录 Provider 名称/版本、能力快照、适用 operation_kind、跳过的可选能力测试及原因。
 
@@ -1246,6 +1279,7 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 | Optional Profiles | Shell、RequestTracking、Filesystem、Chunked Transfer 通过独立版本化 Profile 声明；Skill/Provider 分别声明所需/实现的完整版本集合 | Proposed |
 | Provider 生命周期 | 每个 Skill/调用上下文独立 Provider Session；底层 Runtime 可选共享，Session close 不关闭共享 Runtime；Runtime 由 Host Adapter/Factory 所有者关闭 | Proposed |
 | Provider 装配 | Provider Factory 属于 Host Adapter 装配层；受信 alias 解析、创建独立 Session；Contract/Profile/Capability bootstrap 成功前 Skill 不 ready | Proposed |
+| Session 状态机 | Provider Session 采用 NEW/NEGOTIATING/READY/FAILED/CLOSING/CLOSED 本地状态；仅 READY 接受已授权操作，CLOSED 不可重开 | Proposed |
 | 断线恢复 | 物理连接恢复不改变 UNKNOWN；Provider 身份/版本变化时新建 Session 并重新协商；重连不得隐式重放非幂等操作 | Proposed |
 
 这些是供评审的建议，不应在未获批准前视为已冻结的架构决策。
@@ -1319,6 +1353,7 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] 初始化失败时释放本次独占资源，不误关闭共享 Runtime。
 - [ ] Skill 卸载/重载和并发实例不会串用 Session 或调用主体。
 - [ ] Host Adapter 崩溃/关闭不把本地退出解释为远端取消或请求失败。
+- [ ] Provider Session 生命周期状态与远端 RequestState 分离；只有 READY 接受操作，close 幂等且 CLOSED 为终态。
 - [ ] 本文评审通过前，不进行生产 Skill 迁移。
 
 ---
