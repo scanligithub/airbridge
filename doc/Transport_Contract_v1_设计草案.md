@@ -102,6 +102,7 @@ v1 不要求所有 Provider 支持所有可选能力。必需的基础接口与�
 - `filesystem.remove`
 - `filesystem.chunked_transfer`
 - `request.correlation`
+- `request.lookup_by_client_id`
 - `request.deduplication`
 - `request.result_query`
 
@@ -139,6 +140,8 @@ ShellTransport
   submit(command, options, client_request_id) -> Submission
   get_status(provider_request_id) -> RequestStatus
   get_result(provider_request_id) -> OperationResult
+
+RequestTracking (optional capability)
   find_by_client_request_id(client_request_id) -> RequestLookupResult
 ```
 
@@ -147,7 +150,9 @@ ShellTransport
 - Shell 是通用远端命令能力，不提供 Capture/Allegro 专用方法。
 - 命令执行必须由 Provider 的授权策略和后端权限控制；客户端接口不能取代服务端授权。
 - `get_status` 与 `get_result` 是可选能力，必须由能力声明确认。
+- `request.lookup_by_client_id` 是独立可选能力，适用于任何声明支持请求跟踪的操作，不限于 Shell。
 - `find_by_client_request_id` 用于提交响应丢失、调用方未取得 `provider_request_id` 时恢复原请求映射；它不是重新提交操作。
+- 查询结果必须区分“找到原请求”“权威确认不存在”和“无法判断”；不具备权威查询保证时不得返回“未提交”。
 - 若后端不能按客户端请求 ID 查询，Provider 必须明确声明不支持该恢复能力；调用方不能因此生成新 ID 并重放非幂等请求。
 - 如果后端仅支持同步执行，Provider 可以返回已完成结果，但不得伪造异步任务 ID 或状态查询能力。
 - Provider 必须明确命令超时是“停止等待”还是“远端执行已被终止”。客户端等待超时不能被解释为远端执行已停止。
@@ -389,13 +394,13 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 4. Lookup by client_request_id after a lost submission response（仅在声明支持时）。
 5. Same-key/same-payload and same-key/different-payload behavior（仅在声明 dedup 时）。
 6. Submission interruption and SUBMISSION_UNKNOWN。
-6. Status/result query consistency（仅在声明支持时）。
-7. UNKNOWN does not trigger blind resubmission。
-8. Read-only / idempotent / non-idempotent retry policy。
-9. File path, overwrite, append and conflict semantics。
-10. Chunk duplicate, conflicting chunk, integrity failure and resume semantics（仅在声明 chunked transfer 时）。
-11. Error redaction and credential non-disclosure。
-12. Provider close and resource cleanup。
+7. Status/result query consistency（仅在声明支持时）。
+8. UNKNOWN does not trigger blind resubmission。
+9. Read-only / idempotent / non-idempotent retry policy。
+10. File path, overwrite, append and conflict semantics。
+11. Chunk duplicate, conflicting chunk, integrity failure and resume semantics（仅在声明 chunked transfer 时）。
+12. Error redaction and credential non-disclosure。
+13. Provider close and resource cleanup。
 
 测试分层：
 
