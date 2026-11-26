@@ -13,7 +13,7 @@ M2.5 首版已明确改为本机 **STDIO-only** MCP 接入：Antigravity / OpenC
 ## 当前设计基线
 
 | [ADR-006：专业软件生命周期由 Agent Skill 自主掌握](ADR-006_Skill自主掌握专业软件生命周期.md) | 修订旧 Runtime Adapter / EDA Engine 的专业软件生命周期所有权；明确双端同一 AirBridge.exe、Skill 使用通用 Shell / RFS / 文件传输 | 2026-11-18 已采纳；M3 迁移按阶段实施 |
-| [ADR-014：独立 EDA Skills 与通用传输解耦架构](ADR-014_独立EDA_Skills与通用传输解耦架构.md) | 规定 Capture / Allegro Skill 独立安装、开发、测试、升级和发布；通过版本化通用 Transport Interface 与 Provider 解耦 AirBridge 和 Agent Host；明确共享库、权限、安全及分层验收约束 | 2026-11-26 项目负责人已确认；随 PR 合并后作为后续实施基线 |
+| [ADR-014：独立 EDA Skills 与通用传输解耦架构](ADR-014_独立EDA_Skills与通用传输解耦架构.md) | 规定 Capture / Allegro Skill 独立安装、开发、测试、升级和发布；通过版本化通用 Transport Interface 与 Provider 解耦 AirBridge；面向可持续扩展的 Agent Host 生态，通过标准 Skill 契约或独立 Host Adapter 接入，不绑定 Antigravity / OpenCode；明确共享库、权限、安全及分层验收约束 | 2026-11-26 项目负责人已确认；随 PR 合并后作为后续实施基线 |
 | [M3.2：Capture Skill 自主生命周期实施设计 v1.0](M3.2_Capture_Skill_自主生命周期实施设计_v1.0.md) | Capture Skill 的目录结构、Session 状态机、进程发现 / 受控启动、Tcl Bridge / 请求队列、OPJ / Dbo 只读检查、授权退出和安全边界 | M3.2.1–M3.2.6 已全部合并至 main（PR #8–#13）；2026-11-19 main 集成验证：Core 每版本 27 项、Capture 全量每版本 121 项、Runtime Session / A-B 双工仿真通过；Windows x64 AirBridge.exe 构建及 Artifact 上传成功。Host B 实测覆盖受控启动、OPJ / Dbo 只读核验、两阶段授权退出和原 PID 消失确认；未保存设计提示、多实例 / PID 复用、Shell 异常和 Host-A 崩溃 / 重启恢复仍需专项实机验证
 | 文档 | 内容 | 状态 |
 |---|---|---|
