@@ -252,6 +252,99 @@ abort_transfer(transfer_id) -> AbortReceipt
 
 如果 Provider 不支持这些保证，就不得声明可恢复的分块传输能力。
 
+### 5.5 公共数据类型草案
+
+以下类型是 Provider 间共享的逻辑数据模型。字段名和枚举值在 v1 冻结前仍可调整；Provider 不得省略会改变安全性或请求结果解释的字段。
+
+```text
+ContractInfo {
+  contract_name,
+  provider_name,
+  supported_contract_versions[],
+  selected_contract_version
+}
+
+CapabilitySnapshot {
+  provider_instance_id,
+  generated_at,
+  expires_at?,
+  capabilities[]
+}
+
+Capability {
+  name,
+  support,          // supported | unsupported | conditional
+  guarantees[],
+  conditions[],
+  limits,
+  notes?
+}
+
+Submission =
+  ACCEPTED {
+    operation_kind,
+    client_request_id,
+    provider_request_id?,
+    accepted_at
+  }
+| REJECTED {
+    operation_kind,
+    client_request_id,
+    error,            // outcome must be not_executed
+    rejected_at
+  }
+| SUBMISSION_UNKNOWN {
+    operation_kind,
+    client_request_id,
+    provider_request_id?,
+    reason,
+    observed_at
+  }
+
+RequestStatus {
+  operation_kind,
+  client_request_id?,
+  provider_request_id,
+  state,
+  observed_at,
+  authority,         // authoritative | non_authoritative
+  accepted_at?,
+  started_at?,
+  completed_at?
+}
+
+OperationResult {
+  operation_kind,
+  client_request_id?,
+  provider_request_id?,
+  state,             // terminal state or UNKNOWN
+  completed_at?,
+  payload?,          // operation-neutral envelope; payload schema belongs to operation kind
+  error?
+}
+
+TransportError {
+  category,
+  code,
+  message,
+  retryable,
+  outcome,           // not_executed | executed_failed | unknown | not_applicable
+  request_ids?,
+  details?
+}
+```
+
+类型约束：
+
+- `Submission.ACCEPTED` 仅表示 Provider 已确认接受，不表示操作已完成；`provider_request_id` 若尚不可用可省略，但此时 Provider 必须说明是否可通过 `client_request_id` 恢复映射。
+- `Submission.REJECTED` 仅可用于能保证请求未执行的拒绝；否则返回 `SUBMISSION_UNKNOWN`。
+- `Submission.SUBMISSION_UNKNOWN` 不得携带暗示失败或未执行的默认值。调用方必须保留原 `client_request_id`。
+- `RequestStatus.authority=non_authoritative` 的观察不能单独将请求推进为已确认状态；它只能作为诊断信息。权威等级不能由调用方自行提升。
+- `OperationResult.state=COMPLETED_FAILURE` 不代表没有副作用；如能确定部分副作用，必须在操作结果或错误详情中表达。若最终执行状态无法确认，使用 `UNKNOWN`，不得填入失败状态。
+- `payload` 只承载对应操作的结果数据；通用层不得把 Shell stdout、文件字节或其他操作数据误解为 EDA 领域对象。具体 payload schema 应由通用操作类型定义，不能由 Provider 私自改变。
+- `TransportError.retryable=true` 只表示按本契约自动重试不会违反操作语义及 Provider 保证；它不是“网络错误可再次尝试”的同义词。
+- 所有类型均不得包含 Token、Authorization Header、私钥或其他凭据。可选字段缺失必须与空字符串、空对象或“已确认不存在”区分。
+
 ## 6. 请求标识、关联与幂等性
 
 ### 6.1 两种请求标识
