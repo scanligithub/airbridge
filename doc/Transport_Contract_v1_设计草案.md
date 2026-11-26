@@ -143,8 +143,8 @@ TransportProvider
 
 RequestTracking (optional capability; applies to any request-bearing transport operation)
   find_by_client_request_id(operation_kind, client_request_id) -> RequestLookupResult
-  get_request_status(provider_request_id) -> RequestStatus
-  get_request_result(provider_request_id) -> OperationResult
+  get_request_status(operation_kind, provider_request_id) -> RequestStatus
+  get_request_result(operation_kind, provider_request_id) -> OperationResult
 ```
 
 `RuntimeInfo` 仅描述通用远端运行环境身份与版本，不包含 EDA 生命周期信息。
@@ -154,6 +154,7 @@ RequestTracking (optional capability; applies to any request-bearing transport o
 ```text
 ShellTransport
   submit(command, options, client_request_id) -> Submission
+  // Shell-specific convenience aliases for RequestTracking; same semantics and authorization.
   get_status(provider_request_id) -> RequestStatus
   get_result(provider_request_id) -> OperationResult
 
@@ -206,13 +207,13 @@ ShellTransport
 
 ```text
 FilesystemTransport
-  list(path, options, client_request_id) -> OperationResult
-  stat(path, client_request_id) -> OperationResult
-  read(path, range, client_request_id) -> OperationResult
-  write(path, content, write_mode, options, client_request_id) -> OperationResult
-  mkdir(path, options, client_request_id) -> OperationResult
-  move(source, destination, options, client_request_id) -> OperationResult
-  remove(path, options, client_request_id) -> OperationResult
+  list(path, options, client_request_id) -> OperationResponse
+  stat(path, client_request_id) -> OperationResponse
+  read(path, range, client_request_id) -> OperationResponse
+  write(path, content, write_mode, options, client_request_id) -> OperationResponse
+  mkdir(path, options, client_request_id) -> OperationResponse
+  move(source, destination, options, client_request_id) -> OperationResponse
+  remove(path, options, client_request_id) -> OperationResponse
 ```
 
 约束：
@@ -233,16 +234,18 @@ FilesystemTransport
 
 ```text
 begin_transfer(metadata, client_request_id) -> TransferSession
-put_chunk(transfer_id, index, bytes, chunk_digest) -> ChunkReceipt
+put_chunk(transfer_id, index, bytes, chunk_digest, client_request_id) -> OperationResponse
 get_transfer_status(transfer_id) -> TransferStatus
-complete_transfer(transfer_id, expected_digest) -> TransferReceipt
-abort_transfer(transfer_id) -> AbortReceipt
+complete_transfer(transfer_id, expected_digest, client_request_id) -> OperationResponse
+abort_transfer(transfer_id, client_request_id) -> OperationResponse
 ```
 
 必须明确：
 
 - transfer ID 的作用域、有效期和所有权；
 - 分块大小、总块数、序号规则；
+- 每次 `put_chunk`、`complete_transfer` 和 `abort_transfer` 都是独立的请求操作，必须携带调用方生成并持久化的 `client_request_id`；对同一逻辑调用的查询/恢复复用原 ID。
+- `transfer_id` 标识传输会话，不替代各操作的 `client_request_id`，也不自动提供去重保证。
 - 相同 transfer ID、块序号和块摘要重复提交时，Provider 必须明确是否返回原回执而不重复产生副作用；若不保证，则不得将块提交描述为可安全重试；
 - 不同内容重复提交相同块序号时必须返回冲突，不能覆盖已确认块；
 - 分块回执是否在断线/进程重启后仍有效，以及查询状态是否能区分已确认、未确认和未知块；
@@ -281,6 +284,8 @@ Capability {
   notes?
 }
 
+OperationResponse = Submission | OperationResult
+
 Submission =
   ACCEPTED {
     operation_kind,
@@ -302,11 +307,14 @@ Submission =
     observed_at
   }
 
+RequestState = NOT_SUBMITTED | SUBMISSION_UNKNOWN | ACCEPTED | RUNNING
+            | COMPLETED_SUCCESS | COMPLETED_FAILURE | REJECTED | UNKNOWN
+
 RequestStatus {
   operation_kind,
   client_request_id?,
   provider_request_id,
-  state,
+  state,             // RequestState; NOT_SUBMITTED is caller-local and not returned by Provider query
   observed_at,
   authority,         // authoritative | non_authoritative
   accepted_at?,
@@ -314,11 +322,16 @@ RequestStatus {
   completed_at?
 }
 
+OperationCompletion = COMPLETED_SUCCESS | COMPLETED_FAILURE | UNKNOWN
+
+OperationEffect = NOT_APPLIED | FULLY_APPLIED | PARTIALLY_APPLIED | UNKNOWN
+
 OperationResult {
   operation_kind,
   client_request_id?,
   provider_request_id?,
-  state,             // terminal state or UNKNOWN
+  state,             // OperationCompletion
+  effect,            // OperationEffect; describes side effects, not execution status
   completed_at?,
   payload?,          // operation-neutral envelope; payload schema belongs to operation kind
   error?
@@ -340,8 +353,12 @@ TransportError {
 - `Submission.ACCEPTED` 仅表示 Provider 已确认接受，不表示操作已完成；`provider_request_id` 若尚不可用可省略，但此时 Provider 必须说明是否可通过 `client_request_id` 恢复映射。
 - `Submission.REJECTED` 仅可用于能保证请求未执行的拒绝；否则返回 `SUBMISSION_UNKNOWN`。
 - `Submission.SUBMISSION_UNKNOWN` 不得携带暗示失败或未执行的默认值。调用方必须保留原 `client_request_id`。
+- `RequestStatus` 只能由 Provider 对已提交请求返回；`NOT_SUBMITTED` 是调用方本地状态，不是远端可查询状态。Provider 无法确认状态时返回 `UNKNOWN` 或非权威观察，不能构造一个看似确定的状态。
+- `RequestTracking` 的 `operation_kind` 是请求命名空间的一部分；`provider_request_id` 只在该操作类型和 Provider 声明的身份/命名空间范围内解释。
 - `RequestStatus.authority=non_authoritative` 的观察不能单独将请求推进为已确认状态；它只能作为诊断信息。权威等级不能由调用方自行提升。
-- `OperationResult.state=COMPLETED_FAILURE` 不代表没有副作用；如能确定部分副作用，必须在操作结果或错误详情中表达。若最终执行状态无法确认，使用 `UNKNOWN`，不得填入失败状态。
+- `OperationResult.effect` 与 `OperationResult.state` 必须分开解释：前者描述副作用实际达到的程度，后者描述执行是否完成/成功。特别是 `COMPLETED_FAILURE` 可与 `PARTIALLY_APPLIED` 或 `UNKNOWN` 并存。
+- `OperationResult.state=COMPLETED_FAILURE` 不代表没有副作用；必须通过 `effect` 表达 `NOT_APPLIED`、`PARTIALLY_APPLIED` 或 `UNKNOWN`。只有能证明完整目标效果已达成时才使用 `FULLY_APPLIED`。若最终执行状态无法确认，使用 `state=UNKNOWN`，并按证据设置 `effect`。
+- `OperationResponse` 允许 Provider 在操作已同步完成时直接返回 `OperationResult`；若操作仍在执行或提交结果不确定，则返回 `Submission`。两种路径都必须保留相同的 `client_request_id` 和结果语义。
 - `payload` 只承载对应操作的结果数据；通用层不得把 Shell stdout、文件字节或其他操作数据误解为 EDA 领域对象。具体 payload schema 应由通用操作类型定义，不能由 Provider 私自改变。
 - `TransportError.retryable=true` 只表示按本契约自动重试不会违反操作语义及 Provider 保证；它不是“网络错误可再次尝试”的同义词。
 - 所有类型均不得包含 Token、Authorization Header、私钥或其他凭据。可选字段缺失必须与空字符串、空对象或“已确认不存在”区分。
