@@ -115,6 +115,66 @@ Host Adapter / Provider Factory (owns Runtime)
 
 该所有权模型是逻辑约束，不要求 Provider 一定实现共享连接池。最简单且合规的实现可以为每个 Session 创建独立 Runtime/连接；优化复用只能在不削弱隔离的前提下进行。
 
+### 2.3 Provider Factory 与 Session 装配接口（提案，Host Adapter 层）
+
+Provider Factory 是 Host Adapter 的装配基础设施，不属于 Transport Contract Core，也不是 Provider 必须向 Skill 暴露的远端操作接口。其职责是依据受信配置创建 Provider Session，并管理 Runtime 资源所有权；它不决定 EDA 操作、不授予服务端 Scope，也不代替 Skill 执行业务前置条件。
+
+建议逻辑接口（非语言绑定、非冻结 API）：
+
+```text
+SessionRequest {
+  provider_alias: TrustedProviderAlias
+  skill_id: string
+  skill_version: string
+  accepted_contract_versions: string[]
+  required_profiles: ProfileRequirement[]
+  optional_profiles: ProfileRequirement[]
+  caller_context: OpaquePrincipalContext
+}
+
+ProviderFactory.create_session(request: SessionRequest)
+  -> ProviderSession | ProviderFactoryError
+
+ProviderFactory.shutdown() -> None
+```
+
+字段和边界：
+
+- `provider_alias` 是 Host Adapter/部署配置中预先登记的逻辑别名；Agent/Skill 不得通过自由文本提供任意 endpoint、串口端口、凭据位置或认证目标。别名解析到 Provider 类型、目标地址、audience 和连接策略等受信配置。
+- `skill_id`、`skill_version`、Contract 版本集合和 Profile requirements 来自已安装 Skill 的受信发布元数据，不接受模型在单次工具调用中覆盖。
+- `caller_context` 是 Host Adapter 从可信认证上下文注入的不透明主体信息；不得由 Skill 参数或模型文本构造。缺少可信主体上下文时，Factory 必须拒绝创建需要主体绑定的 Session。
+- Factory 不接收 Token、密码或 Authorization Header，也不返回凭据材料。Credential Source 由 Host Adapter 注入，并按第 10.1.1 节独立完成凭据绑定。
+- Factory 只负责创建 Provider Session 和关联 Runtime 资源；Contract/Profile 协商、能力快照检查由 Session bootstrap 流程完成。Factory 返回对象不代表协商成功，也不代表 Skill 已具备操作资格。
+- Skill bootstrap 必须先执行 Core Contract 协商，再协商必需 Profile，读取能力快照并检查全部 required_capabilities；任一步失败均不得向 Skill 注册可执行入口或提交副作用操作。
+- Factory 不得扩大 Skill 声明的权限或能力要求；不得因 Provider 支持更多 Profile/Capability 而自动向 Skill 暴露额外操作。
+
+**Provider 选择与装配：**
+
+1. Host Adapter 从受信安装清单加载 Skill，并验证 Skill 包身份/版本及其 Manifest。
+2. Host Adapter 根据已批准的 Skill-to-Provider 配置选择 `provider_alias`；默认 Provider、回退 Provider 和目标端点必须是显式配置，不得静默回退到其他身份或权限更宽的 Provider。
+3. Factory 解析别名并取得或创建 Provider Runtime。Runtime 可以按安全边界复用；连接池复用不得复用 Session 的调用主体、凭据绑定或请求状态。
+4. Factory 为本次 Skill 实例/调用主体创建新的 Provider Session，并注入不可伪造的 caller context 和获准的 Credential Source 引用。
+5. Skill bootstrap 在该 Session 上完成 Contract/Profile/Capability 门控；全部通过后才将 Skill 入口标记为 ready。
+
+**初始化失败与资源回收：**
+
+- Session 创建应具有原子可见性：未完成创建和 bootstrap 的 Session 不得被 Skill 作为 ready 使用。
+- Factory 创建 Runtime、Provider 或 Session 的任一阶段失败，必须回收本次创建的独占资源；若 Runtime 是共享资源，只能释放本次 acquire 的引用/租约，不得关闭其他 Session 正在使用的 Runtime。
+- Session bootstrap 在协商、Profile 匹配或能力门控阶段失败时，调用该 Session 的 `close()`，撤销本地注册并释放独占资源；不得尝试通过降级 Profile 或更宽权限 Provider 自动恢复。
+- Runtime acquire/release 应有明确所有权/引用计数或等效租约机制。最后一个 Session 释放后是否立即关闭 Runtime，由 Host Adapter 的明确资源策略决定；不能仅凭缓存超时推断没有活动使用者。
+- `ProviderFactory.shutdown()` 是 Host Adapter 内部生命周期操作：停止接收新建请求、拒绝新的 Session、按策略等待或关闭本地 Session，再释放其拥有的 Runtime。它不是 Provider Session 的 `close()`，也不构成远端请求取消。
+- Host Adapter 崩溃或进程被强制终止时，不能保证应用层 cleanup 一定执行。实现应依赖 OS 进程资源回收和 Provider/远端请求的持久状态语义；遗留请求仍按 UNKNOWN 规则恢复，不能把本地进程退出解释为远端失败。
+
+**Skill 卸载、重载与并发：**
+
+- 卸载 Skill 实例只关闭该实例拥有的 Session，并解除该实例的入口注册；不得影响其他 Skill 实例或主体。
+- 重载 Skill 应先使旧实例停止接收新调用，再按策略等待已进入的本地调用，关闭旧 Session，创建新 Session 并重新协商；不得把旧 Session 的可变协商状态复制到新 Session。
+- 并发创建同一 Skill 的多个实例时，每个实例仍有独立 Session；Factory 可复用 Runtime，但不得复用可变 Session 对象。
+- 若同一 Skill 实例处理多个不同调用主体，必须为不同主体建立独立 Session 或提供等效且经 Conformance 验证的强隔离；不得把首个调用者的主体上下文缓存为整个 Skill 实例的身份。
+- Provider 切换必须显式配置并重新创建 Session；不能把一个 Provider 的请求 ID、能力快照或凭据绑定直接迁移给另一个 Provider。
+
+Factory 的具体类名、依赖注入容器、线程模型、连接池实现和 Host 生命周期 Hook 留给 Host Adapter 实现；Transport Contract 只要求最终交付的 Provider Session 遵守 Core/Profile 语义。
+
 ## 3. 版本与兼容性
 
 建议使用独立语义版本：
@@ -1108,6 +1168,11 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 18. Runtime sharing and principal isolation：多个 Skill Session 共享 Runtime 时，协商版本/能力快照/请求上下文隔离；不同主体凭据与响应不串线；连接无法隔离主体时禁止跨主体复用。
 19. Reconnect and renegotiation：验证短暂断线恢复、Provider 实例变化、能力快照过期、旧请求 UNKNOWN 保留；重连不触发自动非幂等重放。
 20. Host Adapter lifecycle：卸载一个 Skill 只关闭其 Session；Runtime 只由所有者按资源策略关闭，且关闭不隐含远端取消。
+21. Provider Factory configuration and selection：验证 provider_alias 只能解析受信配置；端点、audience、凭据来源不能由 Skill/模型覆盖；无配置、歧义或不允许回退时 fail closed。
+22. Session bootstrap atomicity：Factory 返回未协商 Session 不代表 ready；Contract/Profile/Capability 任一步失败均不注册 Skill 操作入口，并释放本次 Session 资源。
+23. Partial initialization cleanup：Runtime 创建、Provider 构造、Session 创建和 bootstrap 各阶段注入失败；验证独占资源释放且共享 Runtime 不被误关闭。
+24. Skill unload/reload and concurrency：卸载/重载一个 Skill 不影响其他 Session；并发 Skill 实例拥有独立 Session；多主体不得共享主体上下文。
+25. Host Adapter crash/shutdown：验证本地资源回收策略、未完成请求 UNKNOWN 保留，以及本地 shutdown 不产生远端取消/失败结论。
 
 Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”当成真实 Provider 已具备保证。测试报告应记录 Provider 名称/版本、能力快照、适用 operation_kind、跳过的可选能力测试及原因。
 
@@ -1180,6 +1245,7 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 | v1 最小核心 | 所有 Provider 必须支持契约发现、版本协商、能力快照和关闭；Shell、Filesystem、RequestTracking、Chunked Transfer 均为可选能力 | Proposed |
 | Optional Profiles | Shell、RequestTracking、Filesystem、Chunked Transfer 通过独立版本化 Profile 声明；Skill/Provider 分别声明所需/实现的完整版本集合 | Proposed |
 | Provider 生命周期 | 每个 Skill/调用上下文独立 Provider Session；底层 Runtime 可选共享，Session close 不关闭共享 Runtime；Runtime 由 Host Adapter/Factory 所有者关闭 | Proposed |
+| Provider 装配 | Provider Factory 属于 Host Adapter 装配层；受信 alias 解析、创建独立 Session；Contract/Profile/Capability bootstrap 成功前 Skill 不 ready | Proposed |
 | 断线恢复 | 物理连接恢复不改变 UNKNOWN；Provider 身份/版本变化时新建 Session 并重新协商；重连不得隐式重放非幂等操作 | Proposed |
 
 这些是供评审的建议，不应在未获批准前视为已冻结的架构决策。
@@ -1189,8 +1255,8 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 1. 评审并冻结 v1 的请求状态、关联、去重、UNKNOWN 和重试语义。
 2. 将能力模型、数据类型和错误模型形成可测试的接口定义。
 3. 定义 Core Contract、Optional Profiles 及其版本/Conformance Suite 映射。
-4. 定义 Provider Runtime、Session、资源所有权、主体隔离和重连语义。
-5. 建立 Fake Provider 与公共 Contract Tests。
+4. 定义 Provider Runtime、Session、Factory 装配、资源所有权、主体隔离和重连语义。
+5. 建立 Fake Provider、Fake Factory 与公共 Contract/Host Adapter lifecycle tests。
 6. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
 7. 在独立测试中验证 Provider 与 Fake Provider 的契约一致性。
 8. 通过兼容性测试后，迁移 OrCAD Capture Skill。
@@ -1247,6 +1313,12 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] Credential Binding 和连接复用不会跨主体泄漏认证上下文或响应。
 - [ ] 重连不改变原请求 ID/UNKNOWN；Provider 实例或契约版本变化时重新协商。
 - [ ] Runtime shutdown 由 Host Adapter/Provider Factory 所有者管理，不暴露为 Skill 操作。
+- [ ] Provider Factory 属于 Host Adapter 装配层，不属于 Transport Contract Core。
+- [ ] Provider 选择只使用受信 provider_alias/配置，不接受模型自由文本指定 endpoint 或凭据来源。
+- [ ] Session 创建与 bootstrap 分离；Contract/Profile/Capability 门控通过前 Skill 不标记 ready。
+- [ ] 初始化失败时释放本次独占资源，不误关闭共享 Runtime。
+- [ ] Skill 卸载/重载和并发实例不会串用 Session 或调用主体。
+- [ ] Host Adapter 崩溃/关闭不把本地退出解释为远端取消或请求失败。
 - [ ] 本文评审通过前，不进行生产 Skill 迁移。
 
 ---
