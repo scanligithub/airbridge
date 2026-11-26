@@ -296,7 +296,9 @@ provider:
 
 | 契约接口/操作 | 必需能力 | 说明 |
 |---|---|---|
-| `get_capabilities()` | `runtime.capabilities.read`（初始化协商所需的基础能力） | 能力快照本身必须可读取；不能用快照内的能力声明循环授权首次读取 |
+| `get_contract_info()` / `negotiate_contract()` | 基础契约接口，不通过可选能力门控 | 仅做发现与版本协商；不执行副作用操作 |
+| `get_capabilities()` | 基础契约接口，不通过快照内能力门控 | 首次能力快照是引导流程的一部分，不能要求先声明 `runtime.capabilities.read` 才能读取自身 |
+| `get_runtime_info()` | `runtime.identity.read` | 可选通用运行时身份信息；不得用 EDA 版本信息代替 |
 | `get_runtime_info()` | `runtime.identity.read` | 只描述通用运行时身份；若 Provider 无此信息，应明确不支持，不得用 EDA 版本信息代替 |
 | `ShellTransport.submit()` | `shell.execute` | 仅表示允许提交 Shell 操作，不隐含状态查询、结果查询或去重 |
 | Shell `get_status()` | `shell.status_query` 或明确适用于 SHELL 的 `request.status_query` | 两种声明同时存在时语义保证必须一致 |
@@ -327,14 +329,54 @@ provider:
 
 以下为语言无关的逻辑接口，不限定 Python、TypeScript 或具体包布局。
 
+### 5.0 v1 最小核心与可选扩展边界
+
+为避免所有 Provider 被迫实现同一组后端操作，v1 将“契约生命周期核心”与“可选操作能力”分开。符合基础契约不代表 Provider 已提供任何特定远端操作；Skill 必须检查自己实际需要的能力。
+
+| 层级 | v1 定义 | 是否所有 Provider 必须实现 | 缺失时的处理 |
+|---|---|---|---|
+| 契约发现与版本协商 | 读取 Provider 身份/版本和支持的 Contract 版本；协商并固定一个共同版本 | 必须 | 初始化失败，不允许副作用操作 |
+| 能力快照 | 返回与已协商 Contract 版本绑定的能力快照 | 必须 | 初始化失败或能力视为未知，不允许副作用操作 |
+| Provider 生命周期 | 关闭 Provider 会话并释放其资源 | 必须 | 实现必须提供明确关闭语义 |
+| 统一操作结果/错误模型 | OperationResponse、Submission、OperationResult、TransportError | 任何提供操作的 Provider 必须遵守 | 不能用 Provider 私有返回结构绕过公共语义 |
+| Shell | ShellTransport.submit 及独立状态/结果查询能力 | 可选 | 未声明能力即不可调用 |
+| Filesystem 基础操作 | list/stat/read/write/mkdir/move/remove | 可选，且逐项声明能力 | 未声明的单项操作不可调用 |
+| RequestTracking | client ID 查找、状态查询、结果查询、服务端去重 | 可选，逐项声明能力和 operation_kind 范围 | 不支持时保留 UNKNOWN，不盲目重放 |
+| Chunked Transfer | begin/put/status/complete/abort 完整生命周期 | 可选扩展，不是 v1 基础要求 | 未声明完整能力时不得按可恢复分块传输使用 |
+| RuntimeInfo | 通用运行时身份/版本信息 | 可选 | 不影响基础契约协商；调用方不得伪造默认值 |
+
+因此，v1 的基础合规只证明 Provider 能完成版本协商、能力发现和生命周期管理，并遵守公共类型/安全边界；它不意味着 Shell、Filesystem、RequestTracking 或 Chunked Transfer 必须全部实现。某个 Skill 的可用性则由“契约版本兼容 + 所需能力全部满足 + 服务端授权”共同决定。
+
+### 5.0.1 基础生命周期接口
+
+建议基础接口明确为：
+
+```text
+TransportProvider
+  get_contract_info() -> ContractInfo
+  negotiate_contract(client_supported_versions[]) -> ContractNegotiationResult
+  get_capabilities(refresh=false) -> CapabilitySnapshot
+  close() -> None
+```
+
+- get_contract_info() 是无副作用的发现操作，返回 Provider 身份、实现版本和支持的 Contract 版本集合；它不执行副作用操作。
+- negotiate_contract() 根据调用方明确提供的完整版本集合选择最高共同版本；没有共同版本时返回明确的不兼容结果。不得静默选择未声明版本。
+- 协商结果绑定当前 Provider 会话；会话中的后续能力快照和操作必须使用该版本。不同 Skill 会话不得通过共享可变全局状态互相覆盖协商结果。
+- get_capabilities() 只返回当前已协商版本的能力快照。它是基础引导接口，不依赖快照内部的 runtime.capabilities.read 能力来授权首次读取，避免能力自举循环。
+- close() 释放当前 Provider 会话持有的资源；关闭后再次调用操作接口必须得到明确的关闭/生命周期错误，不得悄悄创建新会话。
+
+
 ### 5.1 Provider 生命周期
 
 ```text
 TransportProvider
   get_contract_info() -> ContractInfo
+  negotiate_contract(client_supported_versions[]) -> ContractNegotiationResult
   get_capabilities(refresh=false) -> CapabilitySnapshot
-  get_runtime_info() -> RuntimeInfo
   close() -> None
+
+Optional RuntimeInfo
+  get_runtime_info() -> RuntimeInfo
 
 RequestTracking (optional capability; applies to any request-bearing transport operation)
   find_by_client_request_id(operation_kind, client_request_id) -> RequestLookupResult
@@ -342,7 +384,7 @@ RequestTracking (optional capability; applies to any request-bearing transport o
   get_request_result(operation_kind, provider_request_id) -> OperationResult
 ```
 
-`RuntimeInfo` 仅描述通用远端运行环境身份与版本，不包含 EDA 生命周期信息。
+`RuntimeInfo` 仅描述通用远端运行环境身份与版本，不包含 EDA 生命周期信息；它是可选信息，不属于所有 Provider 的基础合规门槛。
 
 ### 5.2 Shell
 
@@ -462,9 +504,21 @@ abort_transfer(transfer_id, client_request_id) -> OperationResponse
 ```text
 ContractInfo {
   contract_name,
+  provider_id,
   provider_name,
-  supported_contract_versions[],
-  selected_contract_version
+  provider_implementation_version,
+  supported_contract_versions[]
+}
+
+ContractNegotiationResult =
+  NEGOTIATED {
+    contract_version,
+    provider_id,
+    provider_implementation_version
+  }
+| INCOMPATIBLE {
+    provider_supported_versions[],
+    reason
 }
 
 CapabilitySnapshot {
@@ -906,6 +960,7 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 | 兼容矩阵 | 分别记录规范兼容、CI 契约测试和真实 Provider/Host 集成验收 | Proposed |
 | 规范描述方式 | 规范文档定义语义，JSON Schema 校验结构，公共 Conformance Suite 验证行为；OpenAPI 仅作可选 Provider 绑定描述 | Proposed |
 | 规范权威边界 | 三类材料职责分离；发生冲突时阻断该版本发布并通过正式勘误解决 | Proposed |
+| v1 最小核心 | 所有 Provider 必须支持契约发现、版本协商、能力快照和关闭；Shell、Filesystem、RequestTracking、Chunked Transfer 均为可选能力 | Proposed |
 
 这些是供评审的建议，不应在未获批准前视为已冻结的架构决策。
 
@@ -948,6 +1003,10 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] 规范、Schema、测试套件和 fixtures 具有可追溯版本与内容摘要。
 - [ ] Fake Provider 与 AirBridge Provider 使用相同契约测试。
 - [ ] 文档中的目标能力没有被表述为当前已实现能力。
+- [ ] v1 基础 Provider 接口仅包含契约发现、版本协商、能力快照和关闭。
+- [ ] RuntimeInfo、Shell、Filesystem、RequestTracking 和 Chunked Transfer 不被误列为所有 Provider 的必需能力。
+- [ ] 能力快照引导读取不依赖自身声明的可选能力，避免自举循环。
+- [ ] 不兼容版本在副作用操作前失败，协商版本绑定当前 Provider 会话。
 - [ ] 本文评审通过前，不进行生产 Skill 迁移。
 
 ---
