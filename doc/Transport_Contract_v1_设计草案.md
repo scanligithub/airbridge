@@ -1043,6 +1043,12 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] RuntimeInfo、Shell、Filesystem、RequestTracking 和 Chunked Transfer 不被误列为所有 Provider 的必需能力。
 - [ ] 能力快照引导读取不依赖自身声明的可选能力，避免自举循环。
 - [ ] 不兼容版本在副作用操作前失败，协商版本绑定当前 Provider 会话。
+- [ ] OperationResult 与 RequestStatus 必须保留必填 client_request_id；provider_request_id 可选。
+- [ ] RequestReference 至少包含一个请求标识；双 ID 同时提供时必须验证映射一致。
+- [ ] RequestLookupResult 分别声明状态查询与结果查询是否可用。
+- [ ] 只读操作使用 NOT_APPLICABLE；副作用结果必须报告实际 effect。
+- [ ] TransportError 与 OperationResult.error 的适用边界明确；retryable 不单独授权重试。
+- [ ] CapabilitySnapshot 绑定 provider_id、provider_instance_id、实现版本和协商 Contract 版本。
 - [ ] 本文评审通过前，不进行生产 Skill 迁移。
 
 ---
