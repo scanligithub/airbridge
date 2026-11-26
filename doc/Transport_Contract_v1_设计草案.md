@@ -153,7 +153,7 @@ RequestTracking (optional capability; applies to any request-bearing transport o
 
 ```text
 ShellTransport
-  submit(command, options, client_request_id) -> Submission
+  submit(command, options, client_request_id) -> OperationResponse
   // Shell-specific convenience aliases for RequestTracking; same semantics and authorization.
   get_status(provider_request_id) -> RequestStatus  // operation_kind is implicitly SHELL
   get_result(provider_request_id) -> OperationResult // operation_kind is implicitly SHELL
@@ -176,7 +176,7 @@ ShellTransport
   RequestLookupResult =
     FOUND {
       client_request_id,
-      provider_request_id,
+      provider_request_id?,
       status?,
       status_availability, // RequestLookupStatusAvailability
       payload_digest?,
@@ -237,7 +237,7 @@ FilesystemTransport
 ```text
 begin_transfer(metadata, client_request_id) -> OperationResponse
 put_chunk(transfer_id, index, bytes, chunk_digest, client_request_id) -> OperationResponse
-get_transfer_status(transfer_id) -> TransferStatus
+get_transfer_status(transfer_id, client_request_id) -> OperationResponse
 complete_transfer(transfer_id, expected_digest, client_request_id) -> OperationResponse
 abort_transfer(transfer_id, client_request_id) -> OperationResponse
 ```
@@ -248,6 +248,7 @@ abort_transfer(transfer_id, client_request_id) -> OperationResponse
 - 分块大小、总块数、序号规则；
 - 每次 `put_chunk`、`complete_transfer` 和 `abort_transfer` 都是独立的请求操作，必须携带调用方生成并持久化的 `client_request_id`；对同一逻辑调用的查询/恢复复用原 ID。
 - `transfer_id` 标识传输会话，不替代各操作的 `client_request_id`，也不自动提供去重保证。
+- `get_transfer_status` 是只读查询，但仍是独立调用；如需跨调用恢复该查询本身，必须携带新的 `client_request_id`。
 - `begin_transfer` 本身也必须按普通请求处理；若其响应丢失，必须按其 `client_request_id` 执行请求恢复，不能通过新建 transfer ID 盲目重开。
 - 相同 transfer ID、块序号和块摘要重复提交时，Provider 必须明确是否返回原回执而不重复产生副作用；若不保证，则不得将块提交描述为可安全重试；
 - 不同内容重复提交相同块序号时必须返回冲突，不能覆盖已确认块；
