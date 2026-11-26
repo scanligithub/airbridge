@@ -235,6 +235,7 @@ Core Contract 只定义 Provider 生命周期、契约发现/协商、能力快�
 | Profile ID | 覆盖范围 | 说明 |
 |---|---|---|
 | transport.shell | Shell 命令提交及该 Profile 明确列出的查询接口 | 不默认包含状态查询、结果查询或去重；仍按能力逐项声明 |
+| transport.request-tracking | 通用请求关联、Client ID 查找、状态查询、结果查询及服务端去重 | 各子能力独立声明，并限定 operation_kind、主体范围和保证 |
 | transport.filesystem | list/stat/read/write/mkdir/move/remove | 每个文件操作独立声明能力及语义保证 |
 | transport.filesystem.chunked-transfer | begin/put/status/complete/abort | 作为 Filesystem Profile 的可选扩展 Profile；必须声明完整生命周期和恢复保证 |
 
@@ -293,6 +294,9 @@ required_profiles:
     supported_versions: ["1.0.0"]
     required_capabilities:
       - shell.execute
+  - profile_id: transport.request-tracking
+    supported_versions: ["1.0.0"]
+    required_capabilities:
       - request.correlation
 optional_profiles: []
 ```
@@ -305,6 +309,9 @@ contract:
   supported_versions: ["1.0.0"]
 implemented_profiles:
   - profile_id: transport.shell
+    supported_versions: ["1.0.0"]
+    conformance_suite_version: "1.0.0"
+  - profile_id: transport.request-tracking
     supported_versions: ["1.0.0"]
     conformance_suite_version: "1.0.0"
   - profile_id: transport.filesystem
@@ -322,7 +329,7 @@ implemented_capabilities:
 **依赖声明规则：**
 
 - Skill 的 required_profiles 表示缺失即不能初始化；optional_profiles 表示可在缺失时禁用相应功能，但不得影响核心工作流的安全性。
-- required_capabilities 必须在对应 Profile 的能力命名空间/范围内明确列出。若能力支持为 conditional，Skill 必须在提交前验证条件；无法验证时视为不满足。
+- required_capabilities 必须在对应 Profile 的能力命名空间/范围内明确列出。request.* 能力由 transport.request-tracking Profile 声明，不应混入 Shell Profile。若能力支持为 conditional，Skill 必须在提交前验证条件；无法验证时视为不满足。
 - Skill 不得仅声明“需要 Shell”而不列出实际依赖的能力；例如 Shell 执行与 Shell 状态查询是不同能力。
 - Provider 的 implemented_profiles 只声明已通过对应 Profile Conformance Suite 的版本；implemented_capabilities/运行时快照列出该 Profile 中实际支持的能力。不得用 Profile 存在推导全部操作支持。
 - Profile Conformance Suite 独立版本化，并明确对应 Profile 版本；Core Contract Suite 只验证基础核心和公共语义，不替代 Profile 专项行为测试。
