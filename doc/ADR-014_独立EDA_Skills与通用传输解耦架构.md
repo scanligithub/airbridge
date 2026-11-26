@@ -4,7 +4,7 @@
 - 版本：1.0
 - 日期：2026-11-26
 - 状态：**项目负责人已确认的架构约束；通过 PR 合并后作为后续设计与实施基线**
-- 适用范围：AirBridge Core、Capture Skill、Allegro Skill、未来其他 EDA Skills、各类现有及未来 Agent Host（Antigravity、OpenCode 仅为当前示例），以及 Skill 与远端运行环境之间的通用访问层
+- 适用范围：AirBridge Core、面向不同 EDA 厂商及具体专业产品的独立 EDA Skills（包括 OrCAD Capture、OrCAD PCB Editor、Altium Designer、Allegro 等未来可分别建设的 Skill）、各类现有及未来 Agent Host（Antigravity、OpenCode 仅为当前示例），以及 Skill 与远端运行环境之间的通用访问层
 
 > 本 ADR 补充并细化 [ADR-006：专业软件生命周期由 Agent Skill 自主掌握](ADR-006_Skill自主掌握专业软件生命周期.md)。ADR-006 规定 AirBridge Core 不拥有专业软件生命周期；本 ADR 进一步规定 EDA Skills 必须是独立、可安装、可演进的软件包，并通过稳定的通用传输契约与远端环境交互。
 >
@@ -14,13 +14,18 @@
 
 ## 1. 决策摘要
 
-**Capture Skill 与 Allegro Skill 必须是两个相互独立、可分别安装、可分别升级、可分别测试和发布的 Skill；二者均不得与 AirBridge Core 或某一个 Agent 产品绑定。**
+**每一种 EDA 专业产品的领域能力应由对应的独立 Skill 承担；不同产品的 Skill 必须可分别安装、升级、测试和发布，且不得与 AirBridge Core 或某一个 Agent 产品绑定。**
+
+例如，OrCAD Capture 与 OrCAD PCB Editor 必须分别建设为两个独立 Skill；Altium Designer（AD）和 Allegro 也分别由各自的产品 Skill 承担。未来新增 EDA 厂商或产品时，按同一原则新增独立 Skill。上述名称描述目标架构方向，不表示这些 Skill 均已实现或通过验收。
 
 目标关系：
 
-1. Capture Skill 专注 OrCAD Capture 的专业软件生命周期、Tcl / Dbo API、工程对象模型、版本差异、Capture 工作流和结果验证。
-2. Allegro Skill 专注 Allegro 的专业软件生命周期、SKILL API、PCB 对象模型、版本差异、PCB 工作流和结果验证。
-3. 两个 Skill 都应能够安装到不同厂商、不同形态的 Agent Host。支持原生 Skill 规范的 Host 可直接加载；不原生支持的 Host 可通过独立 Host Adapter 接入。Antigravity 和 OpenCode 是当前示例，不构成支持范围上限。不能要求用户必须同时安装另一个 Skill。
+1. OrCAD Capture Skill 专注 OrCAD Capture 的专业软件生命周期、Tcl / Dbo API、工程对象模型、版本差异、Capture 工作流和结果验证。
+2. OrCAD PCB Editor Skill 专注 OrCAD PCB Editor 的专业软件生命周期、相应自动化接口、PCB 对象模型、版本差异、PCB 工作流和结果验证；它与 Allegro Skill 分别维护，不因产品关系而合并。
+3. Altium Designer（AD）Skill 专注 Altium Designer 自身的专业软件生命周期、自动化接口、设计对象模型、版本差异和工作流。
+4. Allegro Skill 专注 Allegro 的专业软件生命周期、SKILL API、PCB 对象模型、版本差异、PCB 工作流和结果验证。
+5. 未来其他 EDA 厂商或产品应按具体产品边界建设独立 Skill，不以当前列出的产品作为支持范围上限。
+6. 上述各 Skill 都应能够安装到不同厂商、不同形态的 Agent Host。支持原生 Skill 规范的 Host 可直接加载；不原生支持的 Host 可通过独立 Host Adapter 接入。Antigravity 和 OpenCode 是当前示例，不构成支持范围上限。不能要求用户必须同时安装另一个 Skill。
 4. Skill 的领域逻辑不得依赖 AirBridge 的内部 Python 模块、内部类、私有目录结构、内部数据库或 AirBridge.exe 进程内代码。
 5. Skill 通过定义清晰、版本化、可替换的通用传输接口访问远端环境。AirBridge 可以作为该接口的一种传输实现，但不得成为 Skill 领域逻辑的组成部分或唯一可理解的运行环境。
 6. 允许存在独立的通用访问适配器、客户端库或本机 Broker，以承接认证、授权、审计和传输；这些组件不得引入 Capture / Allegro 专属业务语义。
@@ -67,7 +72,7 @@
 - AirBridge Provider 依赖通用 Transport Interface，并适配 AirBridge 对外公开的通用 API。
 - AirBridge Core 不依赖 Capture Skill、Allegro Skill 或其领域模型。
 - Agent Host 适配只处理 Skill 发现、安装、加载和必要的 Host 能力差异，不承载领域业务。
-- Capture Skill 与 Allegro Skill 之间不存在运行时依赖。
+- 不同 EDA 产品 Skill 之间不存在运行时依赖，包括同一产品套件中的 OrCAD Capture Skill 与 OrCAD PCB Editor Skill。
 
 图中 AirBridge 是当前项目的远端通信实现，不意味着 Skill 包必须与 AirBridge 同仓库、同安装包、同版本或同一发布周期。
 
@@ -75,7 +80,7 @@
 
 ### 3.1 独立安装
 
-- Capture Skill 和 Allegro Skill 必须可以分别安装、卸载和升级。
+- 每个 EDA 产品 Skill 必须可以独立安装、卸载和升级；例如 OrCAD Capture Skill 与 OrCAD PCB Editor Skill 之间不存在安装依赖。
 - 安装 Capture Skill 不得强制安装 Allegro Skill；安装 Allegro Skill 不得强制安装 Capture Skill。
 - 两个 Skill 均应能够被所有声明兼容的 Agent Host 分别发现、加载和使用；新 Host 的接入应通过标准 Skill 契约或独立 Host Adapter 完成，不得要求复制或重写领域逻辑。
 - Skill 包应声明自身名称、版本、入口文件、脚本和资源、依赖、兼容范围及安装说明。
@@ -90,7 +95,9 @@ Capture Skill 的版本升级不应要求 Allegro Skill 同步升级，反之亦
 
 ### 3.3 领域边界隔离
 
-Capture Skill 独占 Capture 领域知识，包括但不限于：
+每个 Skill 只拥有其对应专业产品的领域知识。以下列出当前明确的产品边界示例：
+
+**OrCAD Capture Skill** 独占 OrCAD Capture 领域知识，包括但不限于：
 
 - Capture 安装发现、版本选择和运行环境检查；
 - Capture 进程识别、启动、复用和正常退出策略；
@@ -99,7 +106,7 @@ Capture Skill 独占 Capture 领域知识，包括但不限于：
 - OPJ / DSN 工程工作流、设计数据检查和结果验证；
 - Capture 保存决策及异常恢复策略。
 
-Allegro Skill 独占 Allegro 领域知识，包括但不限于：
+**Allegro Skill** 独占 Allegro 领域知识，包括但不限于：
 
 - Allegro 安装发现、版本选择和运行环境检查；
 - Allegro 进程识别、启动、复用和正常退出策略；
@@ -108,7 +115,9 @@ Allegro Skill 独占 Allegro 领域知识，包括但不限于：
 - BRD 工程工作流、设计数据检查和结果验证；
 - Allegro 保存决策及异常恢复策略。
 
-禁止把 Capture / Dbo 逻辑放入 Allegro Skill，禁止把 Allegro / axl 逻辑放入 Capture Skill，也禁止把任一领域逻辑迁入 AirBridge Core。
+**OrCAD PCB Editor Skill** 应独占 OrCAD PCB Editor 自身的产品领域逻辑；不得因为它与 OrCAD Capture 同属 OrCAD 产品套件而把两个产品的领域实现合并。**Altium Designer Skill** 只负责 Altium Designer 自身领域逻辑。
+
+禁止把 Capture / Dbo 逻辑放入 Allegro 或 OrCAD PCB Editor Skill，禁止把 Allegro / axl 逻辑放入 Capture Skill，也禁止把任一 EDA 产品领域逻辑迁入 AirBridge Core。不同产品即使存在相似工作流，也只能共享领域无关的基础设施，不得因此共享或耦合产品专属对象模型。
 
 ## 4. 与 AirBridge 解耦的具体含义
 
@@ -240,9 +249,10 @@ Transport Interface 是 Skill 与远端执行环境之间的稳定边界。它�
 3. **定义 Provider 边界：** 设计 AirBridge Provider 与 Fake / Mock Provider；先验证契约，再逐步迁移现有 Skill。
 4. **定义 Skill 包规范：** 明确独立目录、元数据、依赖、版本、测试、发布、安装和升级策略。
 5. **整理通用共享库：** 只提取领域无关代码；避免 Capture 与 Allegro 互相依赖。
-6. **完善 Capture Skill：** 以独立包方式逐步完善，不因其当前功能不完整而把领域能力下沉到 Core。
-7. **设计并实现 Allegro Skill：** 独立设计、独立包、独立测试，不复制 Capture 的领域实现。
-8. **完善权限模型：** 结合两个 Skill 的实际操作矩阵，设计可扩展、最小权限的授权方式。
+6. **完善 OrCAD Capture Skill：** 以独立包方式逐步完善，不因其当前功能不完整而把领域能力下沉到 Core。
+7. **独立设计 OrCAD PCB Editor Skill：** 单独定义产品接口、领域模型、测试和发布，不与 OrCAD Capture Skill 合并。
+8. **独立设计 Allegro Skill 与 Altium Designer Skill：** 分别按各自产品边界建设；后续其他 EDA 产品按相同原则扩展。
+9. **完善权限模型：** 结合各 Skill 的实际操作矩阵，设计可扩展、最小权限的授权方式。
 9. **分层验收和迁移：** 保留现有兼容路径，逐项迁移并验证，不进行未经评估的大规模重构。
 
 在 Transport Contract 和包规范评审通过前，不应为了当前 Skill 方便而把某一组 Shell / RFS 调用方式永久固化成唯一抽象，也不应贸然创建大量 Capture / Allegro 专用 AirBridge API。
@@ -276,8 +286,8 @@ Transport Interface 是 Skill 与远端执行环境之间的稳定边界。它�
 
 ## 13. 最终原则
 
-> **AirBridge 负责通用、安全、可靠的远程通信；Transport Provider 负责把通用传输契约映射到具体通信实现；Capture Skill 负责 Capture；Allegro Skill 负责 Allegro。**
+> **AirBridge 负责通用、安全、可靠的远程通信；Transport Provider 负责把通用传输契约映射到具体通信实现；每个 EDA 产品 Skill 负责且只负责对应产品的专业领域工作。**
 >
-> **Capture Skill 和 Allegro Skill 是独立产品化的 Agent Skills：可分别安装到 Antigravity / OpenCode，可分别开发、测试、升级和发布；它们不依赖 AirBridge 内部实现，也不依赖彼此。**
+> **OrCAD Capture 与 OrCAD PCB Editor 分别建设为独立 Skill；Altium Designer、Allegro 及未来新增的 EDA 产品也按具体产品边界独立建设。所有 Skill 均可分别安装到兼容的 Agent Host，分别开发、测试、升级和发布，不依赖 AirBridge 内部实现，也不依赖其他 EDA Skill。**
 >
 > **任何未来功能都必须遵守领域隔离、接口稳定、最小权限和分层验收原则。**
