@@ -1636,8 +1636,8 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 3. 定义 Core Contract、Optional Profiles 及其版本/Conformance Suite 映射。
 4. 定义 Provider Runtime、Session、Factory 装配、资源所有权、主体隔离和重连语义。
 5. 建立 Fake Provider、Fake Factory 与公共 Transport Contract Conformance Suite。
-6. 定义语言无关 Skill Lifecycle/Invocation Contract、Manifest 和稳定错误边界。
-7. 建立 Fake Skill、Fake Host Adapter 与生命周期/并发/取消契约测试，再验证真实 Host 兼容矩阵。
+6. 独立定义并评审 Skill Package/Manifest/Trust 规范，以及语言无关 Skill Lifecycle/Invocation Contract；分别确定版本、制品和兼容边界。
+7. 建立 Fake Skill、Fake Host Adapter 与包完整性/签名、依赖图、配置秘密隔离、生命周期/并发/取消契约测试，再验证真实 Host 兼容矩阵。
 8. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
 9. 使用公共 Conformance Suite 验证 AirBridge Provider 与 Fake Provider 的契约一致性；真实 Provider 集成结果单独记录。
 10. 通过兼容性测试后，迁移 OrCAD Capture Skill。
