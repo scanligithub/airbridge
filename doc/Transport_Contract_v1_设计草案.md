@@ -561,7 +561,7 @@ RequestReference {
 物理连接状态与逻辑 Provider Session 状态必须分开处理。底层连接短暂断开并不自动意味着 Provider Session 已结束；但连接恢复也不证明原请求未执行或已完成。
 
 1. Provider Runtime 可以按实现策略恢复物理连接。恢复时必须重新验证目标 Provider 身份；不得把连接到不同 Provider 实例当成原实例的透明恢复。
-2. 若 Provider 身份/实例、Contract 版本或已协商 Profile 版本发生变化，原 Session 不得继续使用旧能力快照提交操作；必须建立新 Session 并重新协商。
+2. 若 Provider 身份/实例、Contract 版本或已协商 Profile 版本发生变化，原 Session 不得继续使用旧能力快照提交操作；必须建立新 Session 并重新协商。若仅 provider_instance_id 因服务重启变化，只有在 provider_id/逻辑命名空间保持一致且 Provider 明确保证请求映射/记录可跨实例恢复时，才可通过新 Session 查询旧请求；若 Provider 身份或逻辑命名空间改变，不得假定新 Provider 能查询旧请求，原请求保持 UNKNOWN，除非存在显式、受验证的迁移映射。
 3. 若身份/实例和已协商版本均未变化，Provider 可在原 Session 内恢复连接，但必须刷新或验证能力快照的有效性；能力未知或过期时，副作用操作 fail closed。
 4. 连接中断期间已提交或可能已离开调用方的请求，按原 `client_request_id` 保持 `SUBMISSION_UNKNOWN` 或 `UNKNOWN`；不得因重连自动转成 REJECTED、NOT_SUBMITTED 或失败。
 5. 恢复后优先执行受授权的原请求查找/状态/结果核实（若对应 Profile/能力可用）。查询不可用或结果不确定时保留 UNKNOWN；不得为“试试看”而重新提交非幂等请求。
