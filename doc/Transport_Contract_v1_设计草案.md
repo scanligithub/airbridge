@@ -155,8 +155,8 @@ RequestTracking (optional capability; applies to any request-bearing transport o
 ShellTransport
   submit(command, options, client_request_id) -> Submission
   // Shell-specific convenience aliases for RequestTracking; same semantics and authorization.
-  get_status(provider_request_id) -> RequestStatus
-  get_result(provider_request_id) -> OperationResult
+  get_status(provider_request_id) -> RequestStatus  // operation_kind is implicitly SHELL
+  get_result(provider_request_id) -> OperationResult // operation_kind is implicitly SHELL
 
 ```
 
@@ -164,19 +164,21 @@ ShellTransport
 
 - Shell 是通用远端命令能力，不提供 Capture/Allegro 专用方法。
 - 命令执行必须由 Provider 的授权策略和后端权限控制；客户端接口不能取代服务端授权。
-- `get_status` 与 `get_result` 是可选能力，必须由能力声明确认。
-- `request.lookup_by_client_id`、`request.status_query` 和 `request.result_query` 是通用请求跟踪能力，适用于 Provider 明确声明支持跟踪的请求类型；它们不隐含所有 Shell/RFS 操作都支持查询。
+- `get_status` 与 `get_result` 是 Shell 专属便捷别名，等价于 `RequestTracking.get_request_status(SHELL, provider_request_id)` 与 `get_request_result(SHELL, provider_request_id)`；不得定义不同的状态或授权语义。相应查询能力必须由 `shell.status_query` / `shell.result_query` 或适用的通用请求跟踪能力明确声明。
+- `request.lookup_by_client_id`、`request.status_query` 和 `request.result_query` 是通用请求跟踪能力，适用于 Provider 明确声明支持跟踪的请求类型；它们不隐含所有 Shell/RFS 操作都支持查询。若同时声明通用能力和 Shell 专属能力，两者必须满足相同的语义保证，不得产生冲突。
 - Shell 专属能力标识（如 `shell.status_query`、`shell.result_query`）只描述 Shell 操作范围；通用请求跟踪能力不能仅凭 Shell 能力推断，也不能反向推断。
 - `find_by_client_request_id` 用于提交响应丢失、调用方未取得 `provider_request_id` 时恢复原请求映射；它不是重新提交操作。
 - 查询结果必须区分“找到原请求”“权威确认不存在”和“无法判断”；不具备权威查询保证时不得返回“未提交”。
 - 建议将结果结构固定为：
   ```text
+  RequestLookupStatusAvailability = AVAILABLE | UNAVAILABLE
+
   RequestLookupResult =
     FOUND {
       client_request_id,
       provider_request_id,
       status?,
-      status_availability,
+      status_availability, // RequestLookupStatusAvailability
       payload_digest?,
       accepted_at?,
       result_reference?
@@ -233,7 +235,7 @@ FilesystemTransport
 若声明 `filesystem.chunked_transfer`，建议提供：
 
 ```text
-begin_transfer(metadata, client_request_id) -> TransferSession
+begin_transfer(metadata, client_request_id) -> OperationResponse
 put_chunk(transfer_id, index, bytes, chunk_digest, client_request_id) -> OperationResponse
 get_transfer_status(transfer_id) -> TransferStatus
 complete_transfer(transfer_id, expected_digest, client_request_id) -> OperationResponse
@@ -246,6 +248,7 @@ abort_transfer(transfer_id, client_request_id) -> OperationResponse
 - 分块大小、总块数、序号规则；
 - 每次 `put_chunk`、`complete_transfer` 和 `abort_transfer` 都是独立的请求操作，必须携带调用方生成并持久化的 `client_request_id`；对同一逻辑调用的查询/恢复复用原 ID。
 - `transfer_id` 标识传输会话，不替代各操作的 `client_request_id`，也不自动提供去重保证。
+- `begin_transfer` 本身也必须按普通请求处理；若其响应丢失，必须按其 `client_request_id` 执行请求恢复，不能通过新建 transfer ID 盲目重开。
 - 相同 transfer ID、块序号和块摘要重复提交时，Provider 必须明确是否返回原回执而不重复产生副作用；若不保证，则不得将块提交描述为可安全重试；
 - 不同内容重复提交相同块序号时必须返回冲突，不能覆盖已确认块；
 - 分块回执是否在断线/进程重启后仍有效，以及查询状态是否能区分已确认、未确认和未知块；
@@ -270,6 +273,7 @@ ContractInfo {
 
 CapabilitySnapshot {
   provider_instance_id,
+  contract_version,
   generated_at,
   expires_at?,
   capabilities[]
@@ -353,6 +357,7 @@ TransportError {
 - `Submission.ACCEPTED` 仅表示 Provider 已确认接受，不表示操作已完成；`provider_request_id` 若尚不可用可省略，但此时 Provider 必须说明是否可通过 `client_request_id` 恢复映射。
 - `Submission.REJECTED` 仅可用于能保证请求未执行的拒绝；否则返回 `SUBMISSION_UNKNOWN`。
 - `Submission.SUBMISSION_UNKNOWN` 不得携带暗示失败或未执行的默认值。调用方必须保留原 `client_request_id`。
+- `CapabilitySnapshot.contract_version` 必须与当前协商选定的契约版本一致；快照不得在不同 Contract 版本之间复用。
 - `RequestStatus` 只能由 Provider 对已提交请求返回；`NOT_SUBMITTED` 是调用方本地状态，不是远端可查询状态。Provider 无法确认状态时返回 `UNKNOWN` 或非权威观察，不能构造一个看似确定的状态。
 - `RequestTracking` 的 `operation_kind` 是请求命名空间的一部分；`provider_request_id` 只在该操作类型和 Provider 声明的身份/命名空间范围内解释。
 - `RequestStatus.authority=non_authoritative` 的观察不能单独将请求推进为已确认状态；它只能作为诊断信息。权威等级不能由调用方自行提升。
@@ -426,7 +431,8 @@ Correlation 只解决“找到同一个请求”，不保证重复提交不会�
 | 状态 | 含义 |
 |---|---|
 | `NOT_SUBMITTED` | 调用方确认尚未开始提交；仅表示提交前状态，不表示 Provider 已拒绝 |
-| `SUBMISSION_UNKNOWN` | 提交调用发生中断，无法确认后端是否接受 |
+| `SUBMISSION_UNKNOWN` | 提交调用发生中断，无法确认 Provider/后端是否接受请求 |
+| `UNKNOWN` | 已知请求可能已被接受或执行，但当前无法确认其执行状态或最终结果 |
 | `ACCEPTED` | Provider 明确确认已接受请求 |
 | `RUNNING` | 后端明确报告正在执行 |
 | `COMPLETED_SUCCESS` | 已确认执行成功 |
@@ -453,6 +459,7 @@ UNKNOWN 是一种真实结果，不是普通异常，也不等于失败。
 - 任一已提交但无法核实的非终态可转入 `UNKNOWN`。
 - `COMPLETED_FAILURE` 表示操作以失败结果结束，不代表没有副作用；副作用是否部分发生必须由操作结果/错误详情明确说明。
 - `REJECTED` 仅表示后端拒绝且保证未执行；若不能保证未执行，应报告 `UNKNOWN`，而不是 `REJECTED`。
+- `SUBMISSION_UNKNOWN` 专指提交接受情况不明；`UNKNOWN` 用于已提交请求的执行状态/最终结果不明。两者不可互换，查询到原请求映射只能证明请求被记录，不能单独证明其已执行或完成。
 - `UNKNOWN` 不能仅因查询超时、连接恢复或本地重启而自动转成失败或未提交；只能由权威查询结果或业务层证据更新。
 - `UNKNOWN` 可依据权威证据恢复为 `ACCEPTED`、`RUNNING`、`COMPLETED_SUCCESS`、`COMPLETED_FAILURE` 或 `REJECTED`；每次恢复必须保留证据来源和观察时间。若证据只能证明请求映射存在、不能证明执行状态，则只能恢复到已证实的最低状态。
 - 已确认终态（`COMPLETED_SUCCESS`、`COMPLETED_FAILURE`、`REJECTED`）不得因普通查询失败、超时或较旧快照而回退。若 Provider 发现先前终态报告本身错误，必须返回明确的纠正/冲突诊断，而不是静默回退。
