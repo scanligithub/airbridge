@@ -6,10 +6,14 @@ import unittest
 from mcp import Client
 
 from airbridge_mcp_gateway.server import create_server
+from airbridge_mcp_gateway.service import AirBridgeGateway
 
 
 class _FakeGateway:
     config = type("Config", (), {"base_url": "http://127.0.0.1:8888"})()
+
+    def __init__(self):
+        self.execute_calls = 0
 
     def get_capabilities(self):
         return {"state": "negotiated"}
@@ -18,6 +22,7 @@ class _FakeGateway:
         return {"success": True}
 
     def execute_eda(self, **_kwargs):
+        self.execute_calls += 1
         return {"state": "disabled"}
 
     def get_request_status(self, request_id):
@@ -101,7 +106,8 @@ class McpServerRegistrationTests(unittest.TestCase):
         self.assertFalse(execute_tool.annotations.idempotent_hint)
 
     def test_in_process_mcp_client_can_list_and_call_tools(self):
-        server = create_server(_FakeGateway())
+        gateway = _FakeGateway()
+        server = create_server(gateway)
 
         async def exercise_client():
             async with Client(server) as client:
@@ -123,6 +129,60 @@ class McpServerRegistrationTests(unittest.TestCase):
         self.assertEqual(capabilities.structured_content["state"], "negotiated")
         self.assertFalse(execution.is_error)
         self.assertEqual(execution.structured_content["state"], "disabled")
+        self.assertEqual(gateway.execute_calls, 1)
+
+    def test_mcp_rejects_boolean_and_non_integer_numeric_arguments(self):
+        gateway = _FakeGateway()
+        server = create_server(gateway)
+        invalid_arguments = [
+            {"script": "x", "timeout": True},
+            {"script": "x", "timeout": False},
+            {"script": "x", "timeout": 1.5},
+            {"script": "x", "wait_timeout_ms": True},
+            {"script": "x", "wait_timeout_ms": 1.5},
+            {"script": "x", "keep_open": 1},
+            {"script": "x", "keep_open": "true"},
+        ]
+
+        async def exercise_client():
+            async with Client(server) as client:
+                results = []
+                for arguments in invalid_arguments:
+                    results.append(
+                        await client.call_tool("airbridge_eda_execute", arguments)
+                    )
+                return results
+
+        results = asyncio.run(exercise_client())
+        self.assertEqual(len(results), len(invalid_arguments))
+        for arguments, result in zip(invalid_arguments, results):
+            with self.subTest(arguments=arguments):
+                self.assertTrue(result.is_error)
+        self.assertEqual(gateway.execute_calls, 0)
+
+    def test_gateway_validation_rejects_boolean_integer_confusion(self):
+        valid = ("puts 1", "agent_request.tcl", "auto", "", 60, True, 60_000)
+        self.assertIsNone(AirBridgeGateway._validate_eda_arguments(*valid))
+
+        invalid_cases = [
+            ("timeout boolean true", ("puts 1", "agent_request.tcl", "auto", "", True, True, 60_000)),
+            ("timeout boolean false", ("puts 1", "agent_request.tcl", "auto", "", False, True, 60_000)),
+            ("timeout float", ("puts 1", "agent_request.tcl", "auto", "", 1.5, True, 60_000)),
+            ("timeout below minimum", ("puts 1", "agent_request.tcl", "auto", "", 0, True, 60_000)),
+            ("timeout above maximum", ("puts 1", "agent_request.tcl", "auto", "", 301, True, 60_000)),
+            ("wait timeout boolean", ("puts 1", "agent_request.tcl", "auto", "", 60, True, True)),
+            ("wait timeout float", ("puts 1", "agent_request.tcl", "auto", "", 60, True, 1.5)),
+            ("wait timeout below minimum", ("puts 1", "agent_request.tcl", "auto", "", 60, True, -1)),
+            ("wait timeout above maximum", ("puts 1", "agent_request.tcl", "auto", "", 60, True, 300_001)),
+            ("keep_open integer", ("puts 1", "agent_request.tcl", "auto", "", 60, 1, 60_000)),
+            ("keep_open string", ("puts 1", "agent_request.tcl", "auto", "", 60, "true", 60_000)),
+        ]
+        for name, arguments in invalid_cases:
+            with self.subTest(name=name):
+                result = AirBridgeGateway._validate_eda_arguments(*arguments)
+                self.assertIsNotNone(result)
+                self.assertEqual(result["state"], "not_submitted")
+                self.assertEqual(result["error"]["code"], "INVALID_ARGUMENT")
 
 
 if __name__ == "__main__":
