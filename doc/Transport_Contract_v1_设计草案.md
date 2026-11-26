@@ -350,6 +350,7 @@ SkillInvocation {
   input: StructuredValue
   deadline?: Timestamp
   cancellation: CancellationSignal
+  // 由 Host Adapter 注入的可信调用元数据；不是模型可控 input。
   caller_context: OpaquePrincipalContext
 }
 
@@ -1527,7 +1528,7 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 2. 将能力模型、数据类型和错误模型形成可测试的接口定义。
 3. 定义 Core Contract、Optional Profiles 及其版本/Conformance Suite 映射。
 4. 定义 Provider Runtime、Session、Factory 装配、资源所有权、主体隔离和重连语义。
-5. 建立 Fake Provider、Fake Factory、Fake Host Adapter 与公共 Contract/Host Adapter lifecycle tests。
+5. 建立 Fake Provider、Fake Factory 与公共 Transport Contract Conformance Suite。
 6. 定义语言无关 Skill Lifecycle/Invocation Contract、Manifest 和稳定错误边界。
 7. 建立 Fake Skill、Fake Host Adapter 与生命周期/并发/取消契约测试，再验证真实 Host 兼容矩阵。
 8. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
