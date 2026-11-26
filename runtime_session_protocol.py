@@ -87,7 +87,7 @@ def make_session_capabilities(
     server_version: str = CLIENT_VERSION,
     build_identity: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    identity = dict(build_identity or get_build_identity())
+    identity = dict(get_build_identity() if build_identity is None else build_identity)
     return create_envelope(
         {
             "supported_protocols": [SESSION_PROTOCOL_ID],
