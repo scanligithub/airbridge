@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 from airbridge_app import SerialWorker
 from protocol import ABFPFrame, FrameParser, FrameType
+from build_identity import get_build_identity
 from runtime_session_protocol import (
     encode_session_message,
     make_session_capabilities,
@@ -167,6 +168,8 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertFalse(status_b["can_create_session"])
         self.assertEqual(status_a["profiles"], [])
         self.assertEqual(status_b["profiles"], [])
+        self.assertEqual(status_a["peer_build_identity"], get_build_identity())
+        self.assertEqual(status_b["peer_build_identity"], get_build_identity())
 
     def test_late_peer_hello_recovers_unconfirmed_local_handshake(self):
         host_a = _new_worker()
@@ -228,7 +231,10 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
             host.get_session_peer_status()["state"], "negotiating"
         )
 
+        # Simulate an older peer that sends the pre-M2.5.2 capabilities
+        # envelope without the optional build_identity field.
         matched = make_session_capabilities(request["message_id"])
+        matched["payload"].pop("build_identity")
         payload = encode_session_message(
             FrameType.SESSION_CAPABILITIES, matched
         )
@@ -239,6 +245,7 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
             request["message_id"], timeout=0.1
         )
         self.assertEqual(result["state"], "negotiated", result)
+        self.assertIsNone(host.get_session_peer_status()["peer_build_identity"])
 
     def test_link_reset_resolves_pending_waiter_and_rejects_stale_generation(self):
         host = _new_worker()
