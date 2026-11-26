@@ -190,6 +190,42 @@ transport-contract/
 - Provider 的测试报告明确记录 Provider 实现版本、Contract 版本、Conformance Suite 版本、能力快照和适用的 operation_kind。
 - 真实 Provider 集成结果单独报告；Fake Provider 通过不能替代真实 Provider 验收。
 
+### 3.7 兼容性声明示例（非冻结格式）
+
+以下仅示意每个组件需要声明哪些信息，不代表当前仓库已创建这些 manifest：
+
+Skill 发布元数据示例：
+
+```yaml
+skill:
+  version: "0.4.0"
+  transport_contract:
+    accepted_versions:
+      - "1.0.0"
+    required_capabilities:
+      - "shell.execute"
+  tested_provider_versions:
+    - "airbridge-provider:0.1.0"
+  tested_host_adapters:
+    - "opencode-adapter:0.1.0"
+```
+
+Provider 发布元数据示例：
+
+```yaml
+provider:
+  id: "airbridge"
+  implementation_version: "0.1.0"
+  implemented_contract_versions:
+    - "1.0.0"
+  conformance_suite_version: "1.0.0"
+  capabilities:
+    - name: "shell.execute"
+      support: "supported"
+```
+
+以上仅示意字段职责和版本相互独立的关系，不冻结 manifest 格式，也不表示仓库已创建这些独立软件包。Host Adapter 同样需要独立声明其实现版本及已验证的 Host/版本范围。
+
 ### 3.8 Optional Profile 的独立版本与协商（提案）
 
 Core Contract 只定义 Provider 生命周期、契约发现/协商、能力快照和公共语义基础；具体操作集合通过独立 Optional Profile 提供。Profile 不改变 Core Contract 的身份，也不把某种操作强加给所有 Provider。
@@ -290,46 +326,6 @@ implemented_capabilities:
 - Skill 不得仅声明“需要 Shell”而不列出实际依赖的能力；例如 Shell 执行与 Shell 状态查询是不同能力。
 - Provider 的 implemented_profiles 只声明已通过对应 Profile Conformance Suite 的版本；implemented_capabilities/运行时快照列出该 Profile 中实际支持的能力。不得用 Profile 存在推导全部操作支持。
 - Profile Conformance Suite 独立版本化，并明确对应 Profile 版本；Core Contract Suite 只验证基础核心和公共语义，不替代 Profile 专项行为测试。
-### 3.7 兼容性声明示例（非冻结格式）
-
-以下仅示意每个组件需要声明哪些信息，不代表当前仓库已创建这些 manifest：
-
-Skill 发布元数据示例：
-
-
-以下仅示意每个组件需要声明哪些信息，不代表当前仓库已创建这些 manifest：
-
-Skill 发布元数据示例：
-
-```yaml
-skill:
-  version: "0.4.0"
-  transport_contract:
-    accepted_versions:
-      - "1.0.0"
-    required_capabilities:
-      - "shell.execute"
-  tested_provider_versions:
-    - "airbridge-provider:0.1.0"
-  tested_host_adapters:
-    - "opencode-adapter:0.1.0"
-```
-
-Provider 发布元数据示例：
-
-```yaml
-provider:
-  id: "airbridge"
-  implementation_version: "0.1.0"
-  implemented_contract_versions:
-    - "1.0.0"
-  conformance_suite_version: "1.0.0"
-  capabilities:
-    - name: "shell.execute"
-      support: "supported"
-```
-
-以上仅示意字段职责和版本相互独立的关系，不冻结 manifest 格式，也不表示仓库已创建这些独立软件包。Host Adapter 同样需要独立声明其实现版本及已验证的 Host/版本范围。
 
 ## 4. 能力协商
 
@@ -390,28 +386,6 @@ provider:
 6. 对条件支持的能力，必须明确条件与限制；不满足条件时按不支持处理。
 
 
-### 4.5 Profile 与 Capability 的绑定规则（提案）
-
-能力快照不能只给出一组无来源的能力名称。每项可选能力必须能够关联到已协商的 Profile 及其版本。建议 Profile 级声明采用以下逻辑结构：
-
-```text
-ProfileDeclaration {
-  profile_id,
-  profile_version,
-  conformance_suite_version,
-  capabilities[]
-}
-```
-
-Provider 只有在该 Profile 的必需 Conformance Tests 通过后，才能声明实现对应 Profile 版本。Profile 中可选能力仍可标记 supported / unsupported / conditional；Profile 合规不代表全部可选能力都受支持。
-
-Skill 初始化门控顺序：
-
-1. 协商 Core Contract 版本。
-2. 对每个 required_profile 协商 Profile 版本；任一失败则初始化失败。
-3. 获取并验证绑定上述版本的能力快照。
-4. 检查 Skill 声明的 required_capabilities；缺失、unsupported、条件无法验证或快照过期均视为不满足。
-5. 只有以上检查通过且服务端认证/授权成功后，才允许提交远端操作。
 ### 4.4 能力与接口门控映射（v1 必须明确）
 
 能力声明不是说明性元数据；每个可选接口调用都必须有可判定的能力门控。Provider 在能力缺失、为 `unsupported`、条件不满足或快照过期时，必须在提交任何副作用请求前拒绝调用。不得仅因为某个 HTTP 路由或底层函数存在，就推断对应契约能力已支持。
@@ -445,6 +419,29 @@ Skill 初始化门控顺序：
 3. 通用请求跟踪能力必须声明支持的 `operation_kind` 集合。能力名称存在但没有覆盖当前操作类型时，视为不支持。
 4. 每个接口的调用方仍须通过服务端认证和授权；能力快照不是授权凭据，也不能扩大服务端 Scope。
 5. Provider 的 conformance tests 必须验证“声明支持的能力确实可调用”和“声明不支持/条件不满足时在提交前拒绝”，不能只测试能力 JSON 的格式。
+
+### 4.5 Profile 与 Capability 的绑定规则（提案）
+
+能力快照不能只给出一组无来源的能力名称。每项可选能力必须能够关联到已协商的 Profile 及其版本。建议 Profile 级声明采用以下逻辑结构：
+
+```text
+ProfileDeclaration {
+  profile_id,
+  profile_version,
+  conformance_suite_version,
+  capabilities[]
+}
+```
+
+Provider 只有在该 Profile 的必需 Conformance Tests 通过后，才能声明实现对应 Profile 版本。Profile 中可选能力仍可标记 supported / unsupported / conditional；Profile 合规不代表全部可选能力都受支持。
+
+Skill 初始化门控顺序：
+
+1. 协商 Core Contract 版本。
+2. 对每个 required_profile 协商 Profile 版本；任一失败则初始化失败。
+3. 获取并验证绑定上述版本的能力快照。
+4. 检查 Skill 声明的 required_capabilities；缺失、unsupported、条件无法验证或快照过期均视为不满足。
+5. 只有以上检查通过且服务端认证/授权成功后，才允许提交远端操作。
 
 ## 5. 核心接口草案
 
@@ -1128,11 +1125,11 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 1. 评审并冻结 v1 的请求状态、关联、去重、UNKNOWN 和重试语义。
 2. 将能力模型、数据类型和错误模型形成可测试的接口定义。
 3. 定义 Core Contract 与 Shell/Filesystem/Chunked Transfer Profile 的边界、版本及 Conformance Suite 映射。
-3. 建立 Fake Provider 与公共 Contract Tests。
-4. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
-5. 在独立测试中验证 Provider 与 Fake Provider 的契约一致性。
-6. 通过兼容性测试后，迁移 OrCAD Capture Skill。
-7. 后续独立迁移 OrCAD PCB Editor、Allegro、AD 等 Skills；它们之间不形成依赖。
+4. 建立 Fake Provider 与公共 Contract Tests。
+5. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
+6. 在独立测试中验证 Provider 与 Fake Provider 的契约一致性。
+7. 通过兼容性测试后，迁移 OrCAD Capture Skill。
+8. 后续独立迁移 OrCAD PCB Editor、Allegro、AD 等 Skills；它们之间不形成依赖。
 
 ## 15. 评审检查表
 
