@@ -1781,7 +1781,7 @@ class AntigravityIPCServer:
       ).strip().lower() in ("1", "true", "yes", "on")
     self.allow_eda_execute = bool(allow_eda_execute)
 
-    def _positive_limit(value: Optional[int], env_name: str, default: int)
+    def _positive_limit(value: Optional[int], env_name: str, default: int) -> int:
       raw = os.environ.get(env_name, str(default)) if value is None else value
       try:
         parsed = int(raw)
