@@ -87,7 +87,7 @@
 ### 3.1 独立安装
 
 - 每个 EDA 产品 Skill 必须可以独立安装、卸载和升级；例如 OrCAD Capture Skill 与 OrCAD PCB Editor Skill 之间不存在安装依赖。
-- 安装 Capture Skill 不得强制安装 Allegro Skill；安装 Allegro Skill 不得强制安装 Capture Skill。
+- 安装任一 EDA 产品 Skill 不得强制安装其他 EDA 产品 Skill。
 - 每个产品 Skill 均应能够被所有声明兼容的 Agent Host 分别发现、加载和使用；新 Host 的接入应通过标准 Skill 契约或独立 Host Adapter 完成，不得要求复制或重写领域逻辑。
 - Skill 包应声明自身名称、版本、入口文件、脚本和资源、依赖、兼容范围及安装说明。
 - Agent Host 特有的元数据或配置应通过薄适配层处理；不得复制两套不同的领域逻辑。
@@ -218,7 +218,7 @@ Transport Interface 是 Skill 与远端执行环境之间的稳定边界。它�
 5. 由 Skill 通过明确依赖声明引用；
 6. 避免把共享库变成包含所有 EDA 领域代码的“大一统 Skill Runtime”。
 
-共享库可以与 AirBridge 仓库同仓管理，也可以独立仓库发布；仓库位置不改变其逻辑独立性。不得仅为了代码复用而让两个 Skill 在安装时互相依赖。
+共享库可以与 AirBridge 仓库同仓管理，也可以独立仓库发布；仓库位置不改变其逻辑独立性。不得仅为了代码复用而让不同 EDA 产品 Skill 在安装时互相依赖。
 
 ## 7. Agent Host 兼容原则
 
@@ -283,7 +283,7 @@ Transport Interface 是 Skill 与远端执行环境之间的稳定边界。它�
 
 ## 11. 新增功能和代码评审的强制检查项
 
-今后任何涉及 AirBridge、Capture Skill、Allegro Skill、共享库或 Agent Host 集成的 PR，都必须回答：
+今后任何涉及 AirBridge、任一 EDA 产品 Skill、共享库或 Agent Host 集成的 PR，都必须回答：
 
 1. 这段代码属于 Core、Transport Provider、共享库、Host Adapter，还是某个具体 EDA 产品 Skill？
 2. 是否引入任何 EDA 产品专属语义到 AirBridge Core 或通用 Transport Contract？
