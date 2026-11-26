@@ -58,6 +58,25 @@ AirBridge API / remote transport
 - Provider 不得把后端专有字段泄漏到 Skill 的领域模型；确需透传时放入明确标记为 opaque 的诊断扩展字段。
 - 不同 EDA Product Skills 不得互相依赖。
 
+### 2.1 Host Adapter 与 Provider 的职责边界
+
+Host Adapter 和 Transport Provider 是两个不同的适配层，不应合并为一个“Host 专用 Provider”：
+
+| 组件 | 负责 | 不负责 |
+|---|---|---|
+| Skill | 产品领域工作流、用户意图校验、操作前置条件和业务后置验证 | Agent Host API、凭据读取、底层 HTTP/串口协议 |
+| Host Adapter | Skill 包发现/加载、入口注册、Host 工具调用协议适配、Host 生命周期、Provider 工厂装配、注入可信调用主体上下文 | EDA 业务逻辑、决定服务端 Scope、读取并向模型暴露秘密 |
+| Transport Provider | 实现本契约，将通用操作映射到 AirBridge 或其他传输后端；执行能力门控、请求关联和错误映射 | Agent Host 专有工具 schema、EDA 产品生命周期 |
+| Credential Source | 按受信 Provider/audience/purpose 和调用主体上下文提供受控凭据绑定 | 选择 EDA 操作、授予服务端权限、修改 Token Scope |
+| Authenticated Transport | 将不透明凭据绑定安全地应用于目标出站请求 | 向 Skill/Agent 返回凭据材料 |
+
+约束：
+
+- 同一个 Skill 包不得因 Antigravity、OpenCode 或其他 Host 而复制 EDA 领域实现；Host 差异应留在独立 Adapter。
+- Host Adapter 可以提供 Provider 工厂和 Credential Source 装配，但不得把 Host 的私有对象或工具 schema 泄漏到 Skill 的领域 API。
+- 若某 Host 无法安全提供可信主体上下文或凭据绑定能力，Adapter 必须明确报告不支持所需认证模式；不得退化为要求 Agent 把 Token 写入 Prompt、工具参数或 Skill 配置。
+- Fake Provider 可与 Fake Host Adapter 配合做 Skill 单元测试；Host Compatibility 测试则单独验证真实 Host 的加载、调用和生命周期。Fake Host 通过不代表真实 Host 兼容。
+
 ## 3. 版本与兼容性
 
 建议使用独立语义版本：
@@ -598,6 +617,51 @@ Credential Source 负责按调用上下文提供凭据；Provider 负责安全�
 - 必须定义凭据不可用、过期、撤销及轮换时的错误语义。认证失败不能自动触发凭据探测、输出凭据元数据或扩大权限。
 - Credential Source 只负责提供凭据，不负责授予服务端权限；服务端仍独立执行身份认证、Scope、所有权和审计。
 
+### 10.1.1 Credential Source 的最小接口边界（提案）
+
+为避免“抽象 Credential Source”停留在概念层，建议 v1 将职责拆为 Skill、Provider、Host Adapter 和 Credential Source 四个边界：
+
+- Skill：只调用 Provider 的业务中立接口；不得接收、保存、检查或拼接凭据。
+- Provider：根据固定的 Provider 配置和调用上下文请求凭据绑定；不得自行搜索环境变量、读取 Agent 配置文件或探测凭据。
+- Host Adapter：负责把宿主调用生命周期与 Skill/Provider 工厂连接起来，并注入获准的 Credential Source 实现；不得把凭据放进 Agent 工具参数、模型上下文或 Skill 可见配置。
+- Credential Source：连接经批准的 OS 凭据库或组织凭据集成；按 Provider/audience、用途和已认证调用主体上下文提供受限凭据能力。它不负责决定服务端 Scope，也不替代服务端授权。
+
+建议逻辑接口（非语言绑定的伪类型）：
+
+```text
+CredentialContext {
+  provider_id: string
+  audience: string
+  purpose: string
+  caller_context: OpaquePrincipalContext
+}
+
+CredentialBinding {
+  binding_handle: OpaqueNonSerializableHandle
+  expires_at?: Timestamp
+}
+
+CredentialSource.bind(context: CredentialContext)
+  -> CredentialBinding | CredentialSourceError
+
+AuthenticatedTransport.send(request, binding_handle)
+  -> TransportResponse | TransportError
+```
+
+约束：
+
+1. `provider_id`、`audience` 和 `purpose` 来自 Provider 的受信配置/能力声明；Skill 可以选择已配置的 Provider，但不能任意改写 audience 或请求更高权限 Scope。
+2. `caller_context` 必须由 Host Adapter/认证上下文提供，不得由模型生成的自由文本伪造。缺少可信主体上下文时，Credential Source 必须拒绝绑定。
+3. `binding_handle` 是进程内不透明句柄，不是 Token 字符串；不得 JSON 序列化、持久化、复制到 Skill 返回值、日志或异常。若某实现无法提供不透明句柄，必须把秘密的注入限制在 Host/OS 安全集成内部，不能退化为把秘密返回给 Agent。
+4. `AuthenticatedTransport` 是唯一允许把凭据绑定到出站请求的位置。Provider 只能提交请求和句柄，不得读取句柄内部秘密或自行生成 Authorization Header。
+5. 凭据绑定应限定目标 Provider/audience 和用途，并尽可能短生命周期；过期时间是可选诊断信息，不得用于推断 Token 内容、长度或是否存在。
+6. Credential Source 错误只返回稳定错误类别，例如 `CREDENTIAL_UNAVAILABLE`、`CREDENTIAL_BINDING_DENIED`；不得返回秘密或可用于凭据探测的详细元数据。服务端返回的认证/授权失败仍按实际 HTTP/API 语义映射。
+7. 若认证失败发生在请求可能已被远端接收之后，Provider 必须依据服务端响应权威性判断 outcome；不得仅凭本地刷新凭据后自动重放非幂等操作。
+8. 凭据轮换不得改变原请求 ID、载荷摘要或请求所有权；轮换后恢复查询仍按原调用主体和原请求标识执行。
+9. 不定义通用 `get_token()`、`read_secret()`、`is_token_present()` 或 `token_length()` 接口；不得通过探测存在性来决定是否调用 Provider。
+
+此接口仅定义边界和安全语义，不规定 Antigravity、OpenCode 或其他 Agent Host 的私有配置格式，也不要求它们暴露凭据给 Skill。
+
 ### 10.2 服务端安全不可被客户端替代
 
 - 所有远端操作仍由服务端执行认证、Scope 校验、所有权检查、审计和限流。
@@ -676,7 +740,7 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 
 因此，本草案的当前 AirBridge 能力声明应采取保守映射：Shell 可继续验证现有 Broker 能力；RFS 的 correlation、lookup、dedup、result query 和 chunked transfer 均保持未声明/未证实，直至专门的 Provider conformance tests 通过。
 
-### 12.1 迁移限制
+### 12.2 迁移限制
 
 - 本文不授权修改现有 Scope、Token、Credential Manager 或主机配置。
 - 不授权绕过禁用的 EDA Execute。
