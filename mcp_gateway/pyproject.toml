@@ -9,7 +9,7 @@ description = "Standalone stdio MCP Gateway for the AirBridge local HTTP API"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
-dependencies = ["mcp==2.3.0"]
+dependencies = ["mcp==2.3.0", "pydantic>=2.11,<3"]
 
 [project.scripts]
 airbridge-mcp-gateway = "airbridge_mcp_gateway.server:main"
