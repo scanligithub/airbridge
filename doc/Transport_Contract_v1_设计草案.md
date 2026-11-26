@@ -128,7 +128,74 @@ Contract、Provider、Skill 和 Host Adapter 是不同的版本化发布单元�
 - 初期可以在 AirBridge 仓库内维护规范源文件和公共测试套件，以降低协作成本；但必须独立版本化和发布，不要求 Skill 安装 AirBridge 仓库，也不要求与 AirBridge.exe 同步发布。待 Contract 稳定、出现多个独立 Provider/Skill 消费者或独立发布确有必要时，再评估迁移到独立仓库/包。迁移不得改变已发布 Contract 的版本身份和内容摘要。
 - 本草案不指定具体包管理器、注册表、仓库 URL、SDK 语言或自动生成工具；这些属于后续实现决策，不能在未评审前预设。
 
-### 3.4 兼容性声明示例（非冻结格式）
+### 3.4 规范描述格式与权威边界（提案）
+
+建议采用“规范文档 + JSON Schema + 公共 Conformance Suite”的组合，而不是把 OpenAPI 或某一种编程语言接口作为整个 Transport Contract 的唯一规范来源。
+
+三类材料分别承担不同职责，不能互相替代：
+
+| 材料 | 权威范围 | 应表达的内容 | 不应承担的职责 |
+|---|---|---|---|
+| 语言无关的规范文档 | 契约语义的规范性权威 | 操作语义、前置条件、状态机、UNKNOWN、请求关联与去重、幂等性、副作用、错误含义、安全边界、兼容规则 | 不以某个 Provider 的 HTTP 路由或内部类定义契约 |
+| JSON Schema | JSON 数据结构的机器可校验定义 | 公共请求/响应对象、枚举、必需字段、字段约束、可扩展字段边界 | 不单独定义跨请求状态迁移、服务端持久性、去重保证或操作副作用 |
+| 公共 Contract Conformance Suite | 可执行行为符合性的验证基线 | Provider 对状态、错误、请求恢复、去重、权限隔离、文件语义和能力门控的实际行为 | 不代替规范文本，也不因某个测试未覆盖就放宽规范要求 |
+
+具体规则：
+
+1. 规范文档使用明确的规范性措辞区分 MUST、MUST NOT、SHOULD、MAY；每项强制语义应能关联到一个或多个契约测试，无法自动化的要求必须标明人工验收方式。
+2. JSON Schema 只校验单个 JSON 文档的结构约束。跨字段条件可使用 Schema 支持的条件结构；跨请求时序、持久性、授权主体绑定、幂等和 UNKNOWN 收敛等行为必须由 Conformance Suite 验证。
+3. Schema 应声明其 JSON Schema 方言版本；Contract 发布版本与 Schema 文件版本需建立明确映射。Schema 的结构兼容性不能单独证明 Contract 语义兼容。
+4. 公共类型的 JSON 表示应保持语言无关。Python dataclass、TypeScript interface 或其他语言绑定属于 SDK/绑定层，不得成为规范源文件；生成代码必须能追溯到对应 Contract 版本和 Schema。
+5. 公共 Conformance Suite 必须绑定一个明确的 Contract 版本，并对每个 Provider 使用相同的测试定义和公共 fixtures。Provider 专有测试可以补充后端集成行为，但不能修改或跳过公共测试来宣称完整符合契约。
+6. OpenAPI 可用于描述 AirBridge HTTP Provider 或其他 HTTP Provider 的具体网络 API；它属于 Provider 的传输绑定描述。OpenAPI 文档不能把 HTTP 特有路径、Header、状态码或认证机制反向提升为 Skill 必须依赖的 Contract 接口。
+7. 如果某一接口未来需要 HTTP、串口、IPC 等不同绑定，各绑定应分别说明其映射与限制；只有在满足同一规范语义和 Conformance Suite 时，才能声明实现同一 Contract。
+8. 若规范文档、Schema 和测试出现冲突，不能由实现自行挑选对自己有利的解释。该版本应标记为规范缺陷/发布阻断项，由维护者通过勘误或新版本明确解决；已发布版本不得静默改变含义。
+
+### 3.5 建议的规范工件组织（非冻结目录）
+
+为便于独立发布和审查，建议未来按职责组织工件，而不是按某个 Provider 的源码结构组织：
+
+```text
+transport-contract/
+  spec/
+    overview.md
+    operations.md
+    request-lifecycle.md
+    security.md
+    compatibility.md
+  schemas/
+    common/
+    shell/
+    filesystem/
+    requests/
+  conformance/
+    manifest.yaml
+    fixtures/
+    tests/
+  bindings/
+    http/                 # 可选：HTTP Provider 绑定说明
+```
+
+该结构只是职责示意，不要求现在创建目录或迁移文件。spec/ 是语义规范来源，schemas/ 是结构定义，conformance/ 是行为测试；bindings/ 描述特定传输映射，不能反向成为核心契约依赖。
+
+### 3.6 三类材料的发布门槛
+
+一个 Contract 版本只有在以下条件全部满足后，才可标记为正式发布：
+
+- 规范文档完成评审，所有 MUST / MUST NOT 要求均有明确解释，关键语义无未决冲突。
+- JSON Schema 可独立校验规范样例，且 Schema 方言、版本映射和兼容性规则明确。
+- 公共 Conformance Suite 与 Contract 版本绑定；Fake Provider 通过全部适用的必需测试。
+- 每项可选能力都有能力门控测试；未实现的可选能力明确标记 unsupported 或 conditional，不得以跳过测试冒充支持。
+- 发布制品、规范文档、Schema、测试套件和 fixtures 均具有可追溯的版本与内容摘要。
+- Provider 的测试报告明确记录 Provider 实现版本、Contract 版本、Conformance Suite 版本、能力快照和适用的 operation_kind。
+- 真实 Provider 集成结果单独报告；Fake Provider 通过不能替代真实 Provider 验收。
+
+### 3.7 兼容性声明示例（非冻结格式）
+
+以下仅示意每个组件需要声明哪些信息，不代表当前仓库已创建这些 manifest：
+
+Skill 发布元数据示例：
+
 
 以下仅示意每个组件需要声明哪些信息，不代表当前仓库已创建这些 manifest：
 
@@ -837,6 +904,8 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 | 版本协商 | Skill/Provider 显式声明已验证的完整 Contract 版本集合，初始化选择最高共同版本；无交集时 fail closed | Proposed |
 | 发布制品 | 每个 Contract 版本发布不可变规范制品、内容摘要和对应 Conformance Suite | Proposed |
 | 兼容矩阵 | 分别记录规范兼容、CI 契约测试和真实 Provider/Host 集成验收 | Proposed |
+| 规范描述方式 | 规范文档定义语义，JSON Schema 校验结构，公共 Conformance Suite 验证行为；OpenAPI 仅作可选 Provider 绑定描述 | Proposed |
+| 规范权威边界 | 三类材料职责分离；发生冲突时阻断该版本发布并通过正式勘误解决 | Proposed |
 
 这些是供评审的建议，不应在未获批准前视为已冻结的架构决策。
 
@@ -872,6 +941,11 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] 能力快照绑定本次协商的 Contract 版本和 Provider 身份。
 - [ ] 已发布 Contract 制品不可变，并附内容摘要和对应 Conformance Suite。
 - [ ] 兼容矩阵区分规范兼容、CI 契约测试和真实 Provider/Host 集成验收。
+- [ ] 规范文档、JSON Schema 和公共 Conformance Suite 的权威范围清晰且互不替代。
+- [ ] JSON Schema 方言版本及其与 Contract 版本的映射明确。
+- [ ] 跨请求状态、去重、UNKNOWN 和副作用语义由公共行为测试验证，而非仅依赖 Schema。
+- [ ] OpenAPI（如采用）只描述具体 Provider 绑定，不成为 EDA Skill 的核心契约依赖。
+- [ ] 规范、Schema、测试套件和 fixtures 具有可追溯版本与内容摘要。
 - [ ] Fake Provider 与 AirBridge Provider 使用相同契约测试。
 - [ ] 文档中的目标能力没有被表述为当前已实现能力。
 - [ ] 本文评审通过前，不进行生产 Skill 迁移。
