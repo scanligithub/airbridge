@@ -299,7 +299,6 @@ provider:
 | `get_contract_info()` / `negotiate_contract()` | 基础契约接口，不通过可选能力门控 | 仅做发现与版本协商；不执行副作用操作 |
 | `get_capabilities()` | 基础契约接口，不通过快照内能力门控 | 首次能力快照是引导流程的一部分，不能要求先声明 `runtime.capabilities.read` 才能读取自身 |
 | `get_runtime_info()` | `runtime.identity.read` | 可选通用运行时身份信息；不得用 EDA 版本信息代替 |
-| `get_runtime_info()` | `runtime.identity.read` | 只描述通用运行时身份；若 Provider 无此信息，应明确不支持，不得用 EDA 版本信息代替 |
 | `ShellTransport.submit()` | `shell.execute` | 仅表示允许提交 Shell 操作，不隐含状态查询、结果查询或去重 |
 | Shell `get_status()` | `shell.status_query` 或明确适用于 SHELL 的 `request.status_query` | 两种声明同时存在时语义保证必须一致 |
 | Shell `get_result()` | `shell.result_query` 或明确适用于 SHELL 的 `request.result_query` | 不得由 status query 推断 result query |
@@ -874,7 +873,7 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 
 建议契约测试套件至少覆盖以下场景；标注“仅在声明支持时”的测试必须同时验证支持路径和不支持路径，不能跳过能力门控验证：
 
-1. Contract version compatibility：兼容版本可初始化；不兼容版本在任何副作用提交前失败。
+1. Contract discovery and version negotiation：读取 Provider 身份/实现版本及支持版本；选择最高共同完整版本；无交集时在副作用提交前失败；会话内版本固定且不同会话互不覆盖。
 2. Capability declaration and operation gating：每个接口与能力映射一致；unsupported、conditional 条件不满足、能力未知或快照过期时，副作用操作在提交前被拒绝。
 3. Request ID preservation and provider ID mapping：首次提交、查询、恢复均保留原 client_request_id；验证 provider_request_id 映射及其作用域。
 4. Lookup after lost submission response：提交响应丢失且调用方尚无 provider_request_id 时，按原 client_request_id 查找；验证 FOUND、AUTHORITATIVE_NOT_FOUND、INDETERMINATE 三种结果的边界。
