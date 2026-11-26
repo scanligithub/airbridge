@@ -329,14 +329,14 @@ Skill.shutdown(context: SkillShutdownContext)
 **SkillInitContext（由 Host Adapter 受信注入）：**
 
 - `invocation_context` / `caller_context`：不透明且不可由模型参数伪造的调用主体上下文；Skill 只能按明确授权使用，不得自行提升身份。
-- `provider_session_factory` 或已装配的 Session 引用：仅提供 Manifest 声明所需的 Provider Session；不得把 Factory 的受信配置、Token 或秘密材料暴露给 Skill。
+- `provider_sessions`：由 Host Adapter/Provider Factory 按受信 Manifest 与 Skill-to-Provider 配置预先创建的 Provider Session 接口集合；只包含该 Skill 获准使用的 Session。Skill 不接收 Provider Factory、Runtime Manager、provider_alias 解析器或凭据来源选择能力，也不得自行创建/选择 Provider。
 - `host_services`：仅包含 Skill Manifest 明确声明并经 Adapter feature negotiation 满足的抽象服务；不得直接暴露 Host 私有对象。
 - `configuration`：经验证的非秘密 Skill 配置；秘密材料必须通过 Credential Source/受控绑定路径取得，不得作为普通配置值传入。
-- `contract_context`：已验证的 Skill API 版本、Transport Contract/Profile 协商结果和能力快照引用/摘要；实际操作仍须遵守能力快照有效期和提交前门控。
+- `contract_context`：分别记录已验证的 Skill API 版本，以及 Transport Contract/Profile 协商结果和能力快照引用/摘要；两类版本独立协商、独立记录。实际操作仍须遵守能力快照有效期和提交前门控。
 
 初始化规则：
 
-1. `initialize()` 只执行本地初始化、验证配置、建立所需 Provider Session 并完成 Contract/Profile/Capability bootstrap；不得在初始化阶段自动执行有副作用的 EDA 操作。
+1. `initialize()` 只执行本地初始化、验证配置，并在 Host Adapter/Provider Factory 预先装配的 Provider Session 上完成 Contract/Profile/Capability bootstrap；Skill 不创建 Session、不选择 Provider，也不得访问 Factory/Runtime Manager。不得在初始化阶段自动执行有副作用的 EDA 操作。
 2. Skill 只有在初始化成功且所有必需依赖满足后才进入 READY；初始化失败必须返回稳定、可诊断且已脱敏的错误，并释放本次创建的 Session/资源。
 3. `initialize()` 对同一实例不得并发执行；重复初始化必须明确返回 ALREADY_INITIALIZED/INVALID_LIFECYCLE，或按实现定义的幂等语义处理，不得重复创建不可追踪资源。
 4. Skill 不得自行选择未配置 Provider、改变 Scope、从环境变量探测凭据或把缺失的必需能力降级为可选。
@@ -1601,6 +1601,7 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] Fake Host Adapter PASS 不得替代真实 Agent Host 兼容验收。
 - [ ] Skill Lifecycle/Invocation Contract 作为独立版本化规范评审和发布，不纳入 Transport Contract v1 的规范范围、版本协商或发布制品。
 - [ ] Skill API 版本与 Transport Contract 版本分别协商、分别记录，不共享隐式版本号。
+- [ ] Skill 只接收 Host Adapter/Factory 预先装配的 Provider Session，不接收 Factory、Runtime Manager 或 Provider 选择能力。
 - [ ] caller_context 只能由 Host Adapter 作为可信调用元数据注入，不能由 Agent/模型通过 input 或工具参数伪造。
 - [ ] Skill Lifecycle/Invocation Contract 不暴露 Host/Provider 私有对象。
 - [ ] Skill Manifest 声明版本、入口、结构化输入输出 Schema 和并发策略。
