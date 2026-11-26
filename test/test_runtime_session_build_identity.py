@@ -20,6 +20,17 @@ VALID_IDENTITY = {
 
 
 class RuntimeSessionBuildIdentityTests(unittest.TestCase):
+    def test_capabilities_include_source_build_defaults(self):
+        message = make_session_capabilities(
+            "00000000-0000-4000-8000-000000000001"
+        )
+        identity = message["payload"]["build_identity"]
+        self.assertEqual(identity["build_commit"], "unknown")
+        self.assertEqual(identity["build_version"], CLIENT_VERSION)
+        self.assertEqual(identity["build_timestamp"], "unknown")
+        self.assertEqual(identity["build_platform"], "unknown")
+        validate_session_envelope(FrameType.SESSION_CAPABILITIES, message)
+
     def test_capabilities_advertise_build_identity(self):
         message = make_session_capabilities(
             "00000000-0000-4000-8000-000000000001",
@@ -35,6 +46,14 @@ class RuntimeSessionBuildIdentityTests(unittest.TestCase):
         )
         del message["payload"]["build_identity"]
         validate_session_envelope(FrameType.SESSION_CAPABILITIES, message)
+
+    def test_empty_build_identity_is_rejected(self):
+        message = make_session_capabilities(
+            "00000000-0000-4000-8000-000000000001",
+            build_identity={},
+        )
+        with self.assertRaises(SessionProtocolError):
+            validate_session_envelope(FrameType.SESSION_CAPABILITIES, message)
 
     def test_invalid_build_commit_is_rejected(self):
         message = make_session_capabilities(
