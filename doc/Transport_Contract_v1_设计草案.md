@@ -299,6 +299,137 @@ skill:
 
 Fake Host Adapter 通过只证明抽象适配契约测试通过，不代表 Antigravity、OpenCode 或其他真实 Host 已通过兼容验收。新增 Host 时应新增/验证 Adapter，而不是复制或修改 EDA Skill 的领域实现。
 
+### 2.6 Skill Lifecycle / Invocation Contract（提案，语言无关）
+
+本节定义 EDA Product Skill 对 Host Adapter 暴露的最小生命周期与调用边界。它与 Transport Contract 是两个独立契约：Skill Lifecycle / Invocation Contract 规定 Host 如何加载、初始化、调用和关闭 Skill；Transport Contract 规定 Skill 如何访问远端 Provider。Skill 不得依赖 Host 专有对象、工具 schema 或 Provider 私有 API。
+
+**最小逻辑接口：**
+
+```text
+SkillDescriptor {
+  skill_id: string
+  skill_version: string
+  manifest_version: string
+  supported_skill_api_versions: string[]
+}
+
+Skill.initialize(context: SkillInitContext)
+  -> SkillInitResult | SkillLifecycleError
+
+Skill.invoke(request: SkillInvocation)
+  -> SkillInvocationResult | SkillInvocationError
+
+Skill.shutdown(context: SkillShutdownContext)
+  -> SkillShutdownResult
+```
+
+以上是语言无关的逻辑接口，不要求 Python/TypeScript 等语言使用相同函数签名，也不规定 Host 必须采用进程内函数调用、RPC 或其他具体机制。Host Adapter 负责将宿主调用映射到该逻辑接口，并保留错误、超时和取消语义。
+
+**SkillInitContext（由 Host Adapter 受信注入）：**
+
+- `invocation_context` / `caller_context`：不透明且不可由模型参数伪造的调用主体上下文；Skill 只能按明确授权使用，不得自行提升身份。
+- `provider_session_factory` 或已装配的 Session 引用：仅提供 Manifest 声明所需的 Provider Session；不得把 Factory 的受信配置、Token 或秘密材料暴露给 Skill。
+- `host_services`：仅包含 Skill Manifest 明确声明并经 Adapter feature negotiation 满足的抽象服务；不得直接暴露 Host 私有对象。
+- `configuration`：经验证的非秘密 Skill 配置；秘密材料必须通过 Credential Source/受控绑定路径取得，不得作为普通配置值传入。
+- `contract_context`：已验证的 Skill API 版本、Transport Contract/Profile 协商结果和能力快照引用/摘要；实际操作仍须遵守能力快照有效期和提交前门控。
+
+初始化规则：
+
+1. `initialize()` 只执行本地初始化、验证配置、建立所需 Provider Session 并完成 Contract/Profile/Capability bootstrap；不得在初始化阶段自动执行有副作用的 EDA 操作。
+2. Skill 只有在初始化成功且所有必需依赖满足后才进入 READY；初始化失败必须返回稳定、可诊断且已脱敏的错误，并释放本次创建的 Session/资源。
+3. `initialize()` 对同一实例不得并发执行；重复初始化必须明确返回 ALREADY_INITIALIZED/INVALID_LIFECYCLE，或按实现定义的幂等语义处理，不得重复创建不可追踪资源。
+4. Skill 不得自行选择未配置 Provider、改变 Scope、从环境变量探测凭据或把缺失的必需能力降级为可选。
+
+**SkillInvocation（每次调用独立）：**
+
+```text
+SkillInvocation {
+  invocation_id: string
+  operation: string
+  input: StructuredValue
+  deadline?: Timestamp
+  cancellation: CancellationSignal
+  caller_context: OpaquePrincipalContext
+}
+
+SkillInvocationResult {
+  invocation_id: string
+  outcome: SUCCEEDED | FAILED | INCOMPLETE
+  output?: StructuredValue
+  error?: SkillError
+  diagnostics?: RedactedDiagnostics
+}
+```
+
+- `invocation_id` 用于 Host ↔ Skill 单次调用关联；它不替代 Transport `client_request_id`。一次 Skill 调用可能产生多个远端操作，每个逻辑远端操作必须自行生成并持久化稳定的 `client_request_id`。
+- `operation` 必须匹配 Skill Manifest 中声明的入口；不允许通过任意自由文本构造 Python/Tcl/SKILL 代码执行入口，除非该 Skill 明确将此类功能定义为受控业务能力并实施输入校验/授权。
+- `input` 和 `output` 必须为结构化、可版本化数据；Host 私有对象、凭据句柄、任意可执行对象和未声明的隐式全局状态不得穿透边界。
+- `caller_context` 由 Host Adapter 注入并绑定本次调用；Skill 不得从 `input` 覆盖主体身份。若 Host 不能保证主体上下文，必须在 Adapter feature negotiation 阶段报告不满足。
+- `deadline` 是本地调用预算提示，不得被解释为远端操作一定会在该时刻停止；超时发生时，已提交远端请求按 SUBMISSION_UNKNOWN/UNKNOWN 处理。
+- `cancellation` 表示调用方希望停止本地等待/后续编排，不自动等于远端取消。除非未来单独定义可授权、可验证的远端 cancellation capability，Skill/Adapter 不得声称已取消远端操作。
+- `INCOMPLETE` 用于调用流程已停止但无法给出完整业务结论的情况；若包含可能已提交的远端操作，结果必须引用原 `client_request_id` 并明确 UNKNOWN，不能伪装成普通 FAILED 或未执行。
+- `diagnostics` 必须脱敏，不得包含 Token、凭据绑定句柄、Authorization Header、秘密配置或完整敏感命令/文件内容。
+
+**Skill 实例生命周期状态：**
+
+```text
+DISCOVERED -> INITIALIZING -> READY -> DRAINING -> CLOSED
+                  \
+                   -> FAILED -> DRAINING -> CLOSED
+```
+
+| 状态 | 含义 | 调用规则 |
+|---|---|---|
+| DISCOVERED | 包和 Manifest 已验证，尚未初始化 | 不接受业务调用 |
+| INITIALIZING | 执行 initialize/bootstrap | 不接受 invoke |
+| READY | 初始化成功 | 接受 Manifest 已声明且满足授权/能力要求的调用 |
+| DRAINING | 停止接收新调用，处理或终止本地在途调用 | 拒绝新 invoke；按 shutdown 策略处理在途调用 |
+| FAILED | 初始化失败或实例无法安全继续 | 不接受业务调用，只允许清理 |
+| CLOSED | 本地实例关闭完成 | 终态；重新使用必须创建新实例并重新初始化 |
+
+生命周期与并发规则：
+
+1. 同一 Skill 实例的 `initialize()` 和 `shutdown()` 必须串行化；不得并发初始化或在初始化尚未完成时暴露 READY。
+2. `invoke()` 可以并发，但只有 Skill Manifest 和 Host Adapter 都声明支持并发隔离，且实现通过并发契约测试时，Host 才可并发派发。否则 Adapter 必须串行派发，或明确拒绝并发请求。
+3. 每次调用的 invocation_id、caller_context、deadline、cancellation、输入/输出和诊断上下文必须隔离；不得使用可变全局变量保存当前调用主体或请求 ID。
+4. `shutdown()` 首先进入 DRAINING 并停止新调用，再按已声明策略等待或结束本地在途调用，关闭本实例拥有的 Provider Session 和资源，最后进入 CLOSED。它不得关闭其他 Skill 实例拥有的资源。
+5. `shutdown()` 必须幂等；超出 shutdown deadline 时可返回 INCOMPLETE/清理未完成诊断，但不得谎称远端请求已取消或失败。遗留远端请求仍按 UNKNOWN 语义恢复。
+6. Host Adapter 崩溃、强制卸载或进程退出时，不能保证 Skill shutdown 一定执行；远端请求恢复依赖持久化的 client_request_id 和 Provider 的查询/去重保证。
+7. 对 READY 实例执行版本升级或重载，应创建新实例并重新验证 Manifest、Host features、Contract/Profile/Capability；不得把旧实例的可变状态、Session 或主体上下文复制给新实例。
+
+**稳定错误边界：**
+
+- `SkillLifecycleError`：例如 INVALID_LIFECYCLE、INITIALIZATION_FAILED、DEPENDENCY_UNAVAILABLE、HOST_FEATURE_UNAVAILABLE。
+- `SkillInvocationError`：例如 INVALID_INPUT、UNKNOWN_OPERATION、NOT_READY、UNAUTHORIZED、DEADLINE_EXCEEDED、CANCELLED_LOCAL、INTERNAL_ERROR。
+- 错误至少包含稳定 `code`、安全的 `message` 和可选脱敏 `details`；Host Adapter 可以映射到宿主错误格式，但不得丢失稳定 code 或把 UNKNOWN 改写为失败/未执行。
+- TransportError 和 OperationResult 仍按 Transport Contract 原有边界表达；SkillError 是 Skill/Host 调用边界错误，不能替代或抹去底层远端请求状态。
+
+**Skill Manifest 增补字段（提案，非冻结格式）：**
+
+```yaml
+skill:
+  id: orcad.capture
+  version: 0.4.0
+  manifest_version: 1.0.0
+  skill_api:
+    compatible_versions: ["1.0.0"]
+  entrypoints:
+    - operation: capture.open_project
+      input_schema: schemas/open_project.input.json
+      output_schema: schemas/open_project.output.json
+      concurrency: isolated
+    - operation: capture.get_design_info
+      input_schema: schemas/get_design_info.input.json
+      output_schema: schemas/get_design_info.output.json
+      concurrency: isolated
+  lifecycle:
+    initialize_required: true
+    shutdown_required: true
+    graceful_drain: true
+```
+
+Manifest 必须固定声明字段和 Schema 版本；示例中的 operation 只是说明结构，不代表本仓库已实现这些入口。Skill Manifest 不得包含 Token、密码、Authorization Header 或凭据文件路径。
+
 ## 3. 版本与兼容性
 
 建议使用独立语义版本：
@@ -1302,6 +1433,11 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 28. Multi-Host isolation：验证不同 Host Adapter 即使连接同一 Provider，也使用独立 Session/主体/凭据绑定；不得共享进程内 Runtime 或可变缓存，除非通过独立 Runtime Manager 安全验证。
 29. Real Host compatibility matrix：分别验证真实 Host 产品/版本上的安装、加载、结构化调用、并发、重载、卸载和错误传播；Fake Host PASS 不得标记真实 Host PASS。
 30. Cross-Host credential boundary：验证 Host 私有凭据机制只在 Adapter/Credential Source 内部，Token 不进入 Prompt、工具参数、Skill Manifest、普通日志或结果。
+31. Skill Lifecycle state machine：验证 DISCOVERED/INITIALIZING 阶段不接受 invoke，initialize 失败清理资源，shutdown 幂等且 CLOSED 为终态。
+32. Skill Invocation isolation：验证 invocation_id、caller_context、deadline、cancellation、输入/输出和 diagnostics 并发隔离；不支持并发时 Adapter 必须串行或拒绝。
+33. Skill cancellation/deadline semantics：验证本地取消/超时不被解释为远端取消；可能已提交的请求保留原 client_request_id 和 UNKNOWN。
+34. Skill Manifest/entrypoint validation：验证 operation 与结构化 Schema 匹配，拒绝未声明入口、任意 Host 对象和秘密配置字段。
+35. Skill error mapping：验证稳定错误 code 在 Host Adapter 映射后保留，Transport UNKNOWN 不被改写为普通失败或未执行。
 
 Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”当成真实 Provider 已具备保证。测试报告应记录 Provider 名称/版本、能力快照、适用 operation_kind、跳过的可选能力测试及原因。
 
@@ -1377,6 +1513,8 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 | Provider 装配 | Provider Factory 属于 Host Adapter 装配层；受信 alias 解析、创建独立 Session；Contract/Profile/Capability bootstrap 成功前 Skill 不 ready | Proposed |
 | Session 状态机 | Provider Session 采用 NEW/NEGOTIATING/READY/FAILED/CLOSING/CLOSED 本地状态；仅 READY 接受已授权操作，CLOSED 不可重开 | Proposed |
 | 多 Host 兼容 | 同一 Skill 领域实现通过独立 Host Adapter 接入；以抽象 host_features 和真实 Host 兼容矩阵验证，不以 Host 名称分支领域逻辑 | Proposed |
+| Skill API | Skill 通过语言无关 Lifecycle/Invocation Contract 暴露 initialize/invoke/shutdown；Host Adapter 映射宿主调用，Skill 不依赖 Host 私有对象 | Proposed |
+| Skill 并发与取消 | 并发需显式声明并通过隔离测试；deadline/cancellation 仅约束本地调用，不隐含远端取消 | Proposed |
 | 跨 Host 资源隔离 | 不同 Host 默认独立 Session/主体/凭据绑定，不假设共享进程内 Runtime；跨进程共享需独立受信 Runtime Manager，v1 不要求 | Proposed |
 | 断线恢复 | 物理连接恢复不改变 UNKNOWN；Provider 身份/版本变化时新建 Session 并重新协商；重连不得隐式重放非幂等操作 | Proposed |
 
@@ -1389,8 +1527,9 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 3. 定义 Core Contract、Optional Profiles 及其版本/Conformance Suite 映射。
 4. 定义 Provider Runtime、Session、Factory 装配、资源所有权、主体隔离和重连语义。
 5. 建立 Fake Provider、Fake Factory、Fake Host Adapter 与公共 Contract/Host Adapter lifecycle tests。
-6. 定义 Host Adapter feature manifest 和真实 Host 兼容测试矩阵；逐个验证目标 Host，不把 Fake Host 结果当成真实兼容。
-7. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
+6. 定义语言无关 Skill Lifecycle/Invocation Contract、Manifest 和稳定错误边界。
+7. 建立 Fake Skill、Fake Host Adapter 与生命周期/并发/取消契约测试，再验证真实 Host 兼容矩阵。
+8. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
 7. 在独立测试中验证 Provider 与 Fake Provider 的契约一致性。
 8. 通过兼容性测试后，迁移 OrCAD Capture Skill。
 9. 后续独立迁移 OrCAD PCB Editor、Allegro、AD 等 Skills；它们之间不形成依赖。
@@ -1458,6 +1597,12 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] 不同 Host 默认不共享进程内 Runtime、Session、Credential Source 实例或可变缓存。
 - [ ] Host/Adapter/Skill/Provider/Contract 兼容矩阵分别记录规范、契约测试和真实 Host 验收结果。
 - [ ] Fake Host Adapter PASS 不得替代真实 Agent Host 兼容验收。
+- [ ] Skill Lifecycle/Invocation Contract 独立于 Transport Contract，且不暴露 Host/Provider 私有对象。
+- [ ] Skill Manifest 声明版本、入口、结构化输入输出 Schema 和并发策略。
+- [ ] initialize/invoke/shutdown 生命周期状态和失败清理规则明确。
+- [ ] deadline/cancellation 只表达本地调用语义，不隐含远端请求取消。
+- [ ] invocation_id 与 Transport client_request_id 分离，调用关联不替代远端请求幂等/恢复。
+- [ ] SkillError 稳定 code 不吞掉底层 TransportError/OperationResult/UNKNOWN 语义。
 - [ ] 本文评审通过前，不进行生产 Skill 迁移。
 
 ---
