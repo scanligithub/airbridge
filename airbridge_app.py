@@ -719,24 +719,27 @@ class SerialWorker(threading.Thread):
       encoded = encode_session_message(FrameType.SESSION_CAPABILITIES, response)
       self.send_frame(FrameType.SESSION_CAPABILITIES, encoded)
 
-      # If this peer previously exhausted its startup attempts before the
-      # remote Runtime became ready, an inbound HELLO proves the peer is now
-      # participating. Re-negotiate so this side can learn the peer's feature
-      # set too; replying to the inbound HELLO alone only informs the peer.
+      # An inbound HELLO can mean the peer has just started or restarted.
+      # Replying only advertises our identity to that peer; start a correlated
+      # HELLO of our own so we can refresh the peer's build identity as well.
       with self.session_protocol_lock:
-        recover_unconfirmed_peer = (
-            self.session_peer_status.get("state") == "unconfirmed"
-            and not self.session_pending_handshakes
+        peer_can_be_refreshed = (
+            not self.session_pending_handshakes
+            and self.session_peer_status.get("state") in (
+                "unconfirmed", "negotiated"
+            )
         )
-        if recover_unconfirmed_peer:
+        if peer_can_be_refreshed:
           # Prevent multiple inbound HELLOs from starting duplicate recovery
-          # threads in the short interval before the worker sends its HELLO.
+          # threads in the short interval before this worker sends its HELLO.
           self.session_peer_status["state"] = "negotiating"
+          self.session_peer_status["negotiated"] = False
+          self.session_peer_status["peer_build_identity"] = None
           self.session_peer_status["error"] = None
-      if recover_unconfirmed_peer:
+      if peer_can_be_refreshed:
         self.sig.sig_rx_log.emit(
             "INFO",
-            "收到对端 Runtime Session HELLO；本机先前握手未确认，重新发起能力协商。",
+            "收到对端 Runtime Session HELLO；重新发起能力协商以刷新对端构建身份。",
         )
         self._start_auto_session_negotiation()
     except SessionProtocolError as exc:
