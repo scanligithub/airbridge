@@ -406,22 +406,22 @@ ShellTransport
 
 - Shell 是通用远端命令能力，不提供 Capture/Allegro 专用方法。
 - 命令执行必须由 Provider 的授权策略和后端权限控制；客户端接口不能取代服务端授权。
-- `get_status` 与 `get_result` 是 Shell 专属便捷别名，等价于 `RequestTracking.get_request_status(SHELL, provider_request_id)` 与 `get_request_result(SHELL, provider_request_id)`；不得定义不同的状态或授权语义。相应查询能力必须由 `shell.status_query` / `shell.result_query` 或适用的通用请求跟踪能力明确声明。
+- `get_status` 与 `get_result` 是 Shell 专属便捷别名，等价于 `RequestTracking.get_request_status(SHELL, request_reference)` 与 `get_request_result(SHELL, request_reference)`；不得定义不同的状态或授权语义。相应查询能力必须由 `shell.status_query` / `shell.result_query` 或适用的通用请求跟踪能力明确声明。
 - `request.lookup_by_client_id`、`request.status_query` 和 `request.result_query` 是通用请求跟踪能力，适用于 Provider 明确声明支持跟踪的请求类型；它们不隐含所有 Shell/RFS 操作都支持查询。若同时声明通用能力和 Shell 专属能力，两者必须满足相同的语义保证，不得产生冲突。
 - Shell 专属能力标识（如 `shell.status_query`、`shell.result_query`）只描述 Shell 操作范围；通用请求跟踪能力不能仅凭 Shell 能力推断，也不能反向推断。
 - `find_by_client_request_id` 用于提交响应丢失、调用方未取得 `provider_request_id` 时恢复原请求映射；它不是重新提交操作。
 - 查询结果必须区分“找到原请求”“权威确认不存在”和“无法判断”；不具备权威查询保证时不得返回“未提交”。
 - 建议将结果结构固定为：
   ```text
-  RequestLookupStatusAvailability = AVAILABLE | UNAVAILABLE
+  RequestQueryAvailability = AVAILABLE | UNAVAILABLE
 
   RequestLookupResult =
     FOUND {
       client_request_id,
       provider_request_id?,
       status?,
-      status_availability, // RequestLookupStatusAvailability
-      result_availability, // AVAILABLE | UNAVAILABLE
+      status_availability, // RequestQueryAvailability
+      result_availability, // RequestQueryAvailability
       payload_digest?,
       accepted_at?,
       result_reference?
@@ -528,7 +528,9 @@ ContractNegotiationResult =
 }
 
 CapabilitySnapshot {
+  provider_id,
   provider_instance_id,
+  provider_implementation_version,
   contract_version,
   generated_at,
   expires_at?,
@@ -601,8 +603,8 @@ TransportError {
   category,
   code,
   message,
-  retryable,
   outcome,           // not_executed | executed_failed | unknown | not_applicable
+  retryable,         // advisory only; cannot authorize replay
   request_ids?,
   details?
 }
@@ -620,12 +622,13 @@ TransportError {
 - `RequestStatus.authority=non_authoritative` 的观察不能单独将请求推进为已确认状态；它只能作为诊断信息。权威等级不能由调用方自行提升。
 - `OperationResult.effect` 与 `OperationResult.state` 必须分开解释：前者描述副作用实际达到的程度，后者描述执行是否完成/成功。只读操作使用 `NOT_APPLICABLE`；有副作用的操作不得使用该值。特别是 `COMPLETED_FAILURE` 可与 `PARTIALLY_APPLIED` 或 `UNKNOWN` 并存。
 - `OperationResult.state=COMPLETED_FAILURE` 不代表没有副作用；必须通过 `effect` 表达 `NOT_APPLIED`、`PARTIALLY_APPLIED` 或 `UNKNOWN`。只有能证明完整目标效果已达成时才使用 `FULLY_APPLIED`。若最终执行状态无法确认，使用 `state=UNKNOWN`，并按证据设置 `effect`。
-- `OperationResponse` 允许 Provider 在操作已同步完成时直接返回 `OperationResult`；若操作仍在执行或提交结果不确定，则返回 `Submission`。两种路径都必须保留相同且必填的 `client_request_id`；`provider_request_id` 仅在 Provider 已分配后提供。
+- `OperationResponse` 允许 Provider 在操作已同步完成时直接返回 `OperationResult`；若操作仍在执行或提交结果不确定，则返回 `Submission`。两种路径都必须保留相同且必填的 `client_request_id`；`provider_request_id` 仅在 Provider 已分配后提供。`TransportError` 是独立的调用边界错误通道，不属于 `OperationResponse` 联合类型。
 - 每个由 Contract 操作入口接收的逻辑请求都必须携带 `client_request_id`。因此 `OperationResult` 和 `RequestStatus` 中的 `client_request_id` 必填；Provider 不得因同步执行、缺少后端任务 ID 或结果缓存而丢弃它。
 - `RequestReference` 至少包含 `client_request_id` 或 `provider_request_id` 之一；若两者同时提供，Provider 必须验证它们映射到同一请求。这样允许在尚未取得 Provider ID 时按 Client ID 查询，也允许后端只支持 Provider ID 的实现明确拒绝不支持的查询方式。
 - `RequestStatus.provider_request_id` 可选，`client_request_id` 必填。若 Provider 只支持按 Provider ID 查询，必须在能力声明和查询错误中明确这一限制；不得把缺少 Provider ID 解释为请求不存在。
 - `RequestLookupResult.FOUND` 必须分别声明状态查询和结果查询是否可用；不能用 `status_availability` 推断结果查询能力，反之亦然。
 - `OperationEffect.NOT_APPLICABLE` 用于无副作用的读取/查询操作；不得将只读操作强行标为 `NOT_APPLIED` 或 `FULLY_APPLIED`。
+- `OperationResult.error` 仅描述已确认完成的操作失败（`state=COMPLETED_FAILURE`）；连接、认证、能力门控或调用边界错误使用独立的 `TransportError`。两者不得互相替代。
 - `payload` 只承载对应操作的结果数据；通用层不得把 Shell stdout、文件字节或其他操作数据误解为 EDA 领域对象。具体 payload schema 应由通用操作类型定义，不能由 Provider 私自改变。
 - `TransportError.retryable` 是 Provider 对当前错误场景的重试建议，不是独立授权。调用方仍必须结合操作幂等分类、请求状态、去重能力和错误 outcome 决定是否重试；`retryable=true` 不得覆盖非幂等操作的禁止重放规则。
 - 所有类型均不得包含 Token、Authorization Header、私钥或其他凭据。可选字段缺失必须与空字符串、空对象或“已确认不存在”区分。
@@ -636,7 +639,7 @@ TransportError {
 |---|---|---|---|
 | ContractInfo | contract_name、provider_id、provider_name、provider_implementation_version、supported_contract_versions | 无 | 版本集合必须是完整版本号，不以 latest 或宽泛范围替代 |
 | ContractNegotiationResult | 结果分支及其分支字段 | 无 | NEGOTIATED 必须包含唯一选定版本；INCOMPATIBLE 不得伪造选定版本 |
-| CapabilitySnapshot | provider_instance_id、contract_version、generated_at、capabilities | expires_at | 快照必须绑定已协商版本和 Provider 身份；过期规则明确 |
+| CapabilitySnapshot | provider_id、provider_instance_id、provider_implementation_version、contract_version、generated_at、capabilities | expires_at | 快照必须绑定已协商版本和 Provider 身份/实现版本；过期规则明确 |
 | Submission | operation_kind、client_request_id、分支时间/原因字段 | provider_request_id | 同一逻辑请求始终保留 client_request_id |
 | RequestStatus | operation_kind、client_request_id、state、observed_at、authority | provider_request_id、各阶段时间 | Provider 不返回 NOT_SUBMITTED；至少一个请求 ID 可用于查询 |
 | OperationResult | operation_kind、client_request_id、state、effect | provider_request_id、completed_at、payload、error | 只读操作 effect=NOT_APPLICABLE；副作用操作必须报告真实效果 |
@@ -648,7 +651,7 @@ TransportError {
 2. RequestReference 必须至少提供一个请求标识；当两个标识都提供时，映射不一致必须返回稳定的 CONFLICT 错误。
 3. OperationResult.state=COMPLETED_SUCCESS 对有副作用的操作，通常应对应 effect=FULLY_APPLIED；若业务定义允许“成功但未产生目标变更”，该例外必须由操作类型明确说明。COMPLETED_FAILURE 不得默认映射为 NOT_APPLIED。
 4. OperationResult.state=UNKNOWN 不得与“已确认完成”同时表达；effect 可为 UNKNOWN，或在已有独立证据时表达已确认达到的效果程度。
-5. TransportError 不替代 Submission.REJECTED、Submission.SUBMISSION_UNKNOWN 或 OperationResult。它用于无法形成这些结构的调用边界错误；其 outcome 必须与当前已知的执行事实一致。
+5. TransportError 不替代 Submission.REJECTED、Submission.SUBMISSION_UNKNOWN 或 OperationResult。它用于无法形成这些结构的调用边界错误；其 outcome 必须与当前已知的执行事实一致。若远端终态和副作用已知，应返回 OperationResult，而不是用 TransportError 代替结果。
 6. TransportError.retryable 不能单独成为自动重试许可。非幂等操作仍须满足已验证的服务端去重保证，或由上层业务层完成核实并创建新的逻辑操作。
 
 ## 6. 请求标识、关联与幂等性
