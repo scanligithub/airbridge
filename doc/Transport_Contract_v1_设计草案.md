@@ -129,6 +129,7 @@ SessionRequest {
   accepted_contract_versions: string[]
   required_profiles: ProfileRequirement[]
   optional_profiles: ProfileRequirement[]
+  // Host Adapter 注入的可信元数据；不得来自 Agent/模型可控 input。
   caller_context: OpaquePrincipalContext
 }
 
@@ -299,9 +300,9 @@ skill:
 
 Fake Host Adapter 通过只证明抽象适配契约测试通过，不代表 Antigravity、OpenCode 或其他真实 Host 已通过兼容验收。新增 Host 时应新增/验证 Adapter，而不是复制或修改 EDA Skill 的领域实现。
 
-### 2.6 Skill Lifecycle / Invocation Contract（提案，语言无关）
+### 2.6 Skill Lifecycle / Invocation Contract 的边界（关联提案，非 Transport Contract 组成部分）
 
-本节定义 EDA Product Skill 对 Host Adapter 暴露的最小生命周期与调用边界。它与 Transport Contract 是两个独立契约：Skill Lifecycle / Invocation Contract 规定 Host 如何加载、初始化、调用和关闭 Skill；Transport Contract 规定 Skill 如何访问远端 Provider。Skill 不得依赖 Host 专有对象、工具 schema 或 Provider 私有 API。
+本节仅记录 Skill Lifecycle / Invocation Contract 与 Transport Contract 的集成边界，并给出供后续独立规范评审的关联提案。**本节不属于 Transport Contract v1 的规范定义，不得据此将 Skill API 版本纳入 Transport Contract 版本协商、兼容性声明或发布制品。** Skill Lifecycle / Invocation Contract 必须作为独立版本化规范另行评审、冻结和发布；在该独立规范获批前，本节内容均为非冻结设计建议。Transport Contract 只规定 Skill 如何访问远端 Provider；Skill Lifecycle / Invocation Contract 规定 Host Adapter 如何发现、初始化、调用和关闭 Skill。两者通过明确的装配边界协作，不共享隐式版本号或发布门槛。Skill 不得依赖 Host 专有对象、工具 schema 或 Provider 私有 API。
 
 **最小逻辑接口：**
 
@@ -310,7 +311,7 @@ SkillDescriptor {
   skill_id: string
   skill_version: string
   manifest_version: string
-  supported_skill_api_versions: string[]
+  supported_skill_api_versions: string[] // 独立 Skill API 版本，不是 Transport Contract 版本
 }
 
 Skill.initialize(context: SkillInitContext)
@@ -364,7 +365,7 @@ SkillInvocationResult {
 - `invocation_id` 用于 Host ↔ Skill 单次调用关联；它不替代 Transport `client_request_id`。一次 Skill 调用可能产生多个远端操作，每个逻辑远端操作必须自行生成并持久化稳定的 `client_request_id`。
 - `operation` 必须匹配 Skill Manifest 中声明的入口；不允许通过任意自由文本构造 Python/Tcl/SKILL 代码执行入口，除非该 Skill 明确将此类功能定义为受控业务能力并实施输入校验/授权。
 - `input` 和 `output` 必须为结构化、可版本化数据；Host 私有对象、凭据句柄、任意可执行对象和未声明的隐式全局状态不得穿透边界。
-- `caller_context` 由 Host Adapter 注入并绑定本次调用；Skill 不得从 `input` 覆盖主体身份。若 Host 不能保证主体上下文，必须在 Adapter feature negotiation 阶段报告不满足。
+- `caller_context` 是调用信封中的可信元数据字段，由 Host Adapter 在模型输入解析后注入并绑定本次调用；它不是 Agent/模型可填写的业务参数，也不得从 `input`、工具参数或 Skill Manifest 反序列化覆盖。若调用通道无法区分可信元数据与不可信输入，或 Host 不能保证主体上下文，必须在 Adapter feature negotiation 阶段报告不满足并 fail closed。
 - `deadline` 是本地调用预算提示，不得被解释为远端操作一定会在该时刻停止；超时发生时，已提交远端请求按 SUBMISSION_UNKNOWN/UNKNOWN 处理。
 - `cancellation` 表示调用方希望停止本地等待/后续编排，不自动等于远端取消。除非未来单独定义可授权、可验证的远端 cancellation capability，Skill/Adapter 不得声称已取消远端操作。
 - `INCOMPLETE` 用于调用流程已停止但无法给出完整业务结论的情况；若包含可能已提交的远端操作，结果必须引用原 `client_request_id` 并明确 UNKNOWN，不能伪装成普通 FAILED 或未执行。
@@ -412,7 +413,7 @@ skill:
   version: 0.4.0
   manifest_version: 1.0.0
   skill_api:
-    compatible_versions: ["1.0.0"]
+    compatible_versions: ["1.0.0"] # 独立 Skill API 版本范围，与 Transport Contract 版本分开协商
   entrypoints:
     - operation: capture.open_project
       input_schema: schemas/open_project.input.json
@@ -1530,9 +1531,9 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 6. 定义语言无关 Skill Lifecycle/Invocation Contract、Manifest 和稳定错误边界。
 7. 建立 Fake Skill、Fake Host Adapter 与生命周期/并发/取消契约测试，再验证真实 Host 兼容矩阵。
 8. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
-7. 在独立测试中验证 Provider 与 Fake Provider 的契约一致性。
-8. 通过兼容性测试后，迁移 OrCAD Capture Skill。
-9. 后续独立迁移 OrCAD PCB Editor、Allegro、AD 等 Skills；它们之间不形成依赖。
+9. 使用公共 Conformance Suite 验证 AirBridge Provider 与 Fake Provider 的契约一致性；真实 Provider 集成结果单独记录。
+10. 通过兼容性测试后，迁移 OrCAD Capture Skill。
+11. 后续独立迁移 OrCAD PCB Editor、Allegro、AD 等 Skills；它们之间不形成依赖。
 
 ## 15. 评审检查表
 
@@ -1597,7 +1598,10 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] 不同 Host 默认不共享进程内 Runtime、Session、Credential Source 实例或可变缓存。
 - [ ] Host/Adapter/Skill/Provider/Contract 兼容矩阵分别记录规范、契约测试和真实 Host 验收结果。
 - [ ] Fake Host Adapter PASS 不得替代真实 Agent Host 兼容验收。
-- [ ] Skill Lifecycle/Invocation Contract 独立于 Transport Contract，且不暴露 Host/Provider 私有对象。
+- [ ] Skill Lifecycle/Invocation Contract 作为独立版本化规范评审和发布，不纳入 Transport Contract v1 的规范范围、版本协商或发布制品。
+- [ ] Skill API 版本与 Transport Contract 版本分别协商、分别记录，不共享隐式版本号。
+- [ ] caller_context 只能由 Host Adapter 作为可信调用元数据注入，不能由 Agent/模型通过 input 或工具参数伪造。
+- [ ] Skill Lifecycle/Invocation Contract 不暴露 Host/Provider 私有对象。
 - [ ] Skill Manifest 声明版本、入口、结构化输入输出 Schema 和并发策略。
 - [ ] initialize/invoke/shutdown 生命周期状态和失败清理规则明确。
 - [ ] deadline/cancellation 只表达本地调用语义，不隐含远端请求取消。
