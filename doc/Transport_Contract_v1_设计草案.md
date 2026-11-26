@@ -139,6 +139,7 @@ ShellTransport
   submit(command, options, client_request_id) -> Submission
   get_status(provider_request_id) -> RequestStatus
   get_result(provider_request_id) -> OperationResult
+  find_by_client_request_id(client_request_id) -> RequestLookupResult
 ```
 
 约束：
@@ -146,6 +147,8 @@ ShellTransport
 - Shell 是通用远端命令能力，不提供 Capture/Allegro 专用方法。
 - 命令执行必须由 Provider 的授权策略和后端权限控制；客户端接口不能取代服务端授权。
 - `get_status` 与 `get_result` 是可选能力，必须由能力声明确认。
+- `find_by_client_request_id` 用于提交响应丢失、调用方未取得 `provider_request_id` 时恢复原请求映射；它不是重新提交操作。
+- 若后端不能按客户端请求 ID 查询，Provider 必须明确声明不支持该恢复能力；调用方不能因此生成新 ID 并重放非幂等请求。
 - 如果后端仅支持同步执行，Provider 可以返回已完成结果，但不得伪造异步任务 ID 或状态查询能力。
 - Provider 必须明确命令超时是“停止等待”还是“远端执行已被终止”。客户端等待超时不能被解释为远端执行已停止。
 
@@ -201,10 +204,10 @@ abort_transfer(transfer_id) -> AbortReceipt
 
 ### 6.1 两种请求标识
 
-- `client_request_id`：由调用 Skill 生成，在一次逻辑操作的所有状态查询中保持不变。
+- `client_request_id`：由调用 Skill 生成，在一次逻辑操作的所有查询和任何经授权的重复提交中保持不变。
 - `provider_request_id`：由 Provider/后端生成，用于映射到后端请求或任务。
 
-两者不得混为一谈。Provider 必须说明两者映射关系是否持久、是否可查询，以及映射保留期限。
+两者不得混为一谈。Provider 必须说明两者映射关系是否持久、是否可查询，以及映射保留期限。若提交响应丢失，调用方可能只有 `client_request_id`，因此契约必须明确是否支持按该 ID 恢复映射；若不支持，结果保持未知，不能假设后端未接收请求。
 
 ### 6.2 请求关联不等于去重
 
@@ -213,6 +216,8 @@ abort_transfer(transfer_id) -> AbortReceipt
 1. **Correlation**：能否将后续状态/结果关联到原请求。
 2. **Deduplication**：重复提交相同逻辑请求是否会被识别并避免重复副作用。
 3. **Result query**：提交后能否查询原请求的状态或结果。
+
+Correlation 只解决“找到同一个请求”，不保证重复提交不会再次执行。Correlation 本身不能作为非幂等操作自动重放的安全依据。
 
 只有后端具备并验证了相应保证，Provider 才能声明支持。单纯在客户端保存 UUID 不构成服务端去重。
 
@@ -232,6 +237,8 @@ abort_transfer(transfer_id) -> AbortReceipt
 ### 6.4 不支持去重时
 
 - Provider 不得自动重放可能产生副作用的请求。
+- 若支持按 `client_request_id` 查询，可用于恢复请求映射和读取原请求结果，但这仍不构成去重保证。
+- 若既不支持去重，也不支持按 `client_request_id` 查询，提交响应丢失后必须保留 UNKNOWN；不能以“没有 provider_request_id”作为未执行证据。
 - 调用方不得因为客户端超时而生成新 ID 后盲目重试。
 - 是否允许只读操作重试，应由操作语义和 Provider 声明决定。
 - 非幂等写操作在结果不明时必须进入 UNKNOWN 或等价的不确定状态。
@@ -244,7 +251,7 @@ abort_transfer(transfer_id) -> AbortReceipt
 
 | 状态 | 含义 |
 |---|---|
-| `NOT_SUBMITTED` | 本地拒绝或尚未向 Provider 提交 |
+| `NOT_SUBMITTED` | 已确认请求尚未交给 Provider；或在本地校验阶段被拒绝且没有发生提交 |
 | `SUBMISSION_UNKNOWN` | 提交调用发生中断，无法确认后端是否接受 |
 | `ACCEPTED` | Provider 明确确认已接受请求 |
 | `RUNNING` | 后端明确报告正在执行 |
@@ -258,6 +265,18 @@ Provider 可将状态映射为更少的内部状态，但不得丢失“已确�
 ### 7.2 UNKNOWN 处理
 
 UNKNOWN 是一种真实结果，不是普通异常，也不等于失败。
+
+建议状态转换约束：
+
+- `NOT_SUBMITTED -> ACCEPTED`：Provider 明确确认接受。
+- `NOT_SUBMITTED -> REJECTED`：Provider 明确拒绝且保证未执行。
+- `NOT_SUBMITTED -> SUBMISSION_UNKNOWN`：提交调用中断，接受情况无法确认。
+- `ACCEPTED -> RUNNING`：后端明确报告开始执行。
+- `ACCEPTED/RUNNING -> COMPLETED_SUCCESS/COMPLETED_FAILURE`：取得权威终态结果。
+- 任一已提交但无法核实的状态可转入 `UNKNOWN`。
+- `UNKNOWN` 不能仅因查询超时、连接恢复或本地重启而自动转成失败或未提交；只能由权威查询结果或业务层证据更新。
+
+Provider 必须避免把“查询不到记录”直接解释为“请求从未执行”，除非后端明确保证查询覆盖范围、持久性和保留期限足以支持该结论。
 
 进入 UNKNOWN 后：
 
@@ -293,7 +312,7 @@ UNKNOWN 是一种真实结果，不是普通异常，也不等于失败。
 
 - READ_ONLY：可按 Provider 限制进行有限重试。
 - IDEMPOTENT_WRITE：只有在操作定义与后端实现均保证幂等时才可重试。
-- NON_IDEMPOTENT：必须依赖经过验证的服务端去重/关联机制，或由上层完成状态核实；禁止盲目自动重放。
+- NON_IDEMPOTENT：只有经过验证的服务端去重保证，才能支持自动重放；仅有请求关联或结果查询并不足够。若没有服务端去重，上层必须先完成业务状态核实，并由明确的业务策略决定是否发起新的逻辑操作；Transport 层禁止盲目自动重放。
 - UNKNOWN_SEMANTICS：按最保守规则处理，不自动重试。
 
 不能仅凭 HTTP 方法、操作名称或客户端 UUID 推断幂等性。
@@ -367,8 +386,9 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 1. Contract version compatibility。
 2. Capability declaration and unsupported operation behavior。
 3. Request ID preservation and provider ID mapping。
-4. Same-key/same-payload and same-key/different-payload behavior（仅在声明 dedup 时）。
-5. Submission interruption and SUBMISSION_UNKNOWN。
+4. Lookup by client_request_id after a lost submission response（仅在声明支持时）。
+5. Same-key/same-payload and same-key/different-payload behavior（仅在声明 dedup 时）。
+6. Submission interruption and SUBMISSION_UNKNOWN。
 6. Status/result query consistency（仅在声明支持时）。
 7. UNKNOWN does not trigger blind resubmission。
 8. Read-only / idempotent / non-idempotent retry policy。
@@ -443,6 +463,8 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 - [ ] Skill 不依赖 AirBridge Core 内部模块或 HTTP 路径。
 - [ ] Provider 能力声明区分支持、不支持和条件支持。
 - [ ] Correlation、Deduplication、Result Query 分开定义。
+- [ ] 仅有 Correlation/Result Query 不会被当成 Deduplication。
+- [ ] 提交响应丢失后，按 client_request_id 恢复映射的能力明确声明。
 - [ ] client_request_id 与 provider_request_id 分开定义。
 - [ ] 超时不会被解释为远端未执行。
 - [ ] UNKNOWN 不会触发盲目重放。
