@@ -171,6 +171,51 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertEqual(status_a["peer_build_identity"], get_build_identity())
         self.assertEqual(status_b["peer_build_identity"], get_build_identity())
 
+    def test_peer_hello_after_negotiation_refreshes_build_identity(self):
+        host_a = _new_worker()
+        host_b = _new_worker()
+        _connect_duplex(host_a, host_b)
+
+        request_a = host_a.begin_session_negotiation()
+        request_b = host_b.begin_session_negotiation()
+        self.assertTrue(request_a["success"], request_a)
+        self.assertTrue(request_b["success"], request_b)
+        self.assertEqual(
+            host_a._wait_session_negotiation(request_a["message_id"], 0.1)["state"],
+            "negotiated",
+        )
+        self.assertEqual(
+            host_b._wait_session_negotiation(request_b["message_id"], 0.1)["state"],
+            "negotiated",
+        )
+
+        previous_handshake_id = host_a.get_session_peer_status()["last_handshake_id"]
+        restarted_peer_request = host_b.begin_session_negotiation()
+        self.assertTrue(restarted_peer_request["success"], restarted_peer_request)
+        self.assertEqual(
+            host_b._wait_session_negotiation(
+                restarted_peer_request["message_id"], 0.1
+            )["state"],
+            "negotiated",
+        )
+
+        deadline = time.monotonic() + 1.0
+        refreshed = host_a.get_session_peer_status()
+        while (
+            refreshed["state"] != "negotiated"
+            or refreshed["last_handshake_id"] == previous_handshake_id
+        ) and time.monotonic() < deadline:
+            time.sleep(0.005)
+            refreshed = host_a.get_session_peer_status()
+
+        self.assertEqual(refreshed["state"], "negotiated", refreshed)
+        self.assertNotEqual(
+            refreshed["last_handshake_id"], previous_handshake_id
+        )
+        self.assertEqual(
+            refreshed["peer_build_identity"], get_build_identity()
+        )
+
     def test_late_peer_hello_recovers_unconfirmed_local_handshake(self):
         host_a = _new_worker()
         host_b = _new_worker()
