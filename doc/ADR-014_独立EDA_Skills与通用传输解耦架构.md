@@ -69,14 +69,14 @@
               通用 Shell / RFS / 文件传输
                         │
                         ▼
-           Host B 上由对应产品 Skill 管理的专业软件
+           Host B 上的专业软件（由对应产品 Skill 通过通用 Transport 交互）
            OrCAD Capture / OrCAD PCB Editor / Altium Designer / Allegro / 其他 EDA 产品
 
 依赖方向必须保持为：
 
 - Skill 依赖通用 Transport Interface，不依赖某个 Provider 的内部实现。
 - AirBridge Provider 依赖通用 Transport Interface，并适配 AirBridge 对外公开的通用 API。
-- AirBridge Core 不依赖 Capture Skill、Allegro Skill 或其领域模型。
+- AirBridge Core 不依赖任何 EDA Skill 或其领域模型。
 - Agent Host 适配只处理 Skill 发现、安装、加载和必要的 Host 能力差异，不承载领域业务。
 - 不同 EDA 产品 Skill 之间不存在运行时依赖，包括同一产品套件中的 OrCAD Capture Skill 与 OrCAD PCB Editor Skill。
 
@@ -272,14 +272,14 @@ Transport Interface 是 Skill 与远端执行环境之间的稳定边界。它�
 2. **定义通用 Transport Contract：** 规定版本、能力协商、请求 / 结果、错误、超时、UNKNOWN、文件传输和认证策略；不加入 EDA 业务 API。
 3. **定义 Provider 边界：** 设计 AirBridge Provider 与 Fake / Mock Provider；先验证契约，再逐步迁移现有 Skill。
 4. **定义 Skill 包规范：** 明确独立目录、元数据、依赖、版本、测试、发布、安装和升级策略。
-5. **整理通用共享库：** 只提取领域无关代码；避免 Capture 与 Allegro 互相依赖。
+5. **整理通用共享库：** 只提取领域无关代码；避免不同 EDA 产品 Skill 互相依赖。
 6. **完善 OrCAD Capture Skill：** 以独立包方式逐步完善，不因其当前功能不完整而把领域能力下沉到 Core。
 7. **独立设计 OrCAD PCB Editor Skill：** 单独定义产品接口、领域模型、测试和发布，不与 OrCAD Capture Skill 合并。
 8. **独立设计 Altium Designer（AD）Skill 与 Allegro Skill：** 分别按各自产品边界建设；后续其他 EDA 产品按相同原则扩展。
 9. **完善权限模型：** 结合各产品 Skill 的实际操作矩阵，设计可扩展、最小权限的授权方式。
 10. **分层验收和迁移：** 保留现有兼容路径，逐项迁移并验证，不进行未经评估的大规模重构。
 
-在 Transport Contract 和包规范评审通过前，不应为了当前 Skill 方便而把某一组 Shell / RFS 调用方式永久固化成唯一抽象，也不应贸然创建大量 Capture / Allegro 专用 AirBridge API。
+在 Transport Contract 和包规范评审通过前，不应为了当前 Skill 方便而把某一组 Shell / RFS 调用方式永久固化成唯一抽象，也不应贸然创建任何 EDA 产品专用 AirBridge API。
 
 ## 11. 新增功能和代码评审的强制检查项
 
