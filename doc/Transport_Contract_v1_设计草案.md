@@ -77,6 +77,44 @@ Host Adapter 和 Transport Provider 是两个不同的适配层，不应合并�
 - 若某 Host 无法安全提供可信主体上下文或凭据绑定能力，Adapter 必须明确报告不支持所需认证模式；不得退化为要求 Agent 把 Token 写入 Prompt、工具参数或 Skill 配置。
 - Fake Provider 可与 Fake Host Adapter 配合做 Skill 单元测试；Host Compatibility 测试则单独验证真实 Host 的加载、调用和生命周期。Fake Host 通过不代表真实 Host 兼容。
 
+### 2.2 Provider Runtime、Provider Session 与资源所有权（提案）
+
+必须区分底层传输资源和面向单个 Skill 调用上下文的逻辑 Provider Session。串口、HTTP 连接池、IPC 通道等物理资源可以由 Provider Runtime 复用；Contract 协商状态、Profile 版本、能力快照、调用主体和请求上下文不得因此在不同 Skill Session 之间共享可变状态。
+
+建议采用以下所有权模型：
+
+| 对象 | 生命周期/所有权 | 可否跨 Skill 共享 |
+|---|---|---|
+| Provider Runtime / connection pool | 由 Host Adapter 注入的 Provider Factory 或其 Runtime Manager 创建和管理；随 Host/Adapter 生命周期或显式资源策略关闭 | 可以，但只能共享底层传输资源，不能共享调用主体状态 |
+| Provider Session | 每个 Skill 实例或独立调用上下文单独创建；持有自己的 Contract/Profile 协商结果、Capability Snapshot、请求上下文和凭据绑定策略 | 不可以跨 Skill/主体共享 |
+| Credential Binding | 绑定特定 Provider、audience、purpose 和可信调用主体；按请求/短生命周期管理 | 不可跨主体复用；不得因连接池共享而共享凭据 |
+| Remote Request | 由原调用主体和 client_request_id 标识；请求所有权由 Provider/服务端保证 | 不可跨主体查询或复用 |
+
+依赖和生命周期关系：
+
+```text
+Host Adapter / Provider Factory (owns Runtime)
+  ├── Provider Runtime (optional shared transport pool)
+  │     ├── Provider Session A -> Skill A
+  │     └── Provider Session B -> Skill B
+  └── Credential Source (trusted caller context)
+        ├── binding for Session A / principal A
+        └── binding for Session B / principal B
+```
+
+约束：
+
+- Host Adapter/Provider Factory 负责创建、登记和回收 Provider Runtime 与独立 Provider Session；Skill 只持有自己的 Session 接口，不直接管理共享 Runtime。
+- Provider Session 必须隔离协商版本、Profile 版本、能力快照、请求映射缓存、调用主体上下文和诊断上下文。不得使用单个可变全局 `negotiated_version` 或全局 capability cache 服务多个 Skill Session。
+- Provider 可以在 Runtime 内复用物理连接，但必须按请求安全隔离身份、凭据、授权上下文和响应关联。若底层连接无法可靠隔离不同主体的认证上下文，则不得跨主体复用该连接。
+- 一个 Session 的 `close()` 只关闭该 Session 并释放其独占资源；不得关闭仍被其他 Session 使用的共享 Runtime/连接池，也不得取消或删除远端请求记录。
+- Runtime 的最终关闭由其创建者/所有者（Provider Factory/Host Adapter）执行；关闭前必须停止新建 Session，并按声明的策略等待、拒绝或终止本地 Session。Runtime shutdown 不是 Skill 可调用的 Contract 操作。
+- Host Adapter 卸载某个 Skill 时只关闭该 Skill 的 Session。只有 Host/Adapter 生命周期结束或 Runtime Manager 确认没有活动 Session 且策略允许时，才关闭共享 Runtime。
+- Session/Runtime 的本地关闭不代表远端请求已取消、失败或未执行；仍未确定的请求必须保留 UNKNOWN / SUBMISSION_UNKNOWN 语义，并可在后续获授权的 Session 中按原主体和原 request ID 查询。
+- 不同主体不得通过共享 Runtime、连接池或缓存推断彼此请求是否存在；请求查询仍由服务端按已认证主体执行所有权检查。
+
+该所有权模型是逻辑约束，不要求 Provider 一定实现共享连接池。最简单且合规的实现可以为每个 Session 创建独立 Runtime/连接；优化复用只能在不削弱隔离的前提下进行。
+
 ## 3. 版本与兼容性
 
 建议使用独立语义版本：
@@ -474,36 +512,36 @@ Skill 初始化门控顺序：
 
 ### 5.0.1 基础生命周期接口
 
-建议基础接口明确为：
+建议基础接口由 Host Adapter/Provider Factory 为每个 Skill 调用上下文创建一个独立的 Provider Session：
 
 ```text
-TransportProvider
+ProviderSession
   get_contract_info() -> ContractInfo
   negotiate_contract(client_supported_versions[]) -> ContractNegotiationResult
   get_capabilities(refresh=false) -> CapabilitySnapshot
   close() -> None
 ```
 
-- get_contract_info() 是无副作用的发现操作，返回 Provider 身份、实现版本和支持的 Contract 版本集合；它不执行副作用操作。
-- negotiate_contract() 根据调用方明确提供的完整版本集合选择最高共同版本；没有共同版本时返回明确的不兼容结果。不得静默选择未声明版本。
-- 协商结果绑定当前 Provider 会话；会话中的后续能力快照和操作必须使用该版本。不同 Skill 会话不得通过共享可变全局状态互相覆盖协商结果。
-- get_capabilities() 只返回当前已协商版本的能力快照。它是基础引导接口，不依赖快照内部的 runtime.capabilities.read 能力来授权首次读取，避免能力自举循环。
-- close() 释放当前 Provider 会话持有的资源；关闭后再次调用操作接口必须得到明确的关闭/生命周期错误，不得悄悄创建新会话。
-
+- `ProviderSession` 是会话作用域对象；其 Contract/Profile 协商结果、能力快照和请求上下文只属于该 Session。
+- `get_contract_info()` 是无副作用的发现操作，返回 Provider 身份、实现版本和支持的 Contract 版本集合；它不执行副作用操作。
+- `negotiate_contract()` 根据调用方明确提供的完整版本集合选择最高共同版本；没有共同版本时返回明确的不兼容结果。不得静默选择未声明版本。
+- 协商结果绑定当前 Session；该 Session 后续能力快照和操作必须使用该版本。不同 Session 不得通过共享可变状态互相覆盖协商结果。
+- `get_capabilities()` 只返回当前已协商版本及已协商 Profile 版本绑定的能力快照。它是基础引导接口，不依赖快照内部的 `runtime.capabilities.read` 能力授权首次读取。
+- `close()` 只关闭当前 Session 并释放其独占资源；不得关闭其他 Session 正在使用的共享 Provider Runtime。关闭后调用该 Session 的操作接口必须返回明确生命周期错误，不得悄悄创建新 Session。
+- 共享 Runtime 的创建和最终关闭由 Host Adapter/Provider Factory 管理，不属于 Skill 可调用的 Transport Contract 接口；Provider 可以完全不实现 Runtime 共享。
 
 ### 5.1 Provider 生命周期
 
 ```text
-TransportProvider
+ProviderSession
   get_contract_info() -> ContractInfo
   negotiate_contract(client_supported_versions[]) -> ContractNegotiationResult
   get_capabilities(refresh=false) -> CapabilitySnapshot
-  close() -> None
 
 Optional RuntimeInfo
   get_runtime_info() -> RuntimeInfo
 
-RequestTracking (optional capability; applies to any request-bearing transport operation)
+Optional RequestTracking Profile
   find_by_client_request_id(operation_kind, client_request_id) -> RequestLookupResult
   get_request_status(operation_kind, request_reference) -> RequestStatus
   get_request_result(operation_kind, request_reference) -> OperationResult
@@ -516,6 +554,19 @@ RequestReference {
 ```
 
 `RuntimeInfo` 仅描述通用远端运行环境身份与版本，不包含 EDA 生命周期信息；它是可选信息，不属于所有 Provider 的基础合规门槛。
+
+### 5.1.1 连接中断、恢复与重新协商（提案）
+
+物理连接状态与逻辑 Provider Session 状态必须分开处理。底层连接短暂断开并不自动意味着 Provider Session 已结束；但连接恢复也不证明原请求未执行或已完成。
+
+1. Provider Runtime 可以按实现策略恢复物理连接。恢复时必须重新验证目标 Provider 身份；不得把连接到不同 Provider 实例当成原实例的透明恢复。
+2. 若 Provider 身份/实例、Contract 版本或已协商 Profile 版本发生变化，原 Session 不得继续使用旧能力快照提交操作；必须建立新 Session 并重新协商。
+3. 若身份/实例和已协商版本均未变化，Provider 可在原 Session 内恢复连接，但必须刷新或验证能力快照的有效性；能力未知或过期时，副作用操作 fail closed。
+4. 连接中断期间已提交或可能已离开调用方的请求，按原 `client_request_id` 保持 `SUBMISSION_UNKNOWN` 或 `UNKNOWN`；不得因重连自动转成 REJECTED、NOT_SUBMITTED 或失败。
+5. 恢复后优先执行受授权的原请求查找/状态/结果核实（若对应 Profile/能力可用）。查询不可用或结果不确定时保留 UNKNOWN；不得为“试试看”而重新提交非幂等请求。
+6. 新 Session 若要查询旧请求，必须使用原调用主体身份和原 request ID；不得用新主体接管或伪造请求所有权。服务端必须继续执行主体隔离。
+7. 重连、刷新凭据或重新创建本地 Session 都不改变原请求 ID、payload digest 或已知副作用事实；任何重试仍受第 8 节幂等性与服务端去重保证约束。
+8. Session close 或 Runtime shutdown 仅表示本地资源生命周期结束，不代表远端取消。若需要远端取消，必须由未来独立、显式、可授权的能力定义，不得隐含在 close() 中。
 
 ### 5.2 Shell
 
