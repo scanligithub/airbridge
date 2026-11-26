@@ -190,6 +190,106 @@ transport-contract/
 - Provider 的测试报告明确记录 Provider 实现版本、Contract 版本、Conformance Suite 版本、能力快照和适用的 operation_kind。
 - 真实 Provider 集成结果单独报告；Fake Provider 通过不能替代真实 Provider 验收。
 
+### 3.8 Optional Profile 的独立版本与协商（提案）
+
+Core Contract 只定义 Provider 生命周期、契约发现/协商、能力快照和公共语义基础；具体操作集合通过独立 Optional Profile 提供。Profile 不改变 Core Contract 的身份，也不把某种操作强加给所有 Provider。
+
+建议 v1 采用以下 Profile：
+
+| Profile ID | 覆盖范围 | 说明 |
+|---|---|---|
+| transport.shell | Shell 命令提交及该 Profile 明确列出的查询接口 | 不默认包含状态查询、结果查询或去重；仍按能力逐项声明 |
+| transport.filesystem | list/stat/read/write/mkdir/move/remove | 每个文件操作独立声明能力及语义保证 |
+| transport.filesystem.chunked-transfer | begin/put/status/complete/abort | 作为 Filesystem Profile 的可选扩展 Profile；必须声明完整生命周期和恢复保证 |
+
+Profile ID 是稳定的命名空间标识；Profile 自身采用独立的 MAJOR.MINOR.PATCH 版本，不与 Core Contract 版本或 Provider 软件版本共用版本号。Profile 的语义变更按其自身兼容性规则升级版本。
+
+**版本协商规则：**
+
+1. Skill 元数据声明自己支持并验证过的完整 Core Contract 版本集合，以及每个必需 Profile 的完整版本集合。
+2. Provider 的能力快照声明其实现并验证过的 Profile 版本集合；不得仅因底层路由/函数存在就声明实现 Profile。
+3. 先协商 Core Contract，再分别对 Skill 要求的每个 Profile 选择双方共同支持的最高完整版本。Profile 版本必须由该 Profile 对应的 Conformance Suite 验证。
+4. 任一必需 Profile 没有共同版本时，Skill 初始化失败；不得静默降级到另一个 Profile 或将 Profile 缺失解释为能力 unsupported 后继续运行。
+5. 一次 Provider 会话内，已协商的 Core Contract 版本和每个 Profile 版本固定。重新协商必须重建会话，并刷新能力快照。
+6. Profile 版本兼容与 Profile 内具体能力支持是两道门槛：实现 Profile 不代表其所有可选能力都支持；操作前仍须逐项检查能力、条件、限制及服务端授权。
+7. Profile 可声明依赖 Core Contract 的公共类型/语义，但不得依赖另一个 EDA Product Skill，也不得把 AirBridge 私有接口作为 Profile 要求。
+
+**能力快照的 Profile 绑定：**
+
+每个 Profile 声明至少包含 profile_id、profile_version、conformance_suite_version 和该 Profile 实际支持的能力清单。能力条目必须能追溯到 Profile；相同能力名若跨 Profile 复用，必须保证语义完全一致，否则使用不同的能力标识。条件、limits、guarantees 和适用 operation_kind 仍按第 4 节规则声明。
+
+Profile 能力快照示意（非冻结 JSON Schema）：
+
+```yaml
+provider:
+  provider_id: example.remote
+  implementation_version: 2.4.0
+contract:
+  negotiated_version: 1.0.0
+profiles:
+  - profile_id: transport.shell
+    profile_version: 1.0.0
+    conformance_suite_version: 1.0.0
+    capabilities:
+      - name: shell.execute
+        support: supported
+        guarantees: [client_request_id_preserved]
+        conditions: []
+        limits: { max_payload_bytes: 65536 }
+      - name: shell.status_query
+        support: unsupported
+        guarantees: []
+        conditions: []
+        limits: {}
+```
+
+此例只表示 Shell Profile 被实现，但状态查询未实现；不得据此推断 shell.result_query、请求去重或其他能力已支持。
+
+**Skill / Provider Profile Manifest 示例（非冻结格式）：**
+
+Skill：
+```yaml
+skill_id: orcad.capture
+contract:
+  supported_versions: ["1.0.0"]
+required_profiles:
+  - profile_id: transport.shell
+    supported_versions: ["1.0.0"]
+    required_capabilities:
+      - shell.execute
+      - request.correlation
+optional_profiles: []
+```
+
+Provider：
+```yaml
+provider_id: airbridge.serial
+implementation_version: 2.4.0
+contract:
+  supported_versions: ["1.0.0"]
+implemented_profiles:
+  - profile_id: transport.shell
+    supported_versions: ["1.0.0"]
+    conformance_suite_version: "1.0.0"
+  - profile_id: transport.filesystem
+    supported_versions: ["1.0.0"]
+    conformance_suite_version: "1.0.0"
+implemented_capabilities:
+  - shell.execute
+  - request.correlation
+  - filesystem.list
+  - filesystem.read
+```
+
+上述 Manifest 是设计示例，不代表仓库已经存在对应 Skill 包、Provider 包或 Profile 实现。能力快照才是当前 Provider 会话的实际能力声明；Manifest 是发布/验证范围声明，两者必须一致，不得用静态 Manifest 替代运行时能力门控。
+
+**依赖声明规则：**
+
+- Skill 的 required_profiles 表示缺失即不能初始化；optional_profiles 表示可在缺失时禁用相应功能，但不得影响核心工作流的安全性。
+- required_capabilities 必须在对应 Profile 的能力命名空间/范围内明确列出。若能力支持为 conditional，Skill 必须在提交前验证条件；无法验证时视为不满足。
+- Skill 不得仅声明“需要 Shell”而不列出实际依赖的能力；例如 Shell 执行与 Shell 状态查询是不同能力。
+- Provider 的 implemented_profiles 只声明已通过对应 Profile Conformance Suite 的版本；implemented_capabilities/运行时快照列出该 Profile 中实际支持的能力。不得用 Profile 存在推导全部操作支持。
+- Profile Conformance Suite 独立版本化，并明确对应 Profile 版本；Core Contract Suite 只验证基础核心和公共语义，不替代 Profile 专项行为测试。
 ### 3.7 兼容性声明示例（非冻结格式）
 
 以下仅示意每个组件需要声明哪些信息，不代表当前仓库已创建这些 manifest：
@@ -290,6 +390,28 @@ provider:
 6. 对条件支持的能力，必须明确条件与限制；不满足条件时按不支持处理。
 
 
+### 4.5 Profile 与 Capability 的绑定规则（提案）
+
+能力快照不能只给出一组无来源的能力名称。每项可选能力必须能够关联到已协商的 Profile 及其版本。建议 Profile 级声明采用以下逻辑结构：
+
+```text
+ProfileDeclaration {
+  profile_id,
+  profile_version,
+  conformance_suite_version,
+  capabilities[]
+}
+```
+
+Provider 只有在该 Profile 的必需 Conformance Tests 通过后，才能声明实现对应 Profile 版本。Profile 中可选能力仍可标记 supported / unsupported / conditional；Profile 合规不代表全部可选能力都受支持。
+
+Skill 初始化门控顺序：
+
+1. 协商 Core Contract 版本。
+2. 对每个 required_profile 协商 Profile 版本；任一失败则初始化失败。
+3. 获取并验证绑定上述版本的能力快照。
+4. 检查 Skill 声明的 required_capabilities；缺失、unsupported、条件无法验证或快照过期均视为不满足。
+5. 只有以上检查通过且服务端认证/授权成功后，才允许提交远端操作。
 ### 4.4 能力与接口门控映射（v1 必须明确）
 
 能力声明不是说明性元数据；每个可选接口调用都必须有可判定的能力门控。Provider 在能力缺失、为 `unsupported`、条件不满足或快照过期时，必须在提交任何副作用请求前拒绝调用。不得仅因为某个 HTTP 路由或底层函数存在，就推断对应契约能力已支持。
@@ -997,6 +1119,7 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 | 规范描述方式 | 规范文档定义语义，JSON Schema 校验结构，公共 Conformance Suite 验证行为；OpenAPI 仅作可选 Provider 绑定描述 | Proposed |
 | 规范权威边界 | 三类材料职责分离；发生冲突时阻断该版本发布并通过正式勘误解决 | Proposed |
 | v1 最小核心 | 所有 Provider 必须支持契约发现、版本协商、能力快照和关闭；Shell、Filesystem、RequestTracking、Chunked Transfer 均为可选能力 | Proposed |
+| Optional Profiles | Shell、Filesystem、Chunked Transfer 通过独立版本化 Profile 声明；Skill/Provider 分别声明所需/实现的完整版本集合 | Proposed |
 
 这些是供评审的建议，不应在未获批准前视为已冻结的架构决策。
 
@@ -1004,6 +1127,7 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 
 1. 评审并冻结 v1 的请求状态、关联、去重、UNKNOWN 和重试语义。
 2. 将能力模型、数据类型和错误模型形成可测试的接口定义。
+3. 定义 Core Contract 与 Shell/Filesystem/Chunked Transfer Profile 的边界、版本及 Conformance Suite 映射。
 3. 建立 Fake Provider 与公共 Contract Tests。
 4. 盘点并实现 AirBridge Provider；逐项标注真实支持能力，不伪造缺失能力。
 5. 在独立测试中验证 Provider 与 Fake Provider 的契约一致性。
@@ -1049,6 +1173,12 @@ Fake Provider 必须通过同一套测试，但不能把“Fake 中可模拟”�
 - [ ] 只读操作使用 NOT_APPLICABLE；副作用结果必须报告实际 effect。
 - [ ] TransportError 与 OperationResult.error 的适用边界明确；retryable 不单独授权重试。
 - [ ] CapabilitySnapshot 绑定 provider_id、provider_instance_id、实现版本和协商 Contract 版本。
+- [ ] Core Contract 与 Optional Profile 分别版本化，不共享隐式版本号。
+- [ ] Skill 与 Provider 对 Profile 声明已验证的完整版本集合。
+- [ ] 必需 Profile 无共同版本时初始化失败；已协商 Profile 版本在会话内固定。
+- [ ] Profile 声明与运行时 CapabilitySnapshot 一致；Profile 实现不推导其全部可选能力受支持。
+- [ ] Skill 的 required_profiles、optional_profiles 和 required_capabilities 语义明确。
+- [ ] Profile Conformance Suite 独立版本化，并与 Profile 版本建立映射。
 - [ ] 本文评审通过前，不进行生产 Skill 迁移。
 
 ---
