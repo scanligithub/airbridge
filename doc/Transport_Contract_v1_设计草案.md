@@ -81,6 +81,7 @@ v1 不要求所有 Provider 支持所有可选能力。必需的基础接口与�
 | `name` | 稳定的能力标识 |
 | `support` | `supported`、`unsupported` 或 `conditional` |
 | `guarantees` | 能力提供的明确语义保证 |
+| `conditions` | `conditional` 支持成立所需的可判定条件；其他状态为空数组 |
 | `limits` | 大小、超时、并发、路径等限制 |
 | `notes` | 可选的非规范说明 |
 
