@@ -379,8 +379,14 @@ Optional RuntimeInfo
 
 RequestTracking (optional capability; applies to any request-bearing transport operation)
   find_by_client_request_id(operation_kind, client_request_id) -> RequestLookupResult
-  get_request_status(operation_kind, provider_request_id) -> RequestStatus
-  get_request_result(operation_kind, provider_request_id) -> OperationResult
+  get_request_status(operation_kind, request_reference) -> RequestStatus
+  get_request_result(operation_kind, request_reference) -> OperationResult
+
+RequestReference {
+  client_request_id?,
+  provider_request_id?
+}
+// At least one identifier is required; if both are supplied they must identify the same request.
 ```
 
 `RuntimeInfo` 仅描述通用远端运行环境身份与版本，不包含 EDA 生命周期信息；它是可选信息，不属于所有 Provider 的基础合规门槛。
@@ -391,8 +397,8 @@ RequestTracking (optional capability; applies to any request-bearing transport o
 ShellTransport
   submit(command, options, client_request_id) -> OperationResponse
   // Shell-specific convenience aliases for RequestTracking; same semantics and authorization.
-  get_status(provider_request_id) -> RequestStatus  // operation_kind is implicitly SHELL
-  get_result(provider_request_id) -> OperationResult // operation_kind is implicitly SHELL
+  get_status(request_reference) -> RequestStatus  // operation_kind is implicitly SHELL
+  get_result(request_reference) -> OperationResult // operation_kind is implicitly SHELL
 
 ```
 
@@ -415,6 +421,7 @@ ShellTransport
       provider_request_id?,
       status?,
       status_availability, // RequestLookupStatusAvailability
+      result_availability, // AVAILABLE | UNAVAILABLE
       payload_digest?,
       accepted_at?,
       result_reference?
@@ -565,8 +572,8 @@ RequestState = NOT_SUBMITTED | SUBMISSION_UNKNOWN | ACCEPTED | RUNNING
 
 RequestStatus {
   operation_kind,
-  client_request_id?,
-  provider_request_id,
+  client_request_id,
+  provider_request_id?,
   state,             // RequestState; NOT_SUBMITTED is caller-local and not returned by Provider query
   observed_at,
   authority,         // authoritative | non_authoritative
@@ -577,11 +584,11 @@ RequestStatus {
 
 OperationCompletion = COMPLETED_SUCCESS | COMPLETED_FAILURE | UNKNOWN
 
-OperationEffect = NOT_APPLIED | FULLY_APPLIED | PARTIALLY_APPLIED | UNKNOWN
+OperationEffect = NOT_APPLICABLE | NOT_APPLIED | FULLY_APPLIED | PARTIALLY_APPLIED | UNKNOWN
 
 OperationResult {
   operation_kind,
-  client_request_id?,
+  client_request_id,
   provider_request_id?,
   state,             // OperationCompletion
   effect,            // OperationEffect; describes side effects, not execution status
@@ -605,17 +612,44 @@ TransportError {
 
 - `Submission.ACCEPTED` 仅表示 Provider 已确认接受，不表示操作已完成；`provider_request_id` 若尚不可用可省略，但此时 Provider 必须说明是否可通过 `client_request_id` 恢复映射。
 - `Submission.REJECTED` 仅可用于能保证请求未执行的拒绝；否则返回 `SUBMISSION_UNKNOWN`。
+- `TransportError` 用于无法形成有效 Submission 或 OperationResult 的 Provider/调用边界错误；一旦请求可能已离开调用方，outcome 必须如实标记为 unknown，调用方必须保留原 client_request_id 并按 SUBMISSION_UNKNOWN 语义处理。明确未提交的本地/前置错误可标记 not_executed。
 - `Submission.SUBMISSION_UNKNOWN` 不得携带暗示失败或未执行的默认值。调用方必须保留原 `client_request_id`。
 - `CapabilitySnapshot.contract_version` 必须与当前协商选定的契约版本一致；快照不得在不同 Contract 版本之间复用。
 - `RequestStatus` 只能由 Provider 对已提交请求返回；`NOT_SUBMITTED` 是调用方本地状态，不是远端可查询状态。Provider 无法确认状态时返回 `UNKNOWN` 或非权威观察，不能构造一个看似确定的状态。
 - `RequestTracking` 的 `operation_kind` 是请求命名空间的一部分；`provider_request_id` 只在该操作类型和 Provider 声明的身份/命名空间范围内解释。
 - `RequestStatus.authority=non_authoritative` 的观察不能单独将请求推进为已确认状态；它只能作为诊断信息。权威等级不能由调用方自行提升。
-- `OperationResult.effect` 与 `OperationResult.state` 必须分开解释：前者描述副作用实际达到的程度，后者描述执行是否完成/成功。特别是 `COMPLETED_FAILURE` 可与 `PARTIALLY_APPLIED` 或 `UNKNOWN` 并存。
+- `OperationResult.effect` 与 `OperationResult.state` 必须分开解释：前者描述副作用实际达到的程度，后者描述执行是否完成/成功。只读操作使用 `NOT_APPLICABLE`；有副作用的操作不得使用该值。特别是 `COMPLETED_FAILURE` 可与 `PARTIALLY_APPLIED` 或 `UNKNOWN` 并存。
 - `OperationResult.state=COMPLETED_FAILURE` 不代表没有副作用；必须通过 `effect` 表达 `NOT_APPLIED`、`PARTIALLY_APPLIED` 或 `UNKNOWN`。只有能证明完整目标效果已达成时才使用 `FULLY_APPLIED`。若最终执行状态无法确认，使用 `state=UNKNOWN`，并按证据设置 `effect`。
-- `OperationResponse` 允许 Provider 在操作已同步完成时直接返回 `OperationResult`；若操作仍在执行或提交结果不确定，则返回 `Submission`。两种路径都必须保留相同的 `client_request_id` 和结果语义。
+- `OperationResponse` 允许 Provider 在操作已同步完成时直接返回 `OperationResult`；若操作仍在执行或提交结果不确定，则返回 `Submission`。两种路径都必须保留相同且必填的 `client_request_id`；`provider_request_id` 仅在 Provider 已分配后提供。
+- 每个由 Contract 操作入口接收的逻辑请求都必须携带 `client_request_id`。因此 `OperationResult` 和 `RequestStatus` 中的 `client_request_id` 必填；Provider 不得因同步执行、缺少后端任务 ID 或结果缓存而丢弃它。
+- `RequestReference` 至少包含 `client_request_id` 或 `provider_request_id` 之一；若两者同时提供，Provider 必须验证它们映射到同一请求。这样允许在尚未取得 Provider ID 时按 Client ID 查询，也允许后端只支持 Provider ID 的实现明确拒绝不支持的查询方式。
+- `RequestStatus.provider_request_id` 可选，`client_request_id` 必填。若 Provider 只支持按 Provider ID 查询，必须在能力声明和查询错误中明确这一限制；不得把缺少 Provider ID 解释为请求不存在。
+- `RequestLookupResult.FOUND` 必须分别声明状态查询和结果查询是否可用；不能用 `status_availability` 推断结果查询能力，反之亦然。
+- `OperationEffect.NOT_APPLICABLE` 用于无副作用的读取/查询操作；不得将只读操作强行标为 `NOT_APPLIED` 或 `FULLY_APPLIED`。
 - `payload` 只承载对应操作的结果数据；通用层不得把 Shell stdout、文件字节或其他操作数据误解为 EDA 领域对象。具体 payload schema 应由通用操作类型定义，不能由 Provider 私自改变。
-- `TransportError.retryable=true` 只表示按本契约自动重试不会违反操作语义及 Provider 保证；它不是“网络错误可再次尝试”的同义词。
+- `TransportError.retryable` 是 Provider 对当前错误场景的重试建议，不是独立授权。调用方仍必须结合操作幂等分类、请求状态、去重能力和错误 outcome 决定是否重试；`retryable=true` 不得覆盖非幂等操作的禁止重放规则。
 - 所有类型均不得包含 Token、Authorization Header、私钥或其他凭据。可选字段缺失必须与空字符串、空对象或“已确认不存在”区分。
+
+### 5.6 公共类型的必填字段与组合约束（v1 提案）
+
+| 类型 | 必填字段 | 可选字段 | 关键约束 |
+|---|---|---|---|
+| ContractInfo | contract_name、provider_id、provider_name、provider_implementation_version、supported_contract_versions | 无 | 版本集合必须是完整版本号，不以 latest 或宽泛范围替代 |
+| ContractNegotiationResult | 结果分支及其分支字段 | 无 | NEGOTIATED 必须包含唯一选定版本；INCOMPATIBLE 不得伪造选定版本 |
+| CapabilitySnapshot | provider_instance_id、contract_version、generated_at、capabilities | expires_at | 快照必须绑定已协商版本和 Provider 身份；过期规则明确 |
+| Submission | operation_kind、client_request_id、分支时间/原因字段 | provider_request_id | 同一逻辑请求始终保留 client_request_id |
+| RequestStatus | operation_kind、client_request_id、state、observed_at、authority | provider_request_id、各阶段时间 | Provider 不返回 NOT_SUBMITTED；至少一个请求 ID 可用于查询 |
+| OperationResult | operation_kind、client_request_id、state、effect | provider_request_id、completed_at、payload、error | 只读操作 effect=NOT_APPLICABLE；副作用操作必须报告真实效果 |
+| TransportError | category、code、message、outcome、retryable | request_ids、details | 错误诊断脱敏；retryable 不覆盖幂等性与 UNKNOWN 规则 |
+
+额外一致性约束：
+
+1. RequestStatus 与 OperationResult 必须保留原始 client_request_id；不能只返回 Provider 内部 ID。
+2. RequestReference 必须至少提供一个请求标识；当两个标识都提供时，映射不一致必须返回稳定的 CONFLICT 错误。
+3. OperationResult.state=COMPLETED_SUCCESS 对有副作用的操作，通常应对应 effect=FULLY_APPLIED；若业务定义允许“成功但未产生目标变更”，该例外必须由操作类型明确说明。COMPLETED_FAILURE 不得默认映射为 NOT_APPLIED。
+4. OperationResult.state=UNKNOWN 不得与“已确认完成”同时表达；effect 可为 UNKNOWN，或在已有独立证据时表达已确认达到的效果程度。
+5. TransportError 不替代 Submission.REJECTED、Submission.SUBMISSION_UNKNOWN 或 OperationResult。它用于无法形成这些结构的调用边界错误；其 outcome 必须与当前已知的执行事实一致。
+6. TransportError.retryable 不能单独成为自动重试许可。非幂等操作仍须满足已验证的服务端去重保证，或由上层业务层完成核实并创建新的逻辑操作。
 
 ## 6. 请求标识、关联与幂等性
 
@@ -881,12 +915,12 @@ Fake/Mock Provider 必须实现同一接口和同一状态语义，不得为了�
 6. Deduplication retention and expiry：保留期内重复提交不产生第二次副作用；记录过期后不得虚构 AUTHORITATIVE_NOT_FOUND 或安全重放保证。
 7. Submission interruption：提交调用在请求可能已离开调用方后中断，状态进入 SUBMISSION_UNKNOWN；不得把本地异常映射成 REJECTED。
 8. Synchronous and asynchronous providers：同步完成直接返回 OperationResult；异步提交返回 Submission；两条路径保留一致的请求 ID、状态和副作用语义。
-9. Status/result query consistency：分别验证状态查询和结果查询；只支持其中之一时，另一接口必须明确拒绝。
+9. Status/result query consistency：分别验证状态查询和结果查询；只支持其中之一时，另一接口必须明确拒绝。验证 RequestReference 可按 client_request_id 或 provider_request_id 查询，双 ID 不一致时冲突；验证 RequestStatus/OperationResult 始终保留 client_request_id。
 10. UNKNOWN reconciliation：查询超时、断线、重启和旧快照不得把 UNKNOWN 自动变成失败或未提交；只有权威证据才能推进状态，已确认终态不得被旧观察回退。
 11. Ownership isolation：跨 Agent/主体猜测 request ID 时，不能泄漏请求存在性、状态、结果或 payload digest；同时验证合法所有者可查询。
 12. Retry classification：READ_ONLY、IDEMPOTENT_WRITE、NON_IDEMPOTENT、UNKNOWN_SEMANTICS 分别验证；仅有 correlation 或 result query 时，非幂等操作不得自动重放。
 13. Filesystem semantics：CREATE_NEW、REPLACE、APPEND、CONDITIONAL_REPLACE；目标已存在/不存在、权限失败、非原子条件写、部分写入、跨卷 move、递归 remove 等边界。
-14. Partial write and effect reporting：验证 FULLY_APPLIED、NOT_APPLIED、PARTIALLY_APPLIED、UNKNOWN 与执行状态分开表达；部分写入不能伪装为成功。
+14. Partial write and effect reporting：验证 NOT_APPLICABLE（只读）、FULLY_APPLIED、NOT_APPLIED、PARTIALLY_APPLIED、UNKNOWN 与执行状态分开表达；部分写入不能伪装为成功。
 15. Chunk transfer lifecycle：begin 响应丢失恢复、相同块重试、不同内容同序号冲突、已确认块持久性、断线/重启恢复、长度/摘要校验，以及 abort/complete 并发竞争。
 16. Credential Source and redaction：凭据不可用、过期、撤销；验证 Provider/audience/purpose 与主体上下文不匹配时拒绝绑定、多个匹配凭据时 fail closed、无静默环境变量/默认账户回退；验证不向 Agent 暴露凭据或存在性元数据，秘密不进入日志、异常、能力快照、请求状态或结果，且不会触发凭据探测或 Scope 扩大。
 17. Provider close and resource cleanup：关闭后行为明确；线程、文件句柄、临时传输记录按声明清理。
