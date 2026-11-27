@@ -223,6 +223,14 @@ class AgentSecurityStoreTests(unittest.TestCase):
         self.assertEqual(row["agent_id"], "antigravity")
         self.assertEqual(row["created_at"], 0)
 
+        # Ownership is persisted across Host-A security-store restarts.
+        db_path = self.store.db_path
+        self.store.close()
+        self.store = AgentSecurityStore(db_path)
+        self.assertTrue(self.store.can_read_request(request_id, principal))
+        with self.assertRaisesRegex(AgentSecurityError, "already has an owner"):
+            self.store.bind_request_owner(request_id, "opencode")
+
     def test_persistent_execution_reservation_survives_store_reopen(self):
         first = "d20f8b2c-6d01-4f9b-9c18-53ddf5dcae31"
         second = "a20f8b2c-6d01-4f9b-9c18-53ddf5dcae32"
