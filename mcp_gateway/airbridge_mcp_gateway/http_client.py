@@ -108,6 +108,19 @@ class AirBridgeHttpClient:
             timeout_seconds=http_timeout_seconds,
         )
 
+    def execute_shell(
+        self,
+        payload: dict[str, Any],
+        *,
+        http_timeout_seconds: float,
+    ) -> dict[str, Any]:
+        return self.request_json(
+            "POST",
+            "/api/v1/shell/exec",
+            payload=payload,
+            timeout_seconds=http_timeout_seconds,
+        )
+
     def get_request_status(self, request_id: str) -> dict[str, Any]:
         encoded_id = quote(request_id, safe="")
         return self.request_json("GET", f"/api/v1/requests/{encoded_id}")
