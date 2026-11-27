@@ -25,6 +25,11 @@ class _FakeGateway:
         self.execute_calls += 1
         return {"state": "disabled"}
 
+    def execute_shell(self, **kwargs):
+        self.shell_calls = getattr(self, "shell_calls", [])
+        self.shell_calls.append(kwargs)
+        return {"request_id": kwargs["request_id"], "state": "completed"}
+
     def get_request_status(self, request_id):
         return {"request_id": request_id}
 
@@ -39,6 +44,7 @@ class McpServerRegistrationTests(unittest.TestCase):
             {
                 "airbridge_get_capabilities",
                 "airbridge_get_eda_versions",
+                "airbridge_shell_execute",
                 "airbridge_eda_execute",
                 "airbridge_request_status",
             },
@@ -54,6 +60,7 @@ class McpServerRegistrationTests(unittest.TestCase):
             {
                 "airbridge_get_capabilities",
                 "airbridge_get_eda_versions",
+                "airbridge_shell_execute",
                 "airbridge_eda_execute",
                 "airbridge_request_status",
             },
@@ -64,6 +71,22 @@ class McpServerRegistrationTests(unittest.TestCase):
             self.assertEqual(schema["type"], "object")
             self.assertEqual(schema["properties"], {})
             self.assertNotIn("required", schema)
+
+        shell_schema = by_name["airbridge_shell_execute"].input_schema
+        self.assertEqual(shell_schema["required"], ["request_id", "command"])
+        shell_properties = shell_schema["properties"]
+        self.assertEqual(shell_properties["request_id"]["type"], "string")
+        self.assertEqual(shell_properties["request_id"]["format"], "uuid")
+        self.assertEqual(shell_properties["command"]["type"], "string")
+        self.assertEqual(shell_properties["command"]["minLength"], 1)
+        self.assertEqual(shell_properties["shell"]["default"], "powershell")
+        self.assertEqual(shell_properties["cwd"]["default"], "")
+        self.assertEqual(shell_properties["timeout"]["default"], 60)
+        self.assertEqual(shell_properties["timeout"]["minimum"], 1)
+        self.assertEqual(shell_properties["timeout"]["maximum"], 300)
+        self.assertEqual(shell_properties["wait_timeout_ms"]["default"], 60_000)
+        self.assertEqual(shell_properties["wait_timeout_ms"]["minimum"], 0)
+        self.assertEqual(shell_properties["wait_timeout_ms"]["maximum"], 300_000)
 
         request_schema = by_name["airbridge_request_status"].input_schema
         self.assertEqual(request_schema["required"], ["request_id"])
@@ -100,6 +123,10 @@ class McpServerRegistrationTests(unittest.TestCase):
     def test_execution_tool_is_annotated_as_destructive(self):
         server = create_server(_FakeGateway())
         tools = asyncio.run(server.list_tools())
+        shell_tool = next(t for t in tools if t.name == "airbridge_shell_execute")
+        self.assertFalse(shell_tool.annotations.read_only_hint)
+        self.assertTrue(shell_tool.annotations.destructive_hint)
+        self.assertFalse(shell_tool.annotations.idempotent_hint)
         execute_tool = next(t for t in tools if t.name == "airbridge_eda_execute")
         self.assertFalse(execute_tool.annotations.read_only_hint)
         self.assertTrue(execute_tool.annotations.destructive_hint)
@@ -115,18 +142,34 @@ class McpServerRegistrationTests(unittest.TestCase):
                 capabilities = await client.call_tool(
                     "airbridge_get_capabilities", {}
                 )
+                shell = await client.call_tool(
+                    "airbridge_shell_execute",
+                    {
+                        "request_id": "f9d9d4f2-8b73-4b13-b3d6-9a09a10dcb3a",
+                        "command": "Get-Location",
+                    },
+                )
                 execution = await client.call_tool(
                     "airbridge_eda_execute", {"script": "puts [pid]"}
                 )
-                return listed, capabilities, execution
+                return listed, capabilities, shell, execution
 
-        listed, capabilities, execution = asyncio.run(exercise_client())
+        listed, capabilities, shell, execution = asyncio.run(exercise_client())
         self.assertIn(
             "airbridge_get_capabilities",
             {tool.name for tool in listed.tools},
         )
         self.assertFalse(capabilities.is_error)
         self.assertEqual(capabilities.structured_content["state"], "negotiated")
+        self.assertFalse(shell.is_error)
+        self.assertEqual(
+            shell.structured_content["request_id"],
+            "f9d9d4f2-8b73-4b13-b3d6-9a09a10dcb3a",
+        )
+        self.assertEqual(
+            gateway.shell_calls[0]["request_id"],
+            "f9d9d4f2-8b73-4b13-b3d6-9a09a10dcb3a",
+        )
         self.assertFalse(execution.is_error)
         self.assertEqual(execution.structured_content["state"], "disabled")
         self.assertEqual(gateway.execute_calls, 1)
