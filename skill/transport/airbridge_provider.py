@@ -1,15 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Host-A Provider for AirBridge's generic HTTP Shell and request APIs."""
+"""Host-A Provider using the credential-managed AirBridge MCP STDIO Gateway."""
 from __future__ import annotations
 
-import ipaddress
-import json
 import math
 import os
-import urllib.error
-import urllib.parse
-import urllib.request
-from typing import Any, Callable, Mapping, Optional
+import re
+from typing import Any, Mapping, Optional, Sequence
 
 from .contract import (
     CONTRACT_VERSION,
@@ -19,80 +15,108 @@ from .contract import (
     ProviderInfo,
     normalize_request_id,
 )
+from .stdio_client import McpStdioClient, McpStdioError
 
 
-DEFAULT_API_BASE_URL = "http://127.0.0.1:8888"
-TOKEN_ENV = "AIRBRIDGE_AGENT_TOKEN"
-MAX_RESPONSE_BYTES = 2 *  1024 * 1024
+AGENT_ID_ENV = "AIRBRIDGE_AGENT_ID"
+EXE_PATH_ENV = "AIRBRIDGE_EXE_PATH"
+_AGENT_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 
 
 class AirBridgeProviderError(RuntimeError):
-    """AirBridge Provider configuration, HTTP, or protocol error."""
+    """AirBridge Provider configuration, authorization, or protocol error."""
 
 
-class _UncertainTransportError(Exception):
-    """The HTTP exchange ended without a trustworthy response."""
-
-
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: N802
-        # Never forward the Agent Bearer token to a redirect target.
-        return None
-
-
-def _validate_base_url(value: str) -> str:
-    raw = str(value or "").strip()
-    try:
-        parsed = urllib.parse.urlsplit(raw)
-        parsed.port
-        loopback = ipaddress.ip_address(parsed.hostname or "").is_loopback
-    except ValueError:
-        parsed = None
-        loopback = False
-    if (
-        parsed is None or parsed.scheme not in ("http", "https") or not loopback
-        or parsed.username is not None or parsed.password is not None
-        or parsed.query or parsed.fragment or parsed.path not in ("", "/")
-        or not parsed.netloc
-    ):
-        raise AirBridgeProviderError(
-            "AirBridge API URL must use a loopback IP literal"
-        )
-    return raw.rstrip("/")
+def _child_environment(
+    source: Mapping[str, str],
+    agent_id: str,
+) -> dict[str, str]:
+    """Pass only OS runtime variables and non-secret AirBridge settings."""
+    allowed_os = {
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "LOCALAPPDATA",
+        "APPDATA",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "PROGRAMDATA",
+        "HOME",
+        "TMPDIR",
+    }
+    result = {
+        key: value
+        for key, value in source.items()
+        if key.upper() in allowed_os
+    }
+    for key in ("AIRBRIDGE_BASE_URL", "AIRBRIDGE_HTTP_TIMEOUT_SECONDS"):
+        value = source.get(key)
+        if value:
+            result[key] = value
+    # The STDIO executable itself sets the internal M2.5 policy marker.
+    # No Agent Bearer token is read, copied, or passed to this child.
+    result[AGENT_ID_ENV] = agent_id
+    return result
 
 
 class AirBridgeProvider:
-    """Map TransportProvider calls to Host A's existing local AirBridge API."""
+    """Map the generic Transport Contract to the public AirBridge MCP STDIO tools.
+
+    The Provider starts its own short-lived MCP client process. The executable
+    loads the Agent credential internally from Windows Credential Manager;
+    this Python process never receives the credential.
+    """
 
     def __init__(
         self,
-        base_url: str = DEFAULT_API_BASE_URL,
-        token: Optional[str] = None,
+        executable_path: Optional[str] = None,
+        agent_id: Optional[str] = None,
         timeout_seconds: float = 75.0,
-        opener: Optional[Callable[..., Any]] = None,
+        command: Optional[Sequence[str]] = None,
         environ: Optional[Mapping[str, str]] = None,
+        popen_factory=None,
     ) -> None:
-        self.base_url = _validate_base_url(base_url)
         source = os.environ if environ is None else environ
-        selected_token = str(
-            token if token is not None else source.get(TOKEN_ENV, "")
-        ).strip()
-        if not selected_token:
-            raise AirBridgeProviderError(
-                "{} must be provisioned for the calling Agent".format(TOKEN_ENV)
-            )
-        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in selected_token):
-            raise AirBridgeProviderError("Agent token contains invalid control characters")
+        selected_agent = str(agent_id if agent_id is not None else source.get(AGENT_ID_ENV, "")).strip().lower()
+        if not _AGENT_ID_PATTERN.fullmatch(selected_agent):
+            raise AirBridgeProviderError("A valid AIRBRIDGE_AGENT_ID is required")
         try:
             self.timeout_seconds = float(timeout_seconds)
         except (TypeError, ValueError) as exc:
             raise AirBridgeProviderError("timeout_seconds must be positive") from exc
         if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
             raise AirBridgeProviderError("timeout_seconds must be positive")
-        self._token = selected_token
-        self._opener = opener or urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), _NoRedirectHandler()
-        ).open
+
+        if command is None:
+            selected_exe = str(
+                executable_path
+                if executable_path is not None
+                else source.get(EXE_PATH_ENV, "")
+            ).strip()
+            if not selected_exe:
+                raise AirBridgeProviderError(
+                    "AIRBRIDGE_EXE_PATH or executable_path is required"
+                )
+            child_command = [selected_exe, "mcp", "stdio"]
+        else:
+            child_command = list(command)
+            if not child_command:
+                raise AirBridgeProviderError("MCP stdio command must not be empty")
+
+        self.agent_id = selected_agent
+        child_env = _child_environment(source, selected_agent)
+        try:
+            self._client = McpStdioClient(
+                command=child_command,
+                environ=child_env,
+                timeout_seconds=self.timeout_seconds,
+                popen_factory=popen_factory,
+            )
+        except McpStdioError as exc:
+            raise AirBridgeProviderError(str(exc)) from exc
         self._closed = False
 
     def _ensure_open(self) -> None:
@@ -101,58 +125,14 @@ class AirBridgeProvider:
 
     def get_info(self) -> ProviderInfo:
         self._ensure_open()
-        return ProviderInfo("airbridge", "0.1.0", CONTRACT_VERSION)
+        return ProviderInfo("airbridge", "0.2.0", CONTRACT_VERSION)
 
     def get_capabilities(self) -> list[Capability]:
         self._ensure_open()
         return [
-            Capability("shell.execute", True),
-            Capability("request.read", True),
+            Capability("shell.execute", "airbridge_shell_execute" in self._client.tool_names),
+            Capability("request.read", "airbridge_request_status" in self._client.tool_names),
         ]
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        payload: Optional[Mapping[str, Any]] = None,
-        timeout: Optional[float] = None,
-    ) -> tuple[int, dict[str, Any]]:
-        self._ensure_open()
-        body = None if payload is None else json.dumps(
-            dict(payload), ensure_ascii=False, separators=(",", ":")
-        ).encode("utf-8")
-        headers = {
-            "Accept": "application/json",
-            "Authorization": "Bearer " + self._token,
-        }
-        if body is not None:
-            headers["Content-Type"] = "application/json; charset=utf-8"
-        request = urllib.request.Request(
-            self.base_url + path, data=body, headers=headers, method=method
-        )
-        try:
-            response = self._opener(
-                request, timeout=self.timeout_seconds if timeout is None else timeout
-            )
-            try:
-                status, raw = int(response.getcode()), response.read(MAX_RESPONSE_BYTES + 1)
-            finally:
-                close = getattr(response, "close", None)
-                if callable(close):
-                    close()
-        except urllib.error.HTTPError as exc:
-            status, raw = exc.code, exc.read(MAX_RESPONSE_BYTES + 1)
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise _UncertainTransportError from exc
-        if len(raw) > MAX_RESPONSE_BYTES:
-            raise AirBridgeProviderError("AirBridge response exceeded the size limit")
-        try:
-            result = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise AirBridgeProviderError("AirBridge returned invalid JSON") from exc
-        if not isinstance(result, dict):
-            raise AirBridgeProviderError("AirBridge response must be a JSON object")
-        return status, result
 
     @staticmethod
     def _error_text(value: Any, fallback: str) -> str:
@@ -165,7 +145,7 @@ class AirBridgeProvider:
                 return str(message)
             if code:
                 return str(code)
-            return json.dumps(dict(value), ensure_ascii=False, sort_keys=True)
+            return fallback
         return str(value) if value else fallback
 
     @staticmethod
@@ -177,7 +157,7 @@ class AirBridgeProvider:
         state = str(payload.get("state") or "").lower()
         if state in ("pending", "accepted"):
             return OperationResponse.accepted(request_id)
-        if state in ("unknown", "not_found"):
+        if state in ("unknown", "not_found", "unavailable", "unconfirmed"):
             return OperationResponse.unknown(
                 request_id,
                 AirBridgeProvider._error_text(
@@ -185,7 +165,12 @@ class AirBridgeProvider:
                 ),
             )
         if state not in ("completed", "failed"):
-            raise AirBridgeProviderError("AirBridge returned an unsupported operation state")
+            detail = AirBridgeProvider._error_text(
+                payload.get("error"), "AirBridge rejected the operation"
+            )
+            raise AirBridgeProviderError(
+                "AirBridge operation was not submitted or was denied: {}".format(detail)
+            )
         result = payload.get("result")
         result = result if isinstance(result, dict) else {}
         exit_code = result.get("exit_code")
@@ -204,35 +189,6 @@ class AirBridgeProvider:
         )
         return OperationResponse.completed(request_id, success, result, error)
 
-    def _call(self, method: str, path: str, request_id: str,
-              payload: Optional[Mapping[str, Any]] = None,
-              timeout: Optional[float] = None) -> OperationResponse:
-        request_id = normalize_request_id(request_id)
-        try:
-            status, response = self._request(method, path, payload, timeout)
-        except _UncertainTransportError:
-            return OperationResponse.unknown(
-                request_id, "AirBridge HTTP transport failed; remote outcome may be unknown"
-            )
-        state = str(response.get("state") or "").lower()
-        if status == 503 and state == "unknown":
-            return OperationResponse.unknown(
-                request_id,
-                self._error_text(response.get("error"), "AirBridge reported UNKNOWN"),
-            )
-        # M2.5.2 returns 502 for a tracked terminal failure and 404 for
-        # an unknown/expired/foreign request. Preserve the Contract semantics.
-        if status == 502 and state == "failed":
-            return self._convert(response, request_id)
-        if status == 404 and state == "not_found":
-            return self._convert(response, request_id)
-        if status not in (200, 202):
-            detail = self._error_text(
-                response.get("error") or response.get("message"), "request failed"
-            )
-            raise AirBridgeProviderError("AirBridge HTTP {}: {}".format(status, detail))
-        return self._convert(response, request_id)
-
     def shell_execute(
         self, command: str, options: Optional[Mapping[str, Any]], request_id: str
     ) -> OperationResponse:
@@ -243,40 +199,79 @@ class AirBridgeProvider:
         if options is not None and not isinstance(options, Mapping):
             raise TypeError("options must be a mapping or None")
         opts = dict(options or {})
-        unknown = set(opts) - {"shell", "cwd", "timeout", "http_timeout_seconds"}
+        unknown = set(opts) - {
+            "shell", "cwd", "timeout", "http_timeout_seconds", "wait_timeout_ms"
+        }
         if unknown:
             raise ValueError("unsupported Shell option: {}".format(sorted(unknown)[0]))
         shell = opts.get("shell", "powershell")
         task_timeout = opts.get("timeout", 60)
         if shell not in ("powershell", "cmd"):
             raise ValueError("shell must be 'powershell' or 'cmd'")
-        if isinstance(task_timeout, bool) or not isinstance(task_timeout, int) or not 1 <= task_timeout <= 300:
+        if (
+            isinstance(task_timeout, bool)
+            or not isinstance(task_timeout, int)
+            or not 1 <= task_timeout <= 300
+        ):
             raise ValueError("timeout must be an integer between 1 and 300")
-        cwd = opts.get("cwd")
-        if cwd is not None and not isinstance(cwd, str):
+        cwd = opts.get("cwd", "")
+        if not isinstance(cwd, str):
             raise TypeError("cwd must be a string")
-        body = {
+        wait_timeout_ms = opts.get("wait_timeout_ms", 60_000)
+        if (
+            isinstance(wait_timeout_ms, bool)
+            or not isinstance(wait_timeout_ms, int)
+            or not 0 <= wait_timeout_ms <= 300_000
+        ):
+            raise ValueError("wait_timeout_ms must be an integer between 0 and 300000")
+        call_timeout = opts.get("http_timeout_seconds", self.timeout_seconds)
+        try:
+            call_timeout = float(call_timeout)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("http_timeout_seconds must be positive") from exc
+        if not math.isfinite(call_timeout) or call_timeout <= 0:
+            raise ValueError("http_timeout_seconds must be positive")
+
+        arguments = {
+            "request_id": request_id,
             "command": command,
             "shell": shell,
+            "cwd": cwd,
             "timeout": task_timeout,
-            "async": False,
-            "request_id": request_id,
+            "wait_timeout_ms": wait_timeout_ms,
         }
-        if cwd:
-            body["cwd"] = cwd
-        http_timeout = opts.get(
-            "http_timeout_seconds", max(self.timeout_seconds, task_timeout + 15)
-        )
-        return self._call(
-            "POST", "/api/v1/shell/exec", request_id, body, http_timeout
-        )
+        try:
+            payload = self._client.call_tool(
+                "airbridge_shell_execute",
+                arguments,
+                timeout_seconds=call_timeout,
+            )
+        except McpStdioError:
+            return OperationResponse.unknown(
+                request_id,
+                "AirBridge MCP STDIO response was not confirmed; query the same request_id",
+            )
+        return self._convert(payload, request_id)
 
     def get_operation(self, request_id: str) -> OperationResponse:
         """Read the original request record; this method never resubmits work."""
+        self._ensure_open()
         request_id = normalize_request_id(request_id)
-        return self._call(
-            "GET", "/api/v1/requests/" + request_id, request_id
-        )
+        try:
+            payload = self._client.call_tool(
+                "airbridge_request_status",
+                {"request_id": request_id},
+                timeout_seconds=self.timeout_seconds,
+            )
+        except McpStdioError:
+            return OperationResponse.unknown(
+                request_id,
+                "AirBridge MCP status response was not confirmed",
+            )
+        return self._convert(payload, request_id)
 
     def close(self) -> None:
+        if self._closed:
+            return
         self._closed = True
+        self._client.close()
