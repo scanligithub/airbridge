@@ -198,18 +198,30 @@ class AgentSecurityStoreTests(unittest.TestCase):
         # Prevent tearDown from closing an already closed connection.
         self.store = AgentSecurityStore(db_path)
 
-    def test_request_owner_expiration_is_bounded(self):
+    def test_request_owner_is_permanent_and_cannot_be_reassigned(self):
         request_id = "d20f8b2c-6d01-4f9b-9c18-53ddf5dcae31"
-        token = self.store.issue_token("antigravity", ["request.read"])
-        principal = self.store.authenticate("Bearer " + token["token"])
+        owner = self.store.issue_token("antigravity", ["request.read"])
+        other = self.store.issue_token("opencode", ["request.read"])
+        principal = self.store.authenticate("Bearer " + owner["token"])
+        other_principal = self.store.authenticate("Bearer " + other["token"])
         self.store.bind_request_owner(request_id, "antigravity")
         self.assertTrue(self.store.can_read_request(request_id, principal))
+
+        # Simulate an owner record older than every current runtime retention.
         self.store._conn.execute(
             "UPDATE agent_request_owners SET created_at = ? WHERE request_id = ?",
             (0, request_id),
         )
-        self.assertFalse(self.store.can_read_request(request_id, principal))
-        self.assertEqual(self.store.prune_request_owners(), 0)
+        self.assertTrue(self.store.can_read_request(request_id, principal))
+        self.assertFalse(self.store.can_read_request(request_id, other_principal))
+        with self.assertRaisesRegex(AgentSecurityError, "already has an owner"):
+            self.store.bind_request_owner(request_id, "opencode")
+        row = self.store._conn.execute(
+            "SELECT agent_id, created_at FROM agent_request_owners WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+        self.assertEqual(row["agent_id"], "antigravity")
+        self.assertEqual(row["created_at"], 0)
 
     def test_persistent_execution_reservation_survives_store_reopen(self):
         first = "d20f8b2c-6d01-4f9b-9c18-53ddf5dcae31"
