@@ -915,6 +915,33 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertEqual(started, [])
         self.assertTrue(host.session_negotiation_operation["peer_hello_seen"])
 
+    def test_auto_handshake_submission_failure_settles_status(self):
+        host = _new_worker()
+        operation_id = str(uuid.uuid4())
+        host.session_negotiation_operation = {
+            "operation_id": operation_id,
+            "generation": host.session_link_generation,
+            "owner": "auto",
+            "phase": "retry_wait",
+            "current_message_id": None,
+            "peer_hello_seen": False,
+        }
+        host.session_peer_status = host._new_session_peer_status(
+            "negotiating", generation=host.session_link_generation
+        )
+        host._begin_session_negotiation_attempt = lambda *_args, **_kwargs: {
+            "success": False,
+            "state": "busy",
+            "error": "simulated pending limit",
+        }
+
+        host._auto_negotiate_session_peer(
+            host.session_link_generation, operation_id
+        )
+
+        self.assertEqual(host.get_session_peer_status()["state"], "unconfirmed")
+        self.assertEqual(host.session_negotiation_operation["phase"], "completed")
+
     def test_manual_peer_hello_does_not_complete_attempt_and_deadline_settles_it(self):
         host = _new_worker()
         host.send_frame = lambda *_args, **_kwargs: None
