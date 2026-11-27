@@ -657,6 +657,46 @@ class SerialWorker(threading.Thread):
       if self.session_negotiation_operation is operation:
         self.session_negotiation_operation = None
 
+  def _settle_session_negotiation_failure_locked(
+      self,
+      operation_id: str,
+      generation: int,
+      state: str,
+      error: Optional[str],
+      message_id: Optional[str] = None,
+  ) -> None:
+    """Finish a failed attempt without leaving a stale negotiating snapshot."""
+    operation = self.session_negotiation_operation
+    if (
+        not operation
+        or operation.get("operation_id") != operation_id
+        or operation.get("generation") != generation
+    ):
+      return
+
+    operation["phase"] = "completed"
+    operation["completed_at"] = time.monotonic()
+
+    status = self.session_peer_status
+    if (
+        status.get("link_generation") != generation
+        or status.get("state") != "negotiating"
+        or (
+            message_id is not None
+            and status.get("last_handshake_id") not in (None, message_id)
+        )
+    ):
+      return
+
+    self.session_peer_status = self._new_session_peer_status(
+        "disconnected" if state == "disconnected" else "unconfirmed",
+        generation=generation,
+        error=error or state,
+        last_handshake_id=message_id or status.get("last_handshake_id"),
+        last_handshake_started_at=status.get("last_handshake_started_at"),
+        last_successful_handshake_at=status.get("last_successful_handshake_at"),
+    )
+
   def _reset_session_peer_status(self, reason: str):
     pending = []
     with self.session_protocol_lock:
@@ -780,8 +820,13 @@ class SerialWorker(threading.Thread):
             }
             pending["completed_at"] = time.monotonic()
             pending["event"].set()
-          operation["phase"] = "completed"
-          operation["completed_at"] = time.monotonic()
+          self._settle_session_negotiation_failure_locked(
+              operation_id,
+              generation,
+              "unconfirmed",
+              "failed to submit SESSION_HELLO",
+              message_id,
+          )
         raise
     return {
         "success": True,
@@ -838,10 +883,13 @@ class SerialWorker(threading.Thread):
     )
     if not result.get("success"):
       with self.session_protocol_lock:
-        operation = self.session_negotiation_operation
-        if operation and operation.get("operation_id") == operation_id:
-          operation["phase"] = "completed"
-          operation["completed_at"] = time.monotonic()
+        self._settle_session_negotiation_failure_locked(
+            operation_id,
+            generation,
+            result.get("state", "failed"),
+            result.get("error") or result.get("state", "negotiation failed"),
+            result.get("message_id"),
+        )
     return result
 
   def _wait_session_negotiation(
