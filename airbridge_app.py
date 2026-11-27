@@ -817,9 +817,16 @@ class SerialWorker(threading.Thread):
           "started_at": time.time(),
           "peer_hello_seen": False,
       }
-    return self._begin_session_negotiation_attempt(
+    result = self._begin_session_negotiation_attempt(
         generation, operation_id, timeout=timeout
     )
+    if not result.get("success"):
+      with self.session_protocol_lock:
+        operation = self.session_negotiation_operation
+        if operation and operation.get("operation_id") == operation_id:
+          operation["phase"] = "completed"
+          operation["completed_at"] = time.monotonic()
+    return result
 
   def _wait_session_negotiation(
       self, message_id: Optional[str], timeout: float
@@ -967,6 +974,12 @@ class SerialWorker(threading.Thread):
         elif self.session_peer_status.get("state") in (
             "unconfirmed", "negotiated", "no_common_protocol", "handshake_not_supported"
         ):
+          previous_success = self.session_peer_status.get("last_successful_handshake_at")
+          self.session_peer_status = self._new_session_peer_status(
+              "negotiating",
+              generation=self.session_link_generation,
+              last_successful_handshake_at=previous_success,
+          )
           start_recovery = True
       if start_recovery:
         self.sig.sig_rx_log.emit(
