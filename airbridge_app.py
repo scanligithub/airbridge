@@ -797,6 +797,8 @@ class SerialWorker(threading.Thread):
       timeout: Optional[float] = None,
       waiter_expected: bool = True,
   ) -> Dict[str, Any]:
+    if not self.is_serial_connected():
+      return {"success": False, "state": "disconnected", "error": "serial link is not connected"}
     with self.session_protocol_lock:
       self._expire_session_handshakes_locked()
       generation = self.session_link_generation
@@ -823,6 +825,13 @@ class SerialWorker(threading.Thread):
           "started_at": time.time(),
           "peer_hello_seen": False,
       }
+      previous_success = self.session_peer_status.get("last_successful_handshake_at")
+      self.session_peer_status = self._new_session_peer_status(
+          "negotiating",
+          generation=generation,
+          last_successful_handshake_at=previous_success,
+          last_handshake_started_at=time.time(),
+      )
     result = self._begin_session_negotiation_attempt(
         generation, operation_id, timeout=timeout,
         waiter_expected=waiter_expected,
@@ -887,6 +896,13 @@ class SerialWorker(threading.Thread):
           "started_at": time.time(),
           "peer_hello_seen": False,
       }
+      previous_success = self.session_peer_status.get("last_successful_handshake_at")
+      self.session_peer_status = self._new_session_peer_status(
+          "negotiating",
+          generation=generation,
+          last_successful_handshake_at=previous_success,
+          last_handshake_started_at=time.time(),
+      )
       self.session_auto_negotiation_generation = generation
     threading.Thread(
         target=self._auto_negotiate_session_peer,
