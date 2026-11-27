@@ -2699,11 +2699,28 @@ class AntigravityIPCServer:
                 },
             )
             return
+          # Claim the globally unique request_id before reserving an execution
+          # slot. Ownership survives RequestTracker eviction, so a foreign Agent
+          # cannot reuse an old ID and reach a cached peer result.
+          try:
+            security_ref.bind_request_owner(request_id, self._principal.agent_id)
+          except AgentSecurityError:
+            self._audit_reason = "REQUEST_ID_ALREADY_OWNED"
+            self._reply_json(409, {
+                "request_id": request_id,
+                "state": "already_registered",
+                "error": "request_id already has an owner",
+            })
+            return
+
           if not security_ref.begin_execution(
               self._principal.agent_id,
               request_id,
               max_inflight=max_pending_eda_per_agent,
           ):
+            # No Runtime frame has been submitted, so this new binding is safe
+            # to release when the Agent is rejected by its in-flight limit.
+            security_ref.release_request_owner(request_id, self._principal.agent_id)
             self._audit_reason = "AGENT_EXECUTION_IN_FLIGHT_LIMIT"
             self._reply_json(429, {
                 "success": False,
@@ -2716,17 +2733,6 @@ class AntigravityIPCServer:
                         "query its request_id before submitting another request."
                     ),
                 },
-            })
-            return
-
-          try:
-            security_ref.bind_request_owner(request_id, self._principal.agent_id)
-          except AgentSecurityError:
-            security_ref.end_execution(self._principal.agent_id, request_id)
-            self._reply_json(409, {
-                "request_id": request_id,
-                "state": "already_registered",
-                "error": "request_id already has an owner",
             })
             return
 
@@ -2916,6 +2922,7 @@ class AntigravityIPCServer:
           try:
             security_ref.bind_request_owner(request_id, self._principal.agent_id)
           except AgentSecurityError:
+            self._audit_reason = "REQUEST_ID_ALREADY_OWNED"
             self._reply_json(409, {
                 "request_id": request_id,
                 "state": "already_registered",
