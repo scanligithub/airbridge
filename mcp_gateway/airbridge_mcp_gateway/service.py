@@ -266,7 +266,7 @@ class AirBridgeGateway:
                 "state": "not_submitted",
                 "error": {
                     "code": "INVALID_REQUEST_ID",
-                    "message": "request_id must be a UUID returned by airbridge_eda_execute",
+                    "message": "request_id must be a UUID returned by an AirBridge execution tool",
                 },
             }
         canonical_id = str(parsed)
