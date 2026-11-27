@@ -54,7 +54,7 @@ def create_server(gateway: AirBridgeGateway | None = None) -> MCPServer:
         shell: Annotated[str, Field(pattern=r"^(powershell|cmd)$")] = "powershell",
         cwd: str = "",
         timeout: Annotated[int, Field(strict=True, ge=1, le=300)] = 60,
-        wait_timeout_ms: Annotated[int, Field(strict=True, ge=0, le=300_000)] = 60_000,
+        wait_timeout_ms: Annotated[int, Field(strict=True, ge=0, le=300_000)] = 0,
     ) -> dict[str, Any]:
         """Submit one generic remote Shell command with a caller-supplied UUID.
 
