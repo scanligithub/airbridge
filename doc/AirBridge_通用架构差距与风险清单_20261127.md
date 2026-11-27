@@ -11,26 +11,28 @@
 
 | ID | 优先级 | 问题 | 影响 | 计划阶段 |
 |---|---|---|---|---|
-| G-01 | P1 | Runtime Session 缺少统一状态新鲜度表达 | 可能误用过期能力快照 | Phase 1 |
-| G-02 | P1 | 双端并发启动和重连边界需要专项验证 | 握手竞争和恢复误判 | Phase 1 |
-| G-03 | P1 | 已建立 STDIO 会话的动态策略即时拦截未验收 | 会话可能绕过最新策略的风险未排除 | Phase 1 |
-| G-04 | P1 | Provider 三态与目标七态任务模型不一致 | 任务语义和接口兼容困难 | Phase 2 |
-| G-05 | P1 | MCP Gateway 未暴露完整 RFS Provider 工具 | Skill 无法通过统一 Provider 使用完整文件系统能力 | Phase 2 |
-| G-06 | P1 | RFS 主要为同步请求，缺少 Artifact-RFS 任务化 | 大文件操作可能占用请求处理时间 | Phase 2 |
-| G-07 | P1 | STDIO 客户端使用请求锁串行化 | 长调用会阻塞同会话其他调用 | Phase 2 |
-| G-08 | P1 | 现有高优先级队列不能中断正在发送的帧 | 控制命令最坏等待时间未被界定 | Phase 2 |
-| G-09 | P1 | Agent Scope 与 Skill 权限未形成可信裁剪 | Skill 权限隔离可能只是调用方自律 | Phase 3 |
-| G-10 | P1 | task_id / request_id / agent_id 尚无统一持久化关联 | 任务恢复和多 Agent 隔离不完整 | Phase 3 |
-| G-11 | P1 | RFS 路径边界与完整防穿越机制需专项核验 | 可能访问不应开放的远程文件 | Phase 2 / 4 |
-| G-12 | P1 | Shell 通用命令执行策略需细化 | 黑名单不能替代受控执行策略 | Phase 4 |
-| G-13 | P2 | airbridge_app.py 职责集中 | 后续开发和回归成本高 | Phase 1.5 |
-| G-14 | P2 | Core 仍包含旧 EDA 适配器与执行路径 | 长期可能影响通用边界 | Phase 4 |
-| G-15 | P1 | Capture Exit 部分新增恢复路径尚未完成实机复验 | CI 通过不代表所有 Host B 故障路径通过 | 冻结管理 |
-| G-16 | P1 | transport-demo 尚不存在 | 缺少领域无关完整验收载体 | Phase 5 |
+| GAP-01 | P1 | Runtime Session 缺少统一状态新鲜度表达 | 可能误用过期能力快照 | Phase 1 |
+| GAP-02 | P1 | 双端并发启动和重连边界需要专项验证 | 握手竞争和恢复误判 | Phase 1 |
+| GAP-03 | P1 | 已建立 STDIO 会话的动态策略即时拦截未验收 | 会话可能绕过最新策略的风险未排除 | Phase 1 |
+| GAP-04 | P1 | Provider 三态与目标七态任务模型不一致 | 任务语义和接口兼容困难 | Phase 2 |
+| GAP-05 | P1 | MCP Gateway 未暴露完整 RFS Provider 工具 | Skill 无法通过统一 Provider 使用完整文件系统能力 | Phase 2 |
+| GAP-06 | P1 | RFS 主要为同步请求，缺少 Artifact-RFS 任务化 | 大文件操作可能占用请求处理时间 | Phase 2 |
+| GAP-07 | P1 | STDIO 客户端使用请求锁串行化 | 长调用会阻塞同会话其他调用 | Phase 2 |
+| GAP-08 | P1 | 现有高优先级队列不能中断正在发送的帧 | 控制命令最坏等待时间未被界定 | Phase 2 |
+| GAP-09 | P1 | Agent Scope 与 Skill 权限未形成可信裁剪 | Skill 权限隔离可能只是调用方自律 | Phase 3 |
+| GAP-10 | P1 | task_id / request_id / agent_id 尚无统一持久化关联 | 任务恢复和多 Agent 隔离不完整 | Phase 3 |
+| GAP-11 | P1 | RFS 路径边界与完整防穿越机制需专项核验 | 可能访问不应开放的远程文件 | Phase 2 / 4 |
+| GAP-12 | P1 | Shell 通用命令执行策略需细化 | 黑名单不能替代受控执行策略 | Phase 4 |
+| GAP-13 | P2 | airbridge_app.py 职责集中 | 后续开发和回归成本高 | Phase 1.5 |
+| GAP-14 | P2 | Core 仍包含旧 EDA 适配器与执行路径 | 长期可能影响通用边界 | Phase 4 |
+| GAP-15 | P1 | Capture Exit 部分新增恢复路径尚未完成实机复验 | CI 通过不代表所有 Host B 故障路径通过 | 冻结管理 |
+| GAP-16 | P1 | transport-demo 尚不存在 | 缺少领域无关完整验收载体 | Phase 5 |
 
 ## 3. 重点风险与处理原则
 
-### G-01 / G-02：Runtime Session 状态新鲜度
+本节展开说明优先级较高或需要特别约束的风险项。GAP-05、GAP-06 和 GAP-10 的处理要求已分别列入上表对应的 Phase 2 / Phase 3 工作，并在总体建设方案中展开；其余风险项按上表所列阶段推进。
+
+### GAP-01 / GAP-02：Runtime Session 状态新鲜度
 
 当前已有握手、重试、generation 和对端状态清理。
 
@@ -44,7 +46,7 @@
 
 不应在没有根因证据时增加无限重试或重写协议。
 
-### G-03：动态策略即时拦截
+### GAP-03：动态策略即时拦截
 
 必须在同一个 STDIO 会话保持存活的条件下测试：
 
@@ -56,7 +58,7 @@
 
 不能通过客户端卸载工具来代替服务端拒绝测试。测试使用隔离凭据和测试数据库，不读取或输出 Token，不修改真实 Host A 配置。
 
-### G-04：七态任务与 Provider 三态
+### GAP-04：七态任务与 Provider 三态
 
 目标 Runtime 状态：
 
@@ -82,7 +84,7 @@
 
 必须定义状态转换、终态、取消确认和重启恢复，不能仅靠 success 布尔值表达全部语义。
 
-### G-07 / G-08：STDIO 与数据面隔离
+### GAP-07 / GAP-08：STDIO 与数据面隔离
 
 当前 STDIO 客户端请求 / 响应串行化，能保护 JSON-RPC 关联，但不能并行执行同一客户端的同步交换。
 
@@ -95,7 +97,7 @@ Artifact-RFS 应：
 - 不承诺未经测量的毫秒级响应指标。
 - 控制帧调度、流控、取消和已开始串口写操作的边界必须明确。
 
-### G-09：Skill 权限可信执行
+### GAP-09：Skill 权限可信执行
 
 目标：
 
@@ -105,7 +107,7 @@ Artifact-RFS 应：
 
 需要受信任 Runtime / Gateway 强制裁剪，必要时采用受限凭据或 Sub-Scope。同一 Windows 用户账户内不构成 OS 级进程隔离；服务端 Scope、路径约束、Shell 策略和审计仍是核心防线。
 
-### G-11：RFS 路径安全
+### GAP-11：RFS 路径安全
 
 必须专项处理：
 
@@ -120,7 +122,7 @@ Artifact-RFS 应：
 
 在安全边界完成前，不应通过 MCP 向 Agent 开放不受约束的写入和删除能力。
 
-### G-12：Shell 执行安全
+### GAP-12：Shell 执行安全
 
 需要明确：
 
@@ -133,11 +135,11 @@ Artifact-RFS 应：
 
 不能仅以命令字符串黑名单作为主要安全控制。
 
-### G-13：拆包风险
+### GAP-13：拆包风险
 
 拆包前先形成依赖图和行为测试基线。必须保留 `airbridge_entry.py` 的 GUI / STDIO 入口分流，禁止结构搬迁顺便改变业务语义。
 
-### G-14 / G-15：旧 EDA 路径与 Skill 冻结
+### GAP-14 / GAP-15：旧 EDA 路径与 Skill 冻结
 
 Phase 1–5 期间：
 
@@ -147,7 +149,7 @@ Phase 1–5 期间：
 - 不提前删除旧 EDA 兼容代码。
 - 在 Phase 5 通过后，单独制定迁移和退役计划。
 
-### G-16：transport-demo
+### GAP-16：transport-demo
 
 必须提供非 EDA 的端到端验证载体，覆盖 Fake、CI、Frozen EXE、Host A/B 物理链路四层证据。
 
