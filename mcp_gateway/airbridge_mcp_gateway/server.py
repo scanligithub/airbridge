@@ -50,7 +50,7 @@ def create_server(gateway: AirBridgeGateway | None = None) -> MCPServer:
     )
     def airbridge_shell_execute(
         request_id: UUID,
-        command: Annotated[str, Field(min_length=1, pattern=r"\\S")],
+        command: Annotated[str, Field(min_length=1, pattern=r"\S")],
         shell: Annotated[str, Field(pattern=r"^(powershell|cmd)$")] = "powershell",
         cwd: str = "",
         timeout: Annotated[int, Field(strict=True, ge=1, le=300)] = 60,
