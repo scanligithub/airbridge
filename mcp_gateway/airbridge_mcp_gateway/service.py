@@ -146,6 +146,114 @@ class AirBridgeGateway:
                 },
             }
 
+    def execute_shell(
+        self,
+        request_id: str,
+        command: str,
+        shell: str = "powershell",
+        cwd: str = "",
+        timeout: int = 60,
+        wait_timeout_ms: int = 60_000,
+    ) -> dict[str, Any]:
+        """Submit one generic Shell operation using the caller's original UUID."""
+        denied = self._policy_denial()
+        if denied is not None:
+            return denied
+        validation = self._validate_shell_arguments(
+            request_id, command, shell, cwd, timeout, wait_timeout_ms
+        )
+        if validation is not None:
+            return validation
+        canonical_id = str(uuid.UUID(request_id))
+        payload: dict[str, Any] = {
+            "request_id": canonical_id,
+            "command": command,
+            "shell": shell,
+            "cwd": cwd,
+            "timeout": timeout,
+            "async": False,
+            "wait_timeout_ms": wait_timeout_ms,
+        }
+        encoded_size = len(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        if encoded_size > self.config.max_request_body_bytes:
+            return {
+                "success": False,
+                "state": "not_submitted",
+                "error": {
+                    "code": "REQUEST_TOO_LARGE",
+                    "message": (
+                        f"Serialized HTTP request is {encoded_size} bytes; gateway limit is "
+                        f"{self.config.max_request_body_bytes}."
+                    ),
+                },
+            }
+        http_timeout = max(
+            self.config.http_timeout_seconds,
+            wait_timeout_ms / 1000.0 + 15.0,
+        )
+        try:
+            result = self.client.execute_shell(
+                payload,
+                http_timeout_seconds=http_timeout,
+            )
+            if result.get("state") not in {
+                "not_submitted",
+                "rate_limited",
+                "forbidden",
+                "unauthorized",
+                "unavailable",
+                "not_found",
+                "already_registered",
+            }:
+                result.setdefault("request_id", canonical_id)
+            return result
+        except AirBridgeTransportError as exc:
+            return {
+                "success": False,
+                "state": "unknown",
+                "request_id": canonical_id,
+                "error": {
+                    "code": "AIRBRIDGE_RESPONSE_UNCONFIRMED",
+                    "message": str(exc),
+                    "next_step": (
+                        "Call airbridge_request_status with this request_id; do not resubmit."
+                    ),
+                },
+            }
+
+    @staticmethod
+    def _validate_shell_arguments(
+        request_id: str,
+        command: str,
+        shell: str,
+        cwd: str,
+        timeout: int,
+        wait_timeout_ms: int,
+    ) -> dict[str, Any] | None:
+        try:
+            uuid.UUID(request_id)
+        except (AttributeError, TypeError, ValueError):
+            return AirBridgeGateway._invalid("request_id must be a UUID")
+        if not isinstance(command, str) or not command.strip():
+            return AirBridgeGateway._invalid("command must be a non-empty string")
+        if shell not in ("powershell", "cmd"):
+            return AirBridgeGateway._invalid("shell must be powershell or cmd")
+        if not isinstance(cwd, str):
+            return AirBridgeGateway._invalid("cwd must be a string")
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 300:
+            return AirBridgeGateway._invalid("timeout must be an integer in 1..300 seconds")
+        if (
+            isinstance(wait_timeout_ms, bool)
+            or not isinstance(wait_timeout_ms, int)
+            or not 0 <= wait_timeout_ms <= 300_000
+        ):
+            return AirBridgeGateway._invalid(
+                "wait_timeout_ms must be an integer in 0..300000"
+            )
+        return None
+
     def get_request_status(self, request_id: str) -> dict[str, Any]:
         denied = self._policy_denial()
         if denied is not None:
