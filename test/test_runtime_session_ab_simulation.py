@@ -864,5 +864,70 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertFalse(host.session_pending_handshakes[new_request["message_id"]]["event"].is_set())
 
 
+    def test_auto_negotiation_is_single_flight_for_entire_generation(self):
+        host = _new_worker()
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocked_auto(generation, operation_id=None):
+            entered.set()
+            release.wait(timeout=1.0)
+
+        host._auto_negotiate_session_peer = blocked_auto
+        self.assertTrue(host._start_auto_session_negotiation())
+        self.assertTrue(entered.wait(timeout=1.0))
+        self.assertFalse(host._start_auto_session_negotiation())
+        self.assertEqual(host.session_auto_negotiation_generation, 1)
+        release.set()
+
+    def test_inbound_hello_during_retry_wait_does_not_start_second_auto_thread(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+        operation_id = str(uuid.uuid4())
+        host.session_negotiation_operation = {
+            "operation_id": operation_id,
+            "generation": host.session_link_generation,
+            "owner": "auto",
+            "phase": "retry_wait",
+            "current_message_id": None,
+            "peer_hello_seen": False,
+        }
+        host.session_auto_negotiation_generation = host.session_link_generation
+        started = []
+        host._start_auto_session_negotiation = lambda: started.append(True)
+
+        hello = make_session_hello()
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_HELLO,
+                5,
+                encode_session_message(FrameType.SESSION_HELLO, hello),
+            )
+        )
+
+        self.assertEqual(started, [])
+        self.assertTrue(host.session_negotiation_operation["peer_hello_seen"])
+
+    def test_manual_operation_records_peer_hello_seen(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+        request = host.begin_session_negotiation()
+        hello = make_session_hello()
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_HELLO,
+                6,
+                encode_session_message(FrameType.SESSION_HELLO, hello),
+            )
+        )
+        self.assertTrue(host.session_negotiation_operation["peer_hello_seen"])
+        self.assertEqual(
+            host._wait_session_negotiation(None, timeout=0.0)["state"],
+            "negotiating",
+        )
+        self.assertTrue(host.session_pending_handshakes[request["message_id"]]["event"].is_set() is False)
+
+
+
 if __name__ == "__main__":
     unittest.main()
