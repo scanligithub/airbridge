@@ -987,5 +987,44 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
 
 
 
+    def test_manual_handshake_send_failure_settles_status(self):
+        host = _new_worker()
+
+        def fail_send(*_args, **_kwargs):
+            raise RuntimeError("simulated queue failure")
+
+        host.send_frame = fail_send
+        with self.assertRaisesRegex(RuntimeError, "simulated queue failure"):
+            host.begin_session_negotiation()
+
+        status = host.get_session_peer_status()
+        self.assertEqual(status["state"], "unconfirmed", status)
+        self.assertFalse(status["peer_capabilities_fresh"])
+        operation = host.session_negotiation_operation
+        self.assertEqual(operation["phase"], "completed")
+        pending = next(iter(host.session_pending_handshakes.values()))
+        self.assertEqual(pending["response"]["state"], "unconfirmed")
+        self.assertTrue(pending["event"].is_set())
+
+    def test_manual_handshake_busy_result_does_not_leave_negotiating_status(self):
+        host = _new_worker()
+        now = time.monotonic()
+        host.session_pending_handshakes = {
+            str(index): {
+                "response": {"state": "negotiated"},
+                "completed_at": now,
+            }
+            for index in range(host.session_pending_limit)
+        }
+        host.send_frame = lambda *_args, **_kwargs: None
+
+        result = host.begin_session_negotiation()
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["state"], "busy")
+        self.assertEqual(host.get_session_peer_status()["state"], "unconfirmed")
+        self.assertEqual(host.session_negotiation_operation["phase"], "completed")
+
+
 if __name__ == "__main__":
     unittest.main()
