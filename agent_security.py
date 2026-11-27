@@ -428,7 +428,6 @@ class AgentSecurityStore:
             raise AgentSecurityError("request_id must be a UUID") from exc
         normalized_agent = self._validate_agent_id(agent_id)
         with self._lock:
-            self._prune_request_owners_locked()
             try:
                 self._conn.execute(
                     """
@@ -466,7 +465,6 @@ class AgentSecurityStore:
         except (ValueError, TypeError, AttributeError):
             return False
         with self._lock:
-            self._prune_request_owners_locked()
             row = self._conn.execute(
                 "SELECT agent_id FROM agent_request_owners WHERE request_id = ?",
                 (normalized,),
@@ -581,19 +579,6 @@ class AgentSecurityStore:
                     (normalized_agent,),
                 ).fetchone()[0]
             )
-
-    def prune_request_owners(self, *, retention_seconds: int = 1800) -> int:
-        if isinstance(retention_seconds, bool) or retention_seconds < 1:
-            raise AgentSecurityError("retention_seconds must be >= 1")
-        with self._lock:
-            return self._prune_request_owners_locked(retention_seconds)
-
-    def _prune_request_owners_locked(self, retention_seconds: int = 1800) -> int:
-        cutoff = time.time() - retention_seconds
-        cursor = self._conn.execute(
-            "DELETE FROM agent_request_owners WHERE created_at <= ?", (cutoff,)
-        )
-        return cursor.rowcount
 
     def prune_audit(self, *, retention_days: int = 90, max_records: int = 200_000) -> int:
         if isinstance(retention_days, bool) or retention_days < 1:
