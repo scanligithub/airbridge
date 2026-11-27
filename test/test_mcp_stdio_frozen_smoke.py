@@ -346,7 +346,7 @@ def main() -> int:
             "POST /api/v1/shell/exec",
             "GET /api/v1/requests/" + shell_request_id,
             "GET /api/v1/runtime/capabilities",
-            "GET /api/v1/eda/versions",
+            "GET /api/v1/runtime/capabilities",
         ]
         if sorted(_FakeAirBridgeHandler.requests) != sorted(expected_requests):
             raise AssertionError(
