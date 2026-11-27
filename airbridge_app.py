@@ -705,6 +705,7 @@ class SerialWorker(threading.Thread):
       generation: int,
       operation_id: str,
       timeout: Optional[float] = None,
+      waiter_expected: bool = True,
   ) -> Dict[str, Any]:
     envelope = make_session_hello(CLIENT_VERSION)
     message_id = envelope["message_id"]
@@ -753,6 +754,8 @@ class SerialWorker(threading.Thread):
             "generation": generation,
             "operation_id": operation_id,
             "owner": operation.get("owner", "manual"),
+            "waiter_expected": waiter_expected,
+            "waiter_attached": False,
             "started_monotonic": now,
             "deadline_monotonic": now + timeout_value,
             "completed_at": None,
@@ -792,6 +795,7 @@ class SerialWorker(threading.Thread):
       self,
       expected_generation: Optional[int] = None,
       timeout: Optional[float] = None,
+      waiter_expected: bool = True,
   ) -> Dict[str, Any]:
     with self.session_protocol_lock:
       self._expire_session_handshakes_locked()
@@ -820,7 +824,8 @@ class SerialWorker(threading.Thread):
           "peer_hello_seen": False,
       }
     result = self._begin_session_negotiation_attempt(
-        generation, operation_id, timeout=timeout
+        generation, operation_id, timeout=timeout,
+        waiter_expected=waiter_expected,
     )
     if not result.get("success"):
       with self.session_protocol_lock:
@@ -838,6 +843,8 @@ class SerialWorker(threading.Thread):
     with self.session_protocol_lock:
       self._expire_session_handshakes_locked()
       pending = self.session_pending_handshakes.get(message_id)
+      if pending is not None:
+        pending["waiter_attached"] = True
     if pending is None:
       return {"success": False, "state": "unknown", "error": "handshake is no longer pending"}
 
@@ -977,6 +984,14 @@ class SerialWorker(threading.Thread):
         operation = self.session_negotiation_operation
         current_pending_exists = any(
             item.get("generation") == self.session_link_generation
+            and (
+                item.get("response") is None
+                or (
+                    item.get("waiter_expected", True)
+                    and item.get("response", {}).get("state")
+                    not in ("unconfirmed", "disconnected")
+                )
+            )
             for item in self.session_pending_handshakes.values()
         )
         if current_pending_exists or (
@@ -2525,7 +2540,7 @@ class AntigravityIPCServer:
         self._set_payload_audit(raw_body)
 
         if self.path == "/api/v1/runtime/negotiate":
-          result = worker_ref.begin_session_negotiation()
+          result = worker_ref.begin_session_negotiation(waiter_expected=False)
           self._reply_json(202 if result.get("success") else 503, result)
 
         elif self.path in ["/api/v1/eda/execute", "/api/eda/exec"]:
