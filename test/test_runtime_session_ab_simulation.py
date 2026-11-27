@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from airbridge_app import SerialWorker
@@ -96,6 +97,73 @@ def _connect_duplex(peer_a, peer_b):
 
 
 class RuntimeSessionABSimulationTests(unittest.TestCase):
+    def test_build_identity_mismatch_is_reported_after_real_handshake_frames(self):
+        local_identity = {
+            "build_commit": "a" * 40,
+            "build_version": "airbridge-v2.4",
+            "build_timestamp": "2026-11-27T00:00:00Z",
+            "build_platform": "windows-x64",
+        }
+        peer_identity = {
+            **local_identity,
+            "build_commit": "b" * 40,
+        }
+        host_a = _new_worker()
+        host_b = _new_worker()
+        _connect_duplex(host_a, host_b)
+
+        with patch("airbridge_app.get_build_identity", return_value=local_identity), patch(
+            "runtime_session_protocol.get_build_identity",
+            return_value=peer_identity,
+        ):
+            request = host_a.begin_session_negotiation()
+            result = host_a._wait_session_negotiation(
+                request["message_id"], timeout=0.1
+            )
+            status = host_a.get_session_peer_status()
+
+        self.assertEqual(result["state"], "negotiated", result)
+        self.assertEqual(status["build_identity_status"], "mismatch")
+        self.assertEqual(status["build_identity_reason"], "build_commit_mismatch")
+
+    def test_matching_commit_with_diagnostic_differences_stays_match(self):
+        local_identity = {
+            "build_commit": "a" * 40,
+            "build_version": "airbridge-v2.4",
+            "build_timestamp": "2026-11-27T00:00:00Z",
+            "build_platform": "windows-x64",
+        }
+        peer_identity = {
+            **local_identity,
+            "build_version": "airbridge-dev",
+            "build_timestamp": "2026-11-26T00:00:00Z",
+            "build_platform": "linux-x64",
+        }
+        host_a = _new_worker()
+        host_b = _new_worker()
+        _connect_duplex(host_a, host_b)
+
+        with patch("airbridge_app.get_build_identity", return_value=local_identity), patch(
+            "runtime_session_protocol.get_build_identity",
+            return_value=peer_identity,
+        ):
+            request = host_a.begin_session_negotiation()
+            result = host_a._wait_session_negotiation(
+                request["message_id"], timeout=0.1
+            )
+            status = host_a.get_session_peer_status()
+
+        self.assertEqual(result["state"], "negotiated", result)
+        self.assertEqual(status["build_identity_status"], "match")
+        self.assertEqual(
+            status["build_identity_reason"],
+            "build_commit_match;diagnostic_fields_differ",
+        )
+        self.assertEqual(
+            status["build_identity_differences"],
+            ["build_version", "build_timestamp", "build_platform"],
+        )
+
     def test_shell_task_result_query_round_trips_between_peers(self):
         host_a = _new_worker()
         host_b = _new_worker()

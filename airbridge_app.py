@@ -19,6 +19,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from build_identity import evaluate_build_identity, get_build_identity
 from eda_engine import (
     CadenceVersionManager,
     EDAExecutor,
@@ -724,6 +725,14 @@ class SerialWorker(threading.Thread):
       status["profiles"] = list(status.get("profiles", []))
       identity = status.get("peer_build_identity")
       status["peer_build_identity"] = dict(identity) if isinstance(identity, dict) else None
+      local_identity = get_build_identity()
+      build_evaluation = evaluate_build_identity(
+          local_identity, status["peer_build_identity"]
+      )
+      status["local_build_identity"] = dict(local_identity)
+      status["build_identity_status"] = build_evaluation["status"]
+      status["build_identity_reason"] = build_evaluation["reason"]
+      status["build_identity_differences"] = list(build_evaluation["differences"])
       status["last_peer_message_at"] = self.session_last_peer_message_at
       if self.session_last_peer_message_monotonic is None:
         status["peer_activity_age_ms"] = None
