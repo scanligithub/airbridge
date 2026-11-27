@@ -3,6 +3,7 @@
 import unittest
 
 from protocol import FrameType
+from build_identity import evaluate_build_identity
 from runtime_session_protocol import (
     CLIENT_VERSION,
     SessionProtocolError,
@@ -80,6 +81,77 @@ class RuntimeSessionBuildIdentityTests(unittest.TestCase):
         )
         with self.assertRaises(SessionProtocolError):
             validate_session_envelope(FrameType.SESSION_CAPABILITIES, message)
+
+
+    def test_matching_full_commits_are_match(self):
+        result = evaluate_build_identity(VALID_IDENTITY, dict(VALID_IDENTITY))
+        self.assertEqual(result["status"], "match")
+        self.assertEqual(result["reason"], "build_commit_match")
+        self.assertEqual(result["differences"], [])
+
+    def test_different_full_commits_are_mismatch(self):
+        peer = {**VALID_IDENTITY, "build_commit": "b" * 40}
+        result = evaluate_build_identity(VALID_IDENTITY, peer)
+        self.assertEqual(result["status"], "mismatch")
+        self.assertEqual(result["reason"], "build_commit_mismatch")
+
+    def test_unknown_on_both_sides_is_unverified_not_match(self):
+        unknown = {
+            "build_commit": "unknown",
+            "build_version": CLIENT_VERSION,
+            "build_timestamp": "unknown",
+            "build_platform": "unknown",
+        }
+        result = evaluate_build_identity(unknown, dict(unknown))
+        self.assertEqual(result["status"], "unverified")
+        self.assertIn("local_build_commit_unavailable", result["reason"])
+        self.assertIn("peer_build_commit_unavailable", result["reason"])
+
+    def test_missing_legacy_peer_identity_is_unverified(self):
+        result = evaluate_build_identity(VALID_IDENTITY, None)
+        self.assertEqual(result["status"], "unverified")
+        self.assertEqual(result["reason"], "peer_build_commit_unavailable")
+
+    def test_missing_local_identity_is_unverified(self):
+        result = evaluate_build_identity(None, VALID_IDENTITY)
+        self.assertEqual(result["status"], "unverified")
+        self.assertEqual(result["reason"], "local_build_commit_unavailable")
+
+    def test_invalid_peer_commit_values_are_unverified(self):
+        for value in (None, "", "unknown", "a" * 39, "A" * 40, "g" * 40):
+            with self.subTest(commit=value):
+                peer = {**VALID_IDENTITY, "build_commit": value}
+                result = evaluate_build_identity(VALID_IDENTITY, peer)
+                self.assertEqual(result["status"], "unverified")
+                self.assertEqual(result["reason"], "peer_build_commit_unavailable")
+
+    def test_diagnostic_field_differences_do_not_change_match(self):
+        peer = {
+            **VALID_IDENTITY,
+            "build_version": "airbridge-dev",
+            "build_timestamp": "2026-11-27T00:00:00Z",
+            "build_platform": "windows-arm64",
+        }
+        result = evaluate_build_identity(VALID_IDENTITY, peer)
+        self.assertEqual(result["status"], "match")
+        self.assertEqual(
+            result["reason"],
+            "build_commit_match;diagnostic_fields_differ",
+        )
+        self.assertEqual(
+            result["differences"],
+            ["build_version", "build_timestamp", "build_platform"],
+        )
+
+    def test_version_and_platform_differences_do_not_create_mismatch(self):
+        peer = {
+            **VALID_IDENTITY,
+            "build_version": "older-version",
+            "build_platform": "linux-x64",
+        }
+        result = evaluate_build_identity(VALID_IDENTITY, peer)
+        self.assertEqual(result["status"], "match")
+        self.assertEqual(result["differences"], ["build_version", "build_platform"])
 
 
 if __name__ == "__main__":
