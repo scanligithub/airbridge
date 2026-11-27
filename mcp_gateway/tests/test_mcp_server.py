@@ -84,7 +84,7 @@ class McpServerRegistrationTests(unittest.TestCase):
         self.assertEqual(shell_properties["timeout"]["default"], 60)
         self.assertEqual(shell_properties["timeout"]["minimum"], 1)
         self.assertEqual(shell_properties["timeout"]["maximum"], 300)
-        self.assertEqual(shell_properties["wait_timeout_ms"]["default"], 60_000)
+        self.assertEqual(shell_properties["wait_timeout_ms"]["default"], 0)
         self.assertEqual(shell_properties["wait_timeout_ms"]["minimum"], 0)
         self.assertEqual(shell_properties["wait_timeout_ms"]["maximum"], 300_000)
 
