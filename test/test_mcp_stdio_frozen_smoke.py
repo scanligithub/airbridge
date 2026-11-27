@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import closing
 import json
 import os
 import sqlite3
@@ -339,7 +340,7 @@ async def exercise_frozen_stdio(
 
         # Verify exact audit semantics and prove arguments/credentials are absent.
         audit_path = local_app_data / "AirBridge" / "gateway_audit.sqlite3"
-        with sqlite3.connect(audit_path) as connection:
+        with closing(sqlite3.connect(audit_path)) as connection:
             columns = {
                 row[1] for row in connection.execute(
                     "PRAGMA table_info(gateway_policy_audit)"
