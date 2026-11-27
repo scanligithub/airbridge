@@ -34,6 +34,7 @@ on:
     paths:
       - "protocol.py"
       - "runtime_session_protocol.py"
+      - "build_identity.py"
       - "airbridge_app.py"
       - "request_tracker.py"
       - "request_broker.py"
@@ -46,6 +47,7 @@ on:
       - "test/test_process_supervisor.py"
       - "test/test_runtime_adapter.py"
       - "test/test_runtime_session_protocol.py"
+      - "test/test_runtime_session_build_identity.py"
       - "test/test_runtime_session_ab_simulation.py"
       - "test/test_request_tracker.py"
       - "test/test_request_broker.py"
