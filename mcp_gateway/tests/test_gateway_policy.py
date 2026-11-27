@@ -22,6 +22,10 @@ class _FakeClient:
         self.calls.append("get_eda_versions")
         return {"success": True}
 
+    def execute_shell(self, payload, *, http_timeout_seconds):
+        self.calls.append(f"execute_shell:{payload['request_id']}")
+        return {"request_id": payload["request_id"], "state": "completed"}
+
     def get_request_status(self, request_id: str):
         self.calls.append(f"get_request_status:{request_id}")
         return {"request_id": request_id, "state": "completed"}
@@ -85,6 +89,15 @@ class GatewayPolicyTests(unittest.TestCase):
         denied = self.gateway.get_capabilities()
         self.assertEqual(denied["error"]["code"], "GATEWAY_DISABLED")
         self.assertEqual(self.client.calls, ["get_capabilities"])
+
+    def test_shell_execute_is_denied_when_gateway_is_off(self):
+        result = self.gateway.execute_shell(
+            request_id="f9d9d4f2-8b73-4b13-b3d6-9a09a10dcb3a",
+            command="Get-Location",
+        )
+        self.assertEqual(result["state"], "disabled")
+        self.assertEqual(result["error"]["code"], "GATEWAY_DISABLED")
+        self.assertEqual(self.client.calls, [])
 
     def test_agent_can_be_disabled_without_revoking_credential(self):
         self.policy.write(enabled=True, agents={"antigravity": True})
