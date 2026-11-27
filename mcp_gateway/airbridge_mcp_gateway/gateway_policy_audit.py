@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 
 
@@ -40,10 +41,11 @@ class GatewayPolicyAuditStore:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         now = time.time()
-        with sqlite3.connect(
+        with closing(sqlite3.connect(
             self.path,
             timeout=self.timeout_seconds,
-        ) as connection:
+        )) as connection:
+          with connection:
             connection.execute(f"PRAGMA busy_timeout = {int(self.timeout_seconds * 1000)}")
             connection.execute(
                 """
@@ -85,9 +87,9 @@ class GatewayPolicyAuditStore:
         if self.path is None:
             raise OSError("Gateway audit path is unavailable")
         limit = max(1, min(int(limit), 1000))
-        with sqlite3.connect(self.path, timeout=self.timeout_seconds) as connection:
-            connection.row_factory = sqlite3.Row
-            rows = connection.execute(
+        with closing(sqlite3.connect(self.path, timeout=self.timeout_seconds)) as connection:
+          connection.row_factory = sqlite3.Row
+          rows = connection.execute(
                 """
                 SELECT timestamp, agent_id, tool_name, decision, reason_code
                 FROM gateway_policy_audit
