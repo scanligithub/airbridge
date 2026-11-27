@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any
 
 from .config import GatewayConfig
 from .http_client import AirBridgeHttpClient, AirBridgeTransportError
 from .gateway_policy import GatewayPolicyStore
+from .gateway_policy_audit import GatewayPolicyAuditStore
+
+
+logger = logging.getLogger(__name__)
 
 
 class AirBridgeGateway:
@@ -19,23 +24,45 @@ class AirBridgeGateway:
         config: GatewayConfig | None = None,
         client: AirBridgeHttpClient | None = None,
         policy_store: GatewayPolicyStore | None = None,
+        audit_store: GatewayPolicyAuditStore | None = None,
     ):
         self.config = config or GatewayConfig.from_env()
         self.client = client or AirBridgeHttpClient(self.config)
         self.policy_store = policy_store
         if self.policy_store is None and self.config.enforce_gateway_policy:
             self.policy_store = GatewayPolicyStore.for_current_user()
+        self.audit_store = audit_store
+        if self.audit_store is None and self.policy_store is not None:
+            self.audit_store = GatewayPolicyAuditStore.for_policy_store(self.policy_store)
 
-    def _policy_denial(self) -> dict[str, Any] | None:
+    def _record_local_denial(self, tool_name: str, reason_code: str) -> None:
+        if self.audit_store is None:
+            return
+        try:
+            self.audit_store.record_denial(
+                agent_id=self.config.agent_id,
+                tool_name=tool_name,
+                reason_code=reason_code,
+            )
+        except Exception:
+            # Audit failure must never turn a policy denial into an allowed call.
+            logger.warning(
+                "Gateway local denial audit write failed; request remains denied "
+                "(reason_code=%s)",
+                reason_code,
+            )
+
+    def _policy_denial(self, tool_name: str) -> dict[str, Any] | None:
         if self.policy_store is None:
             return None
         decision = self.policy_store.check(self.config.agent_id)
         if decision.allowed:
             return None
+        self._record_local_denial(tool_name, decision.code)
         return decision.as_tool_result()
 
     def get_capabilities(self) -> dict[str, Any]:
-        denied = self._policy_denial()
+        denied = self._policy_denial("airbridge_get_capabilities")
         if denied is not None:
             return denied
         try:
@@ -44,7 +71,7 @@ class AirBridgeGateway:
             return self._unavailable(exc)
 
     def get_eda_versions(self) -> dict[str, Any]:
-        denied = self._policy_denial()
+        denied = self._policy_denial("airbridge_get_eda_versions")
         if denied is not None:
             return denied
         try:
@@ -63,10 +90,11 @@ class AirBridgeGateway:
         wait_timeout_ms: int = 60_000,
     ) -> dict[str, Any]:
         """Submit opaque script text; this layer never parses or rewrites it."""
-        denied = self._policy_denial()
+        denied = self._policy_denial("airbridge_eda_execute")
         if denied is not None:
             return denied
         if not self.config.enable_eda_execute:
+            self._record_local_denial("airbridge_eda_execute", "EDA_EXECUTION_DISABLED")
             return {
                 "success": False,
                 "state": "disabled",
@@ -156,7 +184,7 @@ class AirBridgeGateway:
         wait_timeout_ms: int = 0,
     ) -> dict[str, Any]:
         """Submit one generic Shell operation using the caller's original UUID."""
-        denied = self._policy_denial()
+        denied = self._policy_denial("airbridge_shell_execute")
         if denied is not None:
             return denied
         validation = self._validate_shell_arguments(
@@ -255,7 +283,7 @@ class AirBridgeGateway:
         return None
 
     def get_request_status(self, request_id: str) -> dict[str, Any]:
-        denied = self._policy_denial()
+        denied = self._policy_denial("airbridge_request_status")
         if denied is not None:
             return denied
         try:
