@@ -20,6 +20,7 @@ from build_identity import get_build_identity
 from runtime_session_protocol import (
     encode_session_message,
     make_session_capabilities,
+    make_session_hello,
 )
 from request_tracker import RequestTracker
 from request_broker import RequestBroker
@@ -750,7 +751,13 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         request = host.begin_session_negotiation(timeout=0.02)
         self.assertTrue(request["success"], request)
         self.assertEqual(host.get_session_peer_status()["state"], "negotiating")
-        time.sleep(0.03)
+        pending_before_expiry = host.session_pending_handshakes[request["message_id"]]
+        self.assertAlmostEqual(
+            pending_before_expiry["deadline_monotonic"] - pending_before_expiry["started_monotonic"],
+            0.02,
+            delta=0.005,
+        )
+        pending_before_expiry["deadline_monotonic"] = time.monotonic() - 0.001
 
         status = host.get_session_peer_status()
         self.assertEqual(status["state"], "unconfirmed", status)
