@@ -9,6 +9,7 @@ on:
     paths:
       - "protocol.py"
       - "runtime_session_protocol.py"
+      - "build_identity.py"
       - "airbridge_app.py"
       - "request_tracker.py"
       - "request_broker.py"
@@ -21,6 +22,7 @@ on:
       - "test/test_process_supervisor.py"
       - "test/test_runtime_adapter.py"
       - "test/test_runtime_session_protocol.py"
+      - "test/test_runtime_session_build_identity.py"
       - "test/test_runtime_session_ab_simulation.py"
       - "test/test_request_tracker.py"
       - "test/test_request_broker.py"
@@ -78,13 +80,14 @@ jobs:
           $ErrorActionPreference = "Stop"
           python --version
           python -m unittest discover -s test -p "test_runtime_session_protocol.py" -v
+          python -m unittest discover -s test -p "test_runtime_session_build_identity.py" -v
           python -m unittest discover -s test -p "test_request_tracker.py" -v
 
       - name: Compile Runtime and Capture Bridge modules
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python -m py_compile runtime_adapter.py capture_tcl_bridge.py process_supervisor.py airbridge_app.py scripts/capture_session_e2e.py skill/airbridge/scripts/shell_exec.py skill/airbridge/scripts/diag_temp.py
+          python -m py_compile build_identity.py runtime_adapter.py capture_tcl_bridge.py process_supervisor.py airbridge_app.py scripts/capture_session_e2e.py skill/airbridge/scripts/shell_exec.py skill/airbridge/scripts/diag_temp.py
 
       - name: Run Host-A Capture Session E2E harness tests
         shell: pwsh
