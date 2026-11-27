@@ -106,7 +106,7 @@ Skill 身份不能仅由外部脚本自报 `skill_id` 后就被当作可信身�
 
 并明确 Skill / Runtime 上下文、创建时间、执行状态、取消状态、结果摘要和审计关联。任务状态应支持只读查询、断线恢复和服务重启后的可解释性。
 
-## 4. 六阶段路线图
+## 4. 六大主阶段路线图（Phase 1.5 为前置结构拆分阶段）
 
 ### Phase 1：Core 稳定性与安全闭环
 
@@ -183,7 +183,7 @@ Skill 身份不能仅由外部脚本自报 `skill_id` 后就被当作可信身�
 - Agent / Skill / Policy 权限交集的可信执行。
 - 对旧 EDA Adapter、EDAExecutor、专用 HTTP / ABFP 路径做依赖盘点。
 - 只有在新通用能力覆盖并通过兼容性验收后，才分批退役旧 EDA 路径。
-- 按职责拆分 Core 模块，不改变双端同一 AirBridge 程序原则。
+- 在 Phase 1.5 已建立的模块边界基础上，随旧 EDA 路径退役完成相关历史模块清理；不重复开展 Core 主体结构拆分，也不改变双端同一 AirBridge 程序原则。
 
 Phase 1–5 期间旧 EDA 路径和现有 EDA Skill 实行特性冻结：不新增业务特性、不为其特化 Core；必要的安全修复、兼容性修复和维持 CI 通过仍允许。
 
@@ -226,9 +226,9 @@ Phase 5 是放开专业 Skill 大规模迁移和扩展的准出门槛。
 
 ## 5. 执行顺序和变更管理
 
-执行顺序：
+执行顺序为六大主阶段，并在 Phase 1 与 Phase 2 之间插入一个前置结构拆分阶段：
 
-`Phase 1 → Phase 1.5 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6`
+`Phase 1 → Phase 1.5（前置结构拆分） → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6`
 
 采用小 PR、分阶段验收。每个阶段开始前更新依赖和风险清单；每个阶段完成后归档代码、CI、Frozen EXE 和实机证据。
 
@@ -241,7 +241,7 @@ Phase 5 是放开专业 Skill 大规模迁移和扩展的准出门槛。
 - 用户已报告 PR #25 后 CI 成功。
 - PR #25 没有完成新 Provider 的 Host A / Host B 物理双机验收。
 - 当前已有 Runtime Session、Agent Security、Shell、Core RFS、RequestBroker、Provider MVP 等基础能力。
-- 详细现状见《AirBridge 当前架构现状报告》；差距见《AirBridge 通用架构差距与风险清单》。
+- 详细现状见 [《AirBridge 当前架构现状报告》](AirBridge_当前架构现状报告_20261127.md)；差距见 [《AirBridge 通用架构差距与风险清单》](AirBridge_通用架构差距与风险清单_20261127.md)。
 
 ## 7. 明确非目标
 
