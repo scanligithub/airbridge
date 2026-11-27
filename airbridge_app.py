@@ -2705,6 +2705,7 @@ class AntigravityIPCServer:
           try:
             security_ref.bind_request_owner(request_id, self._principal.agent_id)
           except AgentSecurityError:
+            self._audit_decision = "denied"
             self._audit_reason = "REQUEST_ID_ALREADY_OWNED"
             self._reply_json(409, {
                 "request_id": request_id,
@@ -2922,6 +2923,7 @@ class AntigravityIPCServer:
           try:
             security_ref.bind_request_owner(request_id, self._principal.agent_id)
           except AgentSecurityError:
+            self._audit_decision = "denied"
             self._audit_reason = "REQUEST_ID_ALREADY_OWNED"
             self._reply_json(409, {
                 "request_id": request_id,
