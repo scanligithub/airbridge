@@ -35,7 +35,7 @@ class _FakeGateway:
 
 
 class McpServerRegistrationTests(unittest.TestCase):
-    def test_server_registers_the_four_expected_tools(self):
+    def test_server_registers_the_five_expected_tools(self):
         server = create_server(_FakeGateway())
         tools = asyncio.run(server.list_tools())
         names = {tool.name for tool in tools}
