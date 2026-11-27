@@ -160,6 +160,39 @@ class AirBridgeProviderTests(TestCase):
         self.assertEqual(response.status, OperationStatus.UNKNOWN)
         self.assertEqual(response.request_id, self.request_id)
 
+    def test_http_502_failed_state_maps_to_completed_failure(self):
+        self.post_status = 502
+        self.post_payload = {
+            "request_id": self.request_id,
+            "kind": "shell.exec",
+            "state": "failed",
+            "error": {
+                "code": "SHELL_LAUNCH_FAILED",
+                "message": "PowerShell could not be started",
+            },
+        }
+        response = self.provider.shell_execute("Get-Location", {}, self.request_id)
+        self.assertEqual(response.status, OperationStatus.COMPLETED)
+        self.assertFalse(response.success)
+        self.assertEqual(
+            response.error,
+            "SHELL_LAUNCH_FAILED: PowerShell could not be started",
+        )
+
+    def test_http_404_not_found_maps_to_unknown(self):
+        self.get_status = 404
+        self.get_payload = {
+            "request_id": self.request_id,
+            "state": "not_found",
+            "error": "request_id is unknown or expired",
+        }
+        response = self.provider.get_operation(self.request_id)
+        self.assertEqual(response.status, OperationStatus.UNKNOWN)
+        self.assertEqual(response.request_id, self.request_id)
+        self.assertIn("unknown or expired", response.reason)
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.requests[0]["method"], "GET")
+
     def test_http_transport_failure_maps_to_unknown_without_retry(self):
         calls = []
 
