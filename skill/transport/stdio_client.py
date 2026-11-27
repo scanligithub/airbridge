@@ -30,6 +30,7 @@ class McpStdioClient:
         self.timeout_seconds = float(timeout_seconds)
         self._next_id = 0
         self._closed = False
+        self._request_lock = threading.Lock()
         self._lines: queue.Queue[bytes | None] = queue.Queue()
         factory = popen_factory or subprocess.Popen
         try:
@@ -93,29 +94,38 @@ class McpStdioClient:
             raise McpStdioError("AirBridge MCP STDIO returned an invalid JSON-RPC message")
         return message
 
-    def _request(self, method: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        self._next_id += 1
-        request_id = self._next_id
-        message: dict[str, Any] = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-        }
-        if params is not None:
-            message["params"] = dict(params)
-        self._send(message)
-        while True:
-            response = self._read_message()
-            if response.get("id") != request_id:
-                # Notifications and unrelated protocol messages have no bearing
-                # on this request; keep waiting for the matching response.
-                continue
-            if "error" in response:
-                raise McpStdioError("AirBridge MCP request failed: " + method)
-            result = response.get("result")
-            if not isinstance(result, dict):
-                raise McpStdioError("AirBridge MCP response has no result object")
-            return result
+    def _request(
+        self,
+        method: str,
+        params: Mapping[str, Any] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        # STDIO is one ordered byte stream. Serialize each request/response
+        # exchange so concurrent callers cannot consume and discard each
+        # other's JSON-RPC responses.
+        with self._request_lock:
+            self._next_id += 1
+            request_id = self._next_id
+            message: dict[str, Any] = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+            }
+            if params is not None:
+                message["params"] = dict(params)
+            self._send(message)
+            while True:
+                response = self._read_message(timeout=timeout_seconds)
+                if response.get("id") != request_id:
+                    # Notifications and unrelated protocol messages have no bearing
+                    # on this request; keep waiting for the matching response.
+                    continue
+                if "error" in response:
+                    raise McpStdioError("AirBridge MCP request failed: " + method)
+                result = response.get("result")
+                if not isinstance(result, dict):
+                    raise McpStdioError("AirBridge MCP response has no result object")
+                return result
 
     def _notify(self, method: str, params: Mapping[str, Any] | None = None) -> None:
         message: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
@@ -182,16 +192,18 @@ class McpStdioClient:
             raise McpStdioError("AirBridge MCP STDIO client is closed")
         if name not in self.tool_names:
             raise McpStdioError("AirBridge MCP Gateway does not expose the requested tool")
-        previous_timeout = self.timeout_seconds
-        if timeout_seconds is not None:
-            self.timeout_seconds = float(timeout_seconds)
-        try:
-            result = self._request(
-                "tools/call",
-                {"name": name, "arguments": dict(arguments)},
-            )
-        finally:
-            self.timeout_seconds = previous_timeout
+        request_timeout = (
+            self.timeout_seconds
+            if timeout_seconds is None
+            else float(timeout_seconds)
+        )
+        if request_timeout <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        result = self._request(
+            "tools/call",
+            {"name": name, "arguments": dict(arguments)},
+            timeout_seconds=request_timeout,
+        )
         if result.get("isError") is True:
             decoded = self._decode_tool_result(result)
             raise McpStdioError(
