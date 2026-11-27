@@ -48,7 +48,11 @@ class McpStdioClient:
             raise McpStdioError("AirBridge MCP STDIO pipes are unavailable")
         self._reader = threading.Thread(target=self._read_stdout, daemon=True)
         self._reader.start()
-        self._initialize()
+        try:
+            self._initialize()
+        except Exception:
+            self.close()
+            raise
 
     def _read_stdout(self) -> None:
         try:
