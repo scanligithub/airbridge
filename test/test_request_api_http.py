@@ -566,6 +566,48 @@ class CorrelatedRequestHTTPTests(unittest.TestCase):
         self.assertEqual(poll_status, 200, polled)
         self.assertEqual(polled["state"], "completed")
 
+    def test_unknown_eda_request_id_cannot_be_resubmitted_after_tracker_eviction(self):
+        self.worker.raise_on_send = True
+        request_id = str(uuid.uuid4())
+        first_status, first = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"request_id": request_id, "script": "puts uncertain"},
+        )
+        self.assertEqual(first_status, 503, first)
+        self.assertEqual(first["state"], "unknown")
+        self.assertEqual(first["request_id"], request_id)
+        self.assertEqual(len(self.worker.frames), 1)
+        self.assertEqual(self.security.active_execution_count("test-agent"), 1)
+
+        # Even after the in-memory UNKNOWN record is evicted, the permanent
+        # request owner prevents the same Agent from replaying this operation.
+        self.worker.request_tracker._records.pop(request_id)
+        self.security._conn.execute(
+            "UPDATE agent_request_owners SET created_at = 0 WHERE request_id = ?",
+            (request_id,),
+        )
+        retry_status, retry = self._request_json(
+            "POST",
+            "/api/v1/eda/execute",
+            {"request_id": request_id, "script": "puts must-not-replay"},
+        )
+        self.assertEqual(retry_status, 409, retry)
+        self.assertEqual(retry["state"], "already_registered")
+        self.assertEqual(retry["request_id"], request_id)
+        self.assertEqual(len(self.worker.frames), 1)
+        self.assertEqual(self.security.active_execution_count("test-agent"), 1)
+
+        denial = next(
+            record
+            for record in self.security.list_audit(agent_id="test-agent", limit=20)
+            if record["path"] == "/api/v1/eda/execute"
+            and record["http_status"] == 409
+            and record["request_id"] == request_id
+        )
+        self.assertEqual(denial["decision"], "denied")
+        self.assertEqual(denial["reason_code"], "REQUEST_ID_ALREADY_OWNED")
+
     def test_foreign_agent_cannot_reuse_eda_request_id_after_tracker_eviction(self):
         self.worker.auto_complete = False
         request_id = str(uuid.uuid4())
