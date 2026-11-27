@@ -517,9 +517,10 @@ def main() -> int:
     print("Transport McpStdioClient interoperates with frozen AirBridge.exe: PASS")
     print("Frozen AirBridge.exe rejects booleans for integer parameters: PASS")
     print("Frozen AirBridge.exe reads M2.4 Agent credential: PASS")
-    print("Gateway OFF blocks an already-running STDIO process: PASS")
+    print("Gateway OFF blocks all tool families in an already-running STDIO process: PASS")
+    print("Gateway-local DENY audit records metadata only: PASS")
     print("Agent OFF blocks an already-running STDIO process: PASS")
-    print("Malformed policy fails closed: PASS")
+    print("Malformed policy fails closed and is audited: PASS")
     print("Policy re-enable takes effect without restarting STDIO: PASS")
     print("stdout carries only MCP protocol frames: PASS")
     return 0
