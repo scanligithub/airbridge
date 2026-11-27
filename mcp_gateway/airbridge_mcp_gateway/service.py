@@ -60,7 +60,7 @@ class AirBridgeGateway:
         target_file: str = "",
         timeout: int = 60,
         keep_open: bool = True,
-        wait_timeout_ms: int = 60_000,
+        wait_timeout_ms: int = 0,
     ) -> dict[str, Any]:
         """Submit opaque script text; this layer never parses or rewrites it."""
         denied = self._policy_denial()
