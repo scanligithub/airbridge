@@ -48,6 +48,37 @@ def create_server(gateway: AirBridgeGateway | None = None) -> MCPServer:
             open_world_hint=False,
         )
     )
+    def airbridge_shell_execute(
+        request_id: UUID,
+        command: Annotated[str, Field(min_length=1, pattern=r"\\S")],
+        shell: Annotated[str, Field(pattern=r"^(powershell|cmd)$")] = "powershell",
+        cwd: str = "",
+        timeout: Annotated[int, Field(strict=True, ge=1, le=300)] = 60,
+        wait_timeout_ms: Annotated[int, Field(strict=True, ge=0, le=300_000)] = 60_000,
+    ) -> dict[str, Any]:
+        """Submit one generic remote Shell command with a caller-supplied UUID.
+
+        Requires the Agent's shell.execute Scope. Query the same request_id
+        with airbridge_request_status if the result is ACCEPTED or UNKNOWN.
+        This tool does not interpret EDA scripts or alter EDA lifecycle.
+        """
+        return service.execute_shell(
+            request_id=str(request_id),
+            command=command,
+            shell=shell,
+            cwd=cwd,
+            timeout=timeout,
+            wait_timeout_ms=wait_timeout_ms,
+        )
+
+    @server.tool(
+        annotations=ToolAnnotations(
+            read_only_hint=False,
+            destructive_hint=True,
+            idempotent_hint=False,
+            open_world_hint=False,
+        )
+    )
     def airbridge_eda_execute(
         script: Annotated[str, Field(min_length=1, pattern=r"\S")],
         hint: Annotated[str, Field(min_length=1, pattern=r"\S")] = "agent_request.tcl",
