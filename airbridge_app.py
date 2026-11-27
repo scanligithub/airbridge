@@ -852,6 +852,7 @@ class SerialWorker(threading.Thread):
       return {
           "success": response.get("state") == "negotiated",
           "state": response.get("state"),
+          "negotiated": response.get("state") == "negotiated",
           "message_id": message_id,
           "peer_capabilities": response.get("payload", {}),
           "error": response.get("error"),
@@ -967,10 +968,17 @@ class SerialWorker(threading.Thread):
       start_recovery = False
       with self.session_protocol_lock:
         operation = self.session_negotiation_operation
-        if operation and operation.get("generation") == self.session_link_generation and operation.get("phase") in (
-            "negotiating", "retry_wait"
+        current_pending_exists = any(
+            item.get("generation") == self.session_link_generation
+            for item in self.session_pending_handshakes.values()
+        )
+        if current_pending_exists or (
+            operation
+            and operation.get("generation") == self.session_link_generation
+            and operation.get("phase") in ("negotiating", "retry_wait")
         ):
-          operation["peer_hello_seen"] = True
+          if operation and operation.get("generation") == self.session_link_generation:
+            operation["peer_hello_seen"] = True
         elif self.session_peer_status.get("state") in (
             "unconfirmed", "negotiated", "no_common_protocol", "handshake_not_supported"
         ):
