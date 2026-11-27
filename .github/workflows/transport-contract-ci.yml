@@ -37,7 +37,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Compile Transport modules
-        run: python -m py_compile skill/transport/contract.py skill/transport/fake_provider.py skill/transport/airbridge_provider.py scripts/airbridge_live_acceptance.py
+        run: python -m py_compile skill/transport/contract.py skill/transport/fake_provider.py skill/transport/stdio_client.py skill/transport/airbridge_provider.py scripts/airbridge_live_acceptance.py
       - name: Run Transport Provider tests
         run: |
           python -m unittest discover -s test -p "test_transport_provider.py" -v
