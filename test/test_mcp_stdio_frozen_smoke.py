@@ -205,7 +205,7 @@ async def exercise_frozen_stdio(
     agent_id: str,
     base_url: str,
     local_app_data: Path,
-) -> None:
+) -> str:
     policy = GatewayPolicyStore(local_app_data / "AirBridge" / "gateway.json")
     parameters = StdioServerParameters(
         command=str(executable.resolve()),
@@ -311,6 +311,8 @@ async def exercise_frozen_stdio(
         if restored.is_error or restored.structured_content.get("state") != "negotiated":
             raise AssertionError(f"Restored Gateway policy did not take effect: {restored.structured_content!r}")
 
+    return shell_request_id
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -334,7 +336,7 @@ def main() -> int:
         with TemporaryDirectory(prefix="airbridge-m2-5-stdio-") as temp:
             local_app_data = Path(temp)
             base_url = f"http://127.0.0.1:{httpd.server_address[1]}"
-            asyncio.run(
+            shell_request_id = asyncio.run(
                 exercise_frozen_stdio(
                     executable,
                     agent_id,
