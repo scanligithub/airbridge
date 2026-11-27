@@ -936,5 +936,56 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
 
 
 
+    def test_async_manual_timeout_does_not_block_peer_restart_recovery(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+        request = host.begin_session_negotiation(
+            timeout=0.01, waiter_expected=False
+        )
+        self.assertTrue(request["success"], request)
+        pending = host.session_pending_handshakes[request["message_id"]]
+        pending["deadline_monotonic"] = time.monotonic() - 0.001
+        self.assertEqual(host.get_session_peer_status()["state"], "unconfirmed")
+
+        started = []
+        host._start_auto_session_negotiation = lambda: started.append(True)
+        hello = make_session_hello()
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_HELLO,
+                7,
+                encode_session_message(FrameType.SESSION_HELLO, hello),
+            )
+        )
+        self.assertEqual(started, [True])
+
+    def test_async_manual_success_does_not_leave_a_waiter_blocking_refresh(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+        request = host.begin_session_negotiation(waiter_expected=False)
+        capabilities = make_session_capabilities(request["message_id"])
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_CAPABILITIES,
+                8,
+                encode_session_message(FrameType.SESSION_CAPABILITIES, capabilities),
+            )
+        )
+        self.assertEqual(host.get_session_peer_status()["state"], "negotiated")
+
+        started = []
+        host._start_auto_session_negotiation = lambda: started.append(True)
+        hello = make_session_hello()
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_HELLO,
+                9,
+                encode_session_message(FrameType.SESSION_HELLO, hello),
+            )
+        )
+        self.assertEqual(started, [True])
+
+
+
 if __name__ == "__main__":
     unittest.main()
