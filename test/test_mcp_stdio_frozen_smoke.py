@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +15,10 @@ from mcp import Client, StdioServerParameters
 
 from airbridge_mcp_gateway.credential_store import WindowsCredentialStore
 from airbridge_mcp_gateway.gateway_policy import GatewayPolicyStore
+
+SKILL_ROOT = Path(__file__).resolve().parents[1] / "skill"
+sys.path.insert(0, str(SKILL_ROOT))
+from transport.stdio_client import McpStdioClient  # noqa: E402
 
 
 EXPECTED_TOOLS = {
@@ -314,6 +319,70 @@ async def exercise_frozen_stdio(
     return shell_request_id
 
 
+def exercise_custom_transport_client(
+    executable: Path,
+    agent_id: str,
+    base_url: str,
+    local_app_data: Path,
+) -> str:
+    # Exercise the exact lightweight client used by AirBridgeProvider against
+    # the frozen Windows EXE, not only against a Python fake MCP server.
+    child_env = {
+        "AIRBRIDGE_AGENT_ID": agent_id,
+        "AIRBRIDGE_BASE_URL": base_url,
+        "AIRBRIDGE_ENABLE_EDA_EXECUTE": "0",
+        "LOCALAPPDATA": str(local_app_data),
+    }
+    for name in (
+        "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "APPDATA",
+        "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "PROGRAMDATA",
+    ):
+        if name in os.environ:
+            child_env[name] = os.environ[name]
+
+    client = McpStdioClient(
+        command=[str(executable.resolve()), "mcp", "stdio"],
+        environ=child_env,
+        timeout_seconds=15.0,
+    )
+    try:
+        if not {
+            "airbridge_shell_execute",
+            "airbridge_request_status",
+        }.issubset(client.tool_names):
+            raise AssertionError(
+                f"Custom STDIO client saw incomplete tools: {sorted(client.tool_names)}"
+            )
+        request_id = str(uuid.uuid4())
+        submitted = client.call_tool(
+            "airbridge_shell_execute",
+            {
+                "request_id": request_id,
+                "command": "Get-Location | Select-Object -ExpandProperty Path",
+                "wait_timeout_ms": 0,
+            },
+        )
+        if submitted.get("request_id") != request_id:
+            raise AssertionError(
+                f"Custom STDIO client lost original request ID: {submitted!r}"
+            )
+        if submitted.get("state") not in ("completed", "pending", "accepted"):
+            raise AssertionError(
+                f"Custom STDIO Shell submission returned unexpected state: {submitted!r}"
+            )
+        status = client.call_tool(
+            "airbridge_request_status",
+            {"request_id": request_id},
+        )
+        if status.get("request_id") != request_id or status.get("state") != "completed":
+            raise AssertionError(
+                f"Custom STDIO client status lookup failed: {status!r}"
+            )
+        return request_id
+    finally:
+        client.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--exe", required=True, type=Path)
@@ -344,9 +413,17 @@ def main() -> int:
                     local_app_data,
                 )
             )
+            custom_client_request_id = exercise_custom_transport_client(
+                executable,
+                agent_id,
+                base_url,
+                local_app_data,
+            )
         expected_requests = [
             "POST /api/v1/shell/exec",
             "GET /api/v1/requests/" + shell_request_id,
+            "POST /api/v1/shell/exec",
+            "GET /api/v1/requests/" + custom_client_request_id,
             "GET /api/v1/runtime/capabilities",
             "GET /api/v1/runtime/capabilities",
         ]
@@ -366,6 +443,7 @@ def main() -> int:
     print("Frozen AirBridge.exe publishes M2.5 and generic Shell parameter constraints: PASS")
     print("Frozen AirBridge.exe generic Shell submit preserves caller UUID: PASS")
     print("Frozen AirBridge.exe reads Shell status by original UUID: PASS")
+    print("Transport McpStdioClient interoperates with frozen AirBridge.exe: PASS")
     print("Frozen AirBridge.exe rejects booleans for integer parameters: PASS")
     print("Frozen AirBridge.exe reads M2.4 Agent credential: PASS")
     print("Gateway OFF blocks an already-running STDIO process: PASS")
