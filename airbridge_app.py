@@ -665,6 +665,8 @@ class SerialWorker(threading.Thread):
       self.session_pending_handshakes.clear()
       self.session_negotiation_operation = None
       self.session_auto_negotiation_generation = None
+      self.session_last_peer_message_at = None
+      self.session_last_peer_message_monotonic = None
       self.session_peer_status = self._new_session_peer_status(
           "disconnected", generation=self.session_link_generation, error=reason
       )
@@ -955,7 +957,12 @@ class SerialWorker(threading.Thread):
         if operation and operation.get("operation_id") == operation_id:
           operation["phase"] = "completed"
           operation["completed_at"] = time.monotonic()
-        if self.session_auto_negotiation_generation == generation:
+        current_operation = self.session_negotiation_operation
+        if (
+            self.session_auto_negotiation_generation == generation
+            and current_operation
+            and current_operation.get("operation_id") == operation_id
+        ):
           self.session_auto_negotiation_generation = None
 
   def _handle_session_hello(self, frame: ABFPFrame):
