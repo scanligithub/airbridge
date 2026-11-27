@@ -155,6 +155,20 @@ class AirBridgeProvider:
         return status, result
 
     @staticmethod
+    def _error_text(value: Any, fallback: str) -> str:
+        if isinstance(value, Mapping):
+            code = value.get("code")
+            message = value.get("message")
+            if code and message:
+                return "{}: {}".format(code, message)
+            if message:
+                return str(message)
+            if code:
+                return str(code)
+            return json.dumps(dict(value), ensure_ascii=False, sort_keys=True)
+        return str(value) if value else fallback
+
+    @staticmethod
     def _convert(payload: Mapping[str, Any], request_id: str) -> OperationResponse:
         request_id = normalize_request_id(request_id)
         response_id = payload.get("request_id")
@@ -165,7 +179,10 @@ class AirBridgeProvider:
             return OperationResponse.accepted(request_id)
         if state in ("unknown", "not_found"):
             return OperationResponse.unknown(
-                request_id, str(payload.get("error") or "AirBridge outcome is unknown")
+                request_id,
+                AirBridgeProvider._error_text(
+                    payload.get("error"), "AirBridge outcome is unknown"
+                ),
             )
         if state not in ("completed", "failed"):
             raise AirBridgeProviderError("AirBridge returned an unsupported operation state")
@@ -173,12 +190,17 @@ class AirBridgeProvider:
         result = result if isinstance(result, dict) else {}
         exit_code = result.get("exit_code")
         success = (
-            exit_code == 0 and not result.get("killed", False)
-            if exit_code is not None
-            else bool(result.get("success", state == "completed"))
+            False
+            if state == "failed"
+            else (
+                exit_code == 0 and not result.get("killed", False)
+                if exit_code is not None
+                else bool(result.get("success", True))
+            )
         )
-        error = None if success else str(
-            result.get("stderr") or payload.get("error") or "remote Shell command failed"
+        error = None if success else AirBridgeProvider._error_text(
+            result.get("stderr") or result.get("error") or payload.get("error"),
+            "remote Shell command failed",
         )
         return OperationResponse.completed(request_id, success, result, error)
 
@@ -192,12 +214,22 @@ class AirBridgeProvider:
             return OperationResponse.unknown(
                 request_id, "AirBridge HTTP transport failed; remote outcome may be unknown"
             )
-        if status == 503 and str(response.get("state", "")).lower() == "unknown":
+        state = str(response.get("state") or "").lower()
+        if status == 503 and state == "unknown":
             return OperationResponse.unknown(
-                request_id, str(response.get("error") or "AirBridge reported UNKNOWN")
+                request_id,
+                self._error_text(response.get("error"), "AirBridge reported UNKNOWN"),
             )
+        # M2.5.2 returns 502 for a tracked terminal failure and 404 for
+        # an unknown/expired/foreign request. Preserve the Contract semantics.
+        if status == 502 and state == "failed":
+            return self._convert(response, request_id)
+        if status == 404 and state == "not_found":
+            return self._convert(response, request_id)
         if status not in (200, 202):
-            detail = response.get("error") or response.get("message") or "request failed"
+            detail = self._error_text(
+                response.get("error") or response.get("message"), "request failed"
+            )
             raise AirBridgeProviderError("AirBridge HTTP {}: {}".format(status, detail))
         return self._convert(response, request_id)
 
