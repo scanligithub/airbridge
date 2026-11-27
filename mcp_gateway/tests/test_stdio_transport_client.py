@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import uuid
 import unittest
 from pathlib import Path
@@ -23,6 +24,9 @@ class FakeGateway:
         return {"success": True}
 
     def execute_shell(self, **kwargs):
+        if kwargs["command"].startswith("slow:"):
+            import time
+            time.sleep(0.15)
         return {
             "request_id": kwargs["request_id"],
             "state": "completed",
@@ -77,6 +81,39 @@ class McpStdioTransportClientTests(unittest.TestCase):
         self.assertEqual(result["request_id"], request_id)
         self.assertEqual(result["state"], "completed")
         self.assertEqual(result["result"]["stdout"], "Get-Location")
+
+    def test_concurrent_calls_do_not_steal_each_others_responses(self):
+        calls = [
+            ("slow:first", str(uuid.uuid4())),
+            ("slow:second", str(uuid.uuid4())),
+        ]
+        results = {}
+        errors = []
+
+        def invoke(command, request_id):
+            try:
+                results[command] = self.client.call_tool(
+                    "airbridge_shell_execute",
+                    {"request_id": request_id, "command": command},
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=invoke, args=item)
+            for item in calls
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        for command, request_id in calls:
+            self.assertEqual(results[command]["request_id"], request_id)
+            self.assertEqual(results[command]["result"]["stdout"], command)
+
 
     def test_request_status_tool_call_uses_original_request_id(self):
         request_id = str(uuid.uuid4())
