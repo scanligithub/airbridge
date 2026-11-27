@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import uuid
 import unittest
@@ -51,7 +52,13 @@ class McpStdioTransportClientTests(unittest.TestCase):
     def setUp(self):
         self.client = McpStdioClient(
             command=[sys.executable, "-u", "-c", FAKE_GATEWAY_SERVER],
-            environ={"PATH": ""},
+            # Keep the Windows runtime environment (notably SystemRoot and
+            # DLL search paths) while ensuring no Agent credential is inherited.
+            environ={
+                key: value
+                for key, value in os.environ.items()
+                if key.upper() not in {"AIRBRIDGE_AGENT_TOKEN"}
+            },
             timeout_seconds=5,
         )
 
