@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+import sqlite3
 import sys
 import threading
 import uuid
@@ -287,11 +288,37 @@ async def exercise_frozen_stdio(
                     f"{rejected.structured_content!r}"
                 )
 
-        # Simulate Gateway OFF while this already-running MCP child is retained.
+        # EDA execution remains disabled locally and creates a minimal DENY event.
+        eda_disabled = await client.call_tool(
+            "airbridge_eda_execute",
+            {"script": "SENSITIVE_EDA_SCRIPT_MUST_NOT_BE_STORED"},
+        )
+        if eda_disabled.structured_content.get("error", {}).get("code") != "EDA_EXECUTION_DISABLED":
+            raise AssertionError(f"EDA execution was not locally disabled: {eda_disabled.structured_content!r}")
+
+        # Turn Gateway OFF while this already-running MCP child is retained.
+        # Exercise every tool family with sensitive-looking arguments; none may
+        # reach the HTTP API, and only metadata may enter the local audit DB.
         policy.write(enabled=False, agents={agent_id: True})
-        gateway_off = await client.call_tool("airbridge_get_capabilities", {})
-        if gateway_off.structured_content.get("error", {}).get("code") != "GATEWAY_DISABLED":
-            raise AssertionError(f"Existing STDIO process did not observe Gateway OFF: {gateway_off.structured_content!r}")
+        gateway_off_calls = [
+            ("airbridge_get_capabilities", {}),
+            ("airbridge_shell_execute", {
+                "request_id": str(uuid.uuid4()),
+                "command": "SENSITIVE_SHELL_COMMAND_MUST_NOT_BE_STORED",
+            }),
+            ("airbridge_request_status", {"request_id": str(uuid.uuid4())}),
+            ("airbridge_get_eda_versions", {}),
+            ("airbridge_eda_execute", {
+                "script": "SENSITIVE_EDA_SCRIPT_MUST_NOT_BE_STORED",
+            }),
+        ]
+        for tool_name, arguments in gateway_off_calls:
+            denied = await client.call_tool(tool_name, arguments)
+            if denied.structured_content.get("error", {}).get("code") != "GATEWAY_DISABLED":
+                raise AssertionError(
+                    f"{tool_name} was not intercepted after Gateway OFF: "
+                    f"{denied.structured_content!r}"
+                )
 
         # Re-enable Gateway but disable only this Agent.
         policy.write(enabled=True, agents={agent_id: False})
@@ -309,6 +336,50 @@ async def exercise_frozen_stdio(
         )
         if invalid.structured_content.get("error", {}).get("code") != "GATEWAY_POLICY_INVALID":
             raise AssertionError(f"Malformed policy was not rejected: {invalid.structured_content!r}")
+
+        # Verify exact audit semantics and prove arguments/credentials are absent.
+        audit_path = local_app_data / "AirBridge" / "gateway_audit.sqlite3"
+        with sqlite3.connect(audit_path) as connection:
+            columns = {
+                row[1] for row in connection.execute(
+                    "PRAGMA table_info(gateway_policy_audit)"
+                ).fetchall()
+            }
+            expected_columns = {
+                "audit_id", "timestamp", "agent_id", "tool_name",
+                "decision", "reason_code",
+            }
+            if columns != expected_columns:
+                raise AssertionError(f"Unexpected Gateway audit columns: {columns!r}")
+            rows = connection.execute(
+                """
+                SELECT agent_id, tool_name, decision, reason_code
+                FROM gateway_policy_audit
+                ORDER BY audit_id
+                """
+            ).fetchall()
+        expected_events = [
+            (agent_id, "airbridge_eda_execute", "DENY", "EDA_EXECUTION_DISABLED"),
+            (agent_id, "airbridge_get_capabilities", "DENY", "GATEWAY_DISABLED"),
+            (agent_id, "airbridge_shell_execute", "DENY", "GATEWAY_DISABLED"),
+            (agent_id, "airbridge_request_status", "DENY", "GATEWAY_DISABLED"),
+            (agent_id, "airbridge_get_eda_versions", "DENY", "GATEWAY_DISABLED"),
+            (agent_id, "airbridge_eda_execute", "DENY", "GATEWAY_DISABLED"),
+            (agent_id, "airbridge_get_eda_versions", "DENY", "AGENT_DISABLED"),
+            (agent_id, "airbridge_request_status", "DENY", "GATEWAY_POLICY_INVALID"),
+        ]
+        if sorted(rows) != sorted(expected_events):
+            raise AssertionError(
+                f"Gateway local denial audit events mismatch: {rows!r}"
+            )
+        audit_bytes = audit_path.read_bytes()
+        for forbidden in (
+            b"SENSITIVE_SHELL_COMMAND_MUST_NOT_BE_STORED",
+            b"SENSITIVE_EDA_SCRIPT_MUST_NOT_BE_STORED",
+            b"non-production-ci-stdio-smoke-token",
+        ):
+            if forbidden in audit_bytes:
+                raise AssertionError("Gateway audit database contains sensitive input")
 
         # Restoring a valid ON state should restore the same still-running process.
         policy.write(enabled=True, agents={agent_id: True})
