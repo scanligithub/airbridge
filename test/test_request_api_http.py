@@ -30,6 +30,17 @@ class FakeWorker:
         self.shell_task_finished = True
         self.shell_task_missing = False
         self.peer_build_identity = None
+        self.negotiate_calls = []
+
+    def begin_session_negotiation(self, **kwargs):
+        self.negotiate_calls.append(kwargs)
+        return {
+            "success": True,
+            "state": "negotiating",
+            "operation_id": "runtime-operation-test",
+            "message_id": "runtime-message-test",
+            "attached": False,
+        }
 
     def is_serial_connected(self):
         return self.connected
@@ -120,6 +131,17 @@ class FakeWorker:
 
 
 class CorrelatedRequestHTTPTests(unittest.TestCase):
+    def test_runtime_negotiate_endpoint_uses_async_pending_lifecycle(self):
+        status, body = self._request_json(
+            "POST", "/api/v1/runtime/negotiate"
+        )
+        self.assertEqual(status, 202, body)
+        self.assertTrue(body["success"])
+        self.assertEqual(
+            self.worker.negotiate_calls,
+            [{"waiter_expected": False}],
+        )
+
     def test_capabilities_endpoint_exposes_peer_build_identity_read_only(self):
         identity = {
             "build_commit": "a" * 40,
