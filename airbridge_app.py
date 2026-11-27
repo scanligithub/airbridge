@@ -987,6 +987,14 @@ class SerialWorker(threading.Thread):
             generation, operation_id, timeout=self.session_handshake_timeout
         )
         if not submitted.get("success"):
+          with self.session_protocol_lock:
+            self._settle_session_negotiation_failure_locked(
+                operation_id,
+                generation,
+                submitted.get("state", "failed"),
+                submitted.get("error") or submitted.get("state", "negotiation failed"),
+                submitted.get("message_id"),
+            )
           return
         status = self._wait_session_negotiation(
             submitted.get("message_id"), timeout=self.session_handshake_timeout
