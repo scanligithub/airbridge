@@ -7,6 +7,7 @@ command and then queries the same request UUID. It never retries execution.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 import uuid
@@ -26,9 +27,13 @@ def _result(response):
     return value if isinstance(value, dict) else {}
 
 
-def run_live_acceptance() -> int:
+def run_live_acceptance(executable_path: str, agent_id: str) -> int:
     request_id = str(uuid.uuid4())
-    provider = AirBridgeProvider(timeout_seconds=45.0)
+    provider = AirBridgeProvider(
+        executable_path=executable_path,
+        agent_id=agent_id,
+        timeout_seconds=75.0,
+    )
 
     try:
         print("Host A -> Host B live Shell acceptance")
@@ -86,11 +91,25 @@ def main() -> int:
         action="store_true",
         help="explicitly permit the fixed read-only Host-B Shell command",
     )
+    parser.add_argument(
+        "--airbridge-exe",
+        default=os.environ.get("AIRBRIDGE_EXE_PATH", ""),
+        help="path to the installed AirBridge.exe (non-secret)",
+    )
+    parser.add_argument(
+        "--agent-id",
+        default=os.environ.get("AIRBRIDGE_AGENT_ID", ""),
+        help="M2.5 Agent ID (non-secret; e.g. antigravity)",
+    )
     args = parser.parse_args()
     if not args.live:
         parser.error("live execution is disabled by default; pass --live explicitly")
+    if not args.airbridge_exe:
+        parser.error("--airbridge-exe or AIRBRIDGE_EXE_PATH is required")
+    if not args.agent_id:
+        parser.error("--agent-id or AIRBRIDGE_AGENT_ID is required")
     try:
-        return run_live_acceptance()
+        return run_live_acceptance(args.airbridge_exe, args.agent_id)
     except Exception as exc:
         # Provider errors may contain useful HTTP status details, but never
         # print request headers, environment variables, or credential values.
