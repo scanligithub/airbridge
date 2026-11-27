@@ -10,22 +10,29 @@ environment and does not import AirBridge internal modules.
 
 ## Scope
 
-The first version exposes four domain-neutral tools:
+The Transport integration now exposes five domain-neutral tools:
 
 | MCP tool | Existing AirBridge endpoint | Access |
 |---|---|---|
 | airbridge_get_capabilities | GET /api/v1/runtime/capabilities | Read-only |
 | airbridge_get_eda_versions | GET /api/v1/eda/versions | Read-only |
-| airbridge_eda_execute | POST /api/v1/eda/execute | Execution; disabled by default |
+| airbridge_shell_execute | POST /api/v1/shell/exec | Generic remote Shell; requires shell.execute |
+| airbridge_eda_execute | POST /api/v1/eda/execute | EDA execution; disabled by default |
 | airbridge_request_status | GET /api/v1/requests/{request_id} | Read-only |
 
 The gateway treats script text as opaque. It does not know Tcl, Dbo, SKILL,
 Capture design objects, Allegro objects, or professional workflows. Those belong
 to their corresponding Agent Skills.
 
-The gateway does not expose Remote Shell, Runtime Session creation/close APIs,
-profiles, or per-agent session isolation. Those capabilities are not provided
-by the current public HTTP API.
+The gateway exposes only the generic Shell submit operation, not Shell task
+management, kill, filesystem operations, Runtime Session creation/close APIs,
+profiles, or per-agent session isolation. The Shell tool accepts the caller's
+UUID so the Transport Provider can preserve request correlation; its default
+wait is nonblocking and callers query the same UUID with
+`airbridge_request_status`. The HTTP API enforces the Agent's
+`shell.execute` Scope on submission and `request.read` on status lookup.
+The Shell tool is not gated by the EDA-only `AIRBRIDGE_ENABLE_EDA_EXECUTE`
+switch.
 
 ## Requirements and isolation
 
@@ -82,8 +89,11 @@ network listener is created by the stdio gateway.
 | AIRBRIDGE_AGENT_ID | optional (preferred on M2.4) | Non-secret Agent ID used to load that Agent's credential from Windows Credential Manager |
 | AIRBRIDGE_AGENT_TOKEN | legacy compatibility | Per-Agent Bearer credential; use only for existing configurations during migration |
 
-airbridge_eda_execute can run code in the remote EDA process. Keep it disabled
-unless the MCP client is trusted and the user intends to grant execution access.
+airbridge_shell_execute can run arbitrary generic Shell commands on Host B and
+therefore requires the Agent's `shell.execute` Scope. Grant that Scope only
+when the Skill workflow needs it. `airbridge_eda_execute` can run code in the
+remote EDA process and remains disabled unless both Gateway and server-side
+EDA execution controls are explicitly enabled and the Agent has `eda.execute`.
 MCP tool annotations are only client hints, not authorization. Each Gateway
 process must resolve its own per-Agent credential using `AIRBRIDGE_AGENT_ID`
 (preferred) or the legacy `AIRBRIDGE_AGENT_TOKEN`. The AirBridge HTTP API
@@ -172,10 +182,14 @@ the operation.
 
 ## Request behaviour
 
-- The gateway creates a UUID request_id for every accepted execute call.
+- `airbridge_eda_execute` creates a UUID request_id; `airbridge_shell_execute`
+  requires the Transport Provider to supply its original UUID.
 - The returned request_id must be retained by the caller.
-- If the HTTP response is unconfirmed or the server reports `state=unknown`, call
-  `airbridge_request_status` with the same ID. Never submit a new ID as a retry.
+- Shell submission defaults to a nonblocking wait and may return ACCEPTED. Poll
+  `airbridge_request_status` with the same original ID.
+- If the HTTP / STDIO response is unconfirmed or the server reports
+  `state=unknown`, query `airbridge_request_status` with the same ID. Never
+  submit a new ID as a retry.
 - Requests rejected before submission (for example 401 / 403 / 429 or payload
   validation) do not receive a pollable request ID.
 - The gateway rejects script requests whose serialized JSON body exceeds
