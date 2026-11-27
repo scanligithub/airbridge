@@ -20,6 +20,7 @@ from build_identity import get_build_identity
 from runtime_session_protocol import (
     encode_session_message,
     make_session_capabilities,
+    make_session_hello,
 )
 from request_tracker import RequestTracker
 from request_broker import RequestBroker
@@ -56,17 +57,15 @@ def _new_worker():
     worker.lock = threading.Lock()
     worker.session_protocol_lock = threading.RLock()
     worker.session_pending_handshakes = {}
-    worker.session_peer_status = {
-        "state": "disconnected",
-        "negotiated": False,
-        "protocol": "runtime-session.v1",
-        "supported_protocols": [],
-        "features": [],
-        "profiles": [],
-        "last_handshake_id": None,
-        "error": None,
-    }
     worker.session_link_generation = 1
+    worker.session_handshake_timeout = 1.0
+    worker.session_pending_retention = 5.0
+    worker.session_pending_limit = 32
+    worker.session_negotiation_operation = None
+    worker.session_auto_negotiation_generation = None
+    worker.session_last_peer_message_at = None
+    worker.session_last_peer_message_monotonic = None
+    worker.session_peer_status = worker._new_session_peer_status("disconnected")
     worker.request_tracker = RequestTracker()
     worker.request_broker = RequestBroker(":memory:")
     worker.parser = FrameParser()
@@ -743,6 +742,328 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertTrue(result["result"]["success"])
         self.assertEqual(result["result"]["task_id"], "shell-ci")
         self.assertEqual(result["result"]["stdout"], "hello from remote shell")
+
+
+    def test_manual_handshake_is_lazily_settled_after_deadline(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+
+        request = host.begin_session_negotiation(timeout=0.02)
+        self.assertTrue(request["success"], request)
+        self.assertEqual(host.get_session_peer_status()["state"], "negotiating")
+        pending_before_expiry = host.session_pending_handshakes[request["message_id"]]
+        self.assertAlmostEqual(
+            pending_before_expiry["deadline_monotonic"] - pending_before_expiry["started_monotonic"],
+            0.02,
+            delta=0.005,
+        )
+        pending_before_expiry["deadline_monotonic"] = time.monotonic() - 0.001
+
+        status = host.get_session_peer_status()
+        self.assertEqual(status["state"], "unconfirmed", status)
+        self.assertFalse(status["peer_capabilities_fresh"])
+        pending = host.session_pending_handshakes[request["message_id"]]
+        self.assertEqual(pending["response"]["state"], "unconfirmed")
+
+        late = make_session_capabilities(request["message_id"])
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_CAPABILITIES,
+                9,
+                encode_session_message(FrameType.SESSION_CAPABILITIES, late),
+            )
+        )
+        self.assertEqual(host.get_session_peer_status()["state"], "unconfirmed")
+
+    def test_duplicate_begin_attaches_to_existing_attempt(self):
+        host = _new_worker()
+        sent = []
+        host.send_frame = lambda frame_type, payload=b"": sent.append((frame_type, payload))
+
+        first = host.begin_session_negotiation()
+        second = host.begin_session_negotiation()
+
+        self.assertTrue(first["success"], first)
+        self.assertTrue(second["success"], second)
+        self.assertTrue(second["attached"])
+        self.assertEqual(second["operation_id"], first["operation_id"])
+        self.assertEqual(second["message_id"], first["message_id"])
+        self.assertEqual(len(host.session_pending_handshakes), 1)
+        self.assertEqual(len(sent), 1)
+
+    def test_can_create_session_requires_fresh_negotiated_capabilities(self):
+        host = _new_worker()
+        host.session_peer_status = host._new_session_peer_status(
+            "negotiated",
+            features=["handshake", "session.create"],
+            peer_capabilities_fresh=True,
+        )
+        self.assertTrue(host.get_session_peer_status()["can_create_session"])
+
+        host.session_peer_status["state"] = "negotiating"
+        host.session_peer_status["negotiated"] = False
+        self.assertFalse(host.get_session_peer_status()["can_create_session"])
+
+        host.session_peer_status["state"] = "negotiated"
+        host.session_peer_status["negotiated"] = True
+        host.session_peer_status["peer_capabilities_fresh"] = False
+        self.assertFalse(host.get_session_peer_status()["can_create_session"])
+
+    def test_inbound_hello_recovers_terminal_negotiation_states(self):
+        for terminal_state in ("no_common_protocol", "handshake_not_supported"):
+            with self.subTest(state=terminal_state):
+                host = _new_worker()
+                host.session_peer_status = host._new_session_peer_status(
+                    terminal_state, error=terminal_state
+                )
+                host.send_frame = lambda *_args, **_kwargs: None
+                started = []
+                host._start_auto_session_negotiation = lambda: started.append(True)
+
+                hello = make_session_hello()
+                host._handle_incoming_frame(
+                    ABFPFrame(
+                        FrameType.SESSION_HELLO,
+                        3,
+                        encode_session_message(FrameType.SESSION_HELLO, hello),
+                    )
+                )
+                self.assertEqual(started, [True])
+
+    def test_idle_peer_activity_does_not_expire_capability_snapshot(self):
+        host = _new_worker()
+        host.session_peer_status = host._new_session_peer_status(
+            "negotiated",
+            features=["handshake", "request.correlation"],
+            peer_capabilities_fresh=True,
+        )
+        host.session_last_peer_message_at = time.time() - 120
+        host.session_last_peer_message_monotonic = time.monotonic() - 120
+
+        status = host.get_session_peer_status()
+        self.assertTrue(status["peer_capabilities_fresh"])
+        self.assertTrue(status["negotiated"])
+        self.assertGreaterEqual(status["peer_activity_age_ms"], 120000)
+
+    def test_old_generation_capabilities_cannot_overwrite_new_handshake(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+        old_generation = host.session_link_generation
+        old_request = host.begin_session_negotiation()
+        host._reset_session_peer_status("test reconnect")
+        new_request = host.begin_session_negotiation()
+
+        old_capabilities = make_session_capabilities(old_request["message_id"])
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_CAPABILITIES,
+                4,
+                encode_session_message(
+                    FrameType.SESSION_CAPABILITIES, old_capabilities
+                ),
+            )
+        )
+
+        status = host.get_session_peer_status()
+        self.assertEqual(status["state"], "negotiating")
+        self.assertEqual(status["link_generation"], old_generation + 1)
+        self.assertEqual(status["last_handshake_id"], new_request["message_id"])
+        self.assertFalse(host.session_pending_handshakes[new_request["message_id"]]["event"].is_set())
+
+
+    def test_auto_negotiation_is_single_flight_for_entire_generation(self):
+        host = _new_worker()
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocked_auto(generation, operation_id=None):
+            entered.set()
+            release.wait(timeout=1.0)
+
+        host._auto_negotiate_session_peer = blocked_auto
+        self.assertTrue(host._start_auto_session_negotiation())
+        self.assertTrue(entered.wait(timeout=1.0))
+        self.assertFalse(host._start_auto_session_negotiation())
+        self.assertEqual(host.session_auto_negotiation_generation, 1)
+        release.set()
+
+    def test_inbound_hello_during_retry_wait_does_not_start_second_auto_thread(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+        operation_id = str(uuid.uuid4())
+        host.session_negotiation_operation = {
+            "operation_id": operation_id,
+            "generation": host.session_link_generation,
+            "owner": "auto",
+            "phase": "retry_wait",
+            "current_message_id": None,
+            "peer_hello_seen": False,
+        }
+        host.session_auto_negotiation_generation = host.session_link_generation
+        started = []
+        host._start_auto_session_negotiation = lambda: started.append(True)
+
+        hello = make_session_hello()
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_HELLO,
+                5,
+                encode_session_message(FrameType.SESSION_HELLO, hello),
+            )
+        )
+
+        self.assertEqual(started, [])
+        self.assertTrue(host.session_negotiation_operation["peer_hello_seen"])
+
+    def test_auto_handshake_submission_failure_settles_status(self):
+        host = _new_worker()
+        operation_id = str(uuid.uuid4())
+        host.session_negotiation_operation = {
+            "operation_id": operation_id,
+            "generation": host.session_link_generation,
+            "owner": "auto",
+            "phase": "retry_wait",
+            "current_message_id": None,
+            "peer_hello_seen": False,
+        }
+        host.session_peer_status = host._new_session_peer_status(
+            "negotiating", generation=host.session_link_generation
+        )
+        host._begin_session_negotiation_attempt = lambda *_args, **_kwargs: {
+            "success": False,
+            "state": "busy",
+            "error": "simulated pending limit",
+        }
+
+        host._auto_negotiate_session_peer(
+            host.session_link_generation, operation_id
+        )
+
+        self.assertEqual(host.get_session_peer_status()["state"], "unconfirmed")
+        self.assertEqual(host.session_negotiation_operation["phase"], "completed")
+
+    def test_manual_peer_hello_does_not_complete_attempt_and_deadline_settles_it(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+        request = host.begin_session_negotiation(timeout=1.0)
+        pending = host.session_pending_handshakes[request["message_id"]]
+
+        hello = make_session_hello()
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_HELLO,
+                6,
+                encode_session_message(FrameType.SESSION_HELLO, hello),
+            )
+        )
+
+        self.assertTrue(host.session_negotiation_operation["peer_hello_seen"])
+        self.assertEqual(
+            host._wait_session_negotiation(None, timeout=0.0)["state"],
+            "negotiating",
+        )
+        self.assertFalse(pending["event"].is_set())
+        self.assertIsNone(pending["response"])
+
+        # A peer HELLO is not the response correlated to our HELLO. The
+        # original attempt must settle through its own deadline.
+        pending["deadline_monotonic"] = time.monotonic() - 0.001
+        status = host.get_session_peer_status()
+        self.assertEqual(status["state"], "unconfirmed", status)
+        self.assertEqual(pending["response"]["state"], "unconfirmed")
+        self.assertTrue(pending["event"].is_set())
+        self.assertEqual(host.session_negotiation_operation["phase"], "completed")
+
+
+
+    def test_async_manual_timeout_does_not_block_peer_restart_recovery(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+        request = host.begin_session_negotiation(
+            timeout=0.01, waiter_expected=False
+        )
+        self.assertTrue(request["success"], request)
+        pending = host.session_pending_handshakes[request["message_id"]]
+        pending["deadline_monotonic"] = time.monotonic() - 0.001
+        self.assertEqual(host.get_session_peer_status()["state"], "unconfirmed")
+
+        started = []
+        host._start_auto_session_negotiation = lambda: started.append(True)
+        hello = make_session_hello()
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_HELLO,
+                7,
+                encode_session_message(FrameType.SESSION_HELLO, hello),
+            )
+        )
+        self.assertEqual(started, [True])
+
+    def test_async_manual_success_does_not_leave_a_waiter_blocking_refresh(self):
+        host = _new_worker()
+        host.send_frame = lambda *_args, **_kwargs: None
+        request = host.begin_session_negotiation(waiter_expected=False)
+        capabilities = make_session_capabilities(request["message_id"])
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_CAPABILITIES,
+                8,
+                encode_session_message(FrameType.SESSION_CAPABILITIES, capabilities),
+            )
+        )
+        self.assertEqual(host.get_session_peer_status()["state"], "negotiated")
+
+        started = []
+        host._start_auto_session_negotiation = lambda: started.append(True)
+        hello = make_session_hello()
+        host._handle_incoming_frame(
+            ABFPFrame(
+                FrameType.SESSION_HELLO,
+                9,
+                encode_session_message(FrameType.SESSION_HELLO, hello),
+            )
+        )
+        self.assertEqual(started, [True])
+
+
+
+    def test_manual_handshake_send_failure_settles_status(self):
+        host = _new_worker()
+
+        def fail_send(*_args, **_kwargs):
+            raise RuntimeError("simulated queue failure")
+
+        host.send_frame = fail_send
+        with self.assertRaisesRegex(RuntimeError, "simulated queue failure"):
+            host.begin_session_negotiation()
+
+        status = host.get_session_peer_status()
+        self.assertEqual(status["state"], "unconfirmed", status)
+        self.assertFalse(status["peer_capabilities_fresh"])
+        operation = host.session_negotiation_operation
+        self.assertEqual(operation["phase"], "completed")
+        pending = next(iter(host.session_pending_handshakes.values()))
+        self.assertEqual(pending["response"]["state"], "unconfirmed")
+        self.assertTrue(pending["event"].is_set())
+
+    def test_manual_handshake_busy_result_does_not_leave_negotiating_status(self):
+        host = _new_worker()
+        now = time.monotonic()
+        host.session_pending_handshakes = {
+            str(index): {
+                "response": {"state": "negotiated"},
+                "completed_at": now,
+            }
+            for index in range(host.session_pending_limit)
+        }
+        host.send_frame = lambda *_args, **_kwargs: None
+
+        result = host.begin_session_negotiation()
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["state"], "busy")
+        self.assertEqual(host.get_session_peer_status()["state"], "unconfirmed")
+        self.assertEqual(host.session_negotiation_operation["phase"], "completed")
 
 
 if __name__ == "__main__":

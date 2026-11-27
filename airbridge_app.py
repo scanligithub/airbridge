@@ -516,17 +516,15 @@ class SerialWorker(threading.Thread):
     # capability discovery only; it does not create or manage Runtime Sessions.
     self.session_protocol_lock = threading.RLock()
     self.session_pending_handshakes: Dict[str, Dict[str, Any]] = {}
-    self.session_peer_status: Dict[str, Any] = {
-        "state": "disconnected",
-        "negotiated": False,
-        "protocol": SESSION_PROTOCOL_ID,
-        "supported_protocols": [],
-        "features": [],
-        "profiles": [],
-        "last_handshake_id": None,
-        "error": None,
-    }
     self.session_link_generation = 0
+    self.session_handshake_timeout = 1.0
+    self.session_pending_retention = 5.0
+    self.session_pending_limit = 32
+    self.session_negotiation_operation: Optional[Dict[str, Any]] = None
+    self.session_auto_negotiation_generation: Optional[int] = None
+    self.session_last_peer_message_at: Optional[float] = None
+    self.session_last_peer_message_monotonic: Optional[float] = None
+    self.session_peer_status: Dict[str, Any] = self._new_session_peer_status("disconnected")
 
   def is_serial_connected(self) -> bool:
     with self.lock:
@@ -570,40 +568,184 @@ class SerialWorker(threading.Thread):
     self._reset_session_peer_status("serial link disconnected")
     self.request_tracker.fail_all_pending("serial link disconnected")
 
+  def _new_session_peer_status(
+      self,
+      state: str,
+      generation: Optional[int] = None,
+      error: Optional[str] = None,
+      last_handshake_id: Optional[str] = None,
+      **values: Any,
+  ) -> Dict[str, Any]:
+    now = time.time()
+    status = {
+        "state": state,
+        "negotiated": state == "negotiated",
+        "protocol": SESSION_PROTOCOL_ID,
+        "supported_protocols": [],
+        "features": [],
+        "profiles": [],
+        "max_frame_payload": None,
+        "peer_version": None,
+        "peer_build_identity": None,
+        "last_handshake_id": last_handshake_id,
+        "error": error,
+        "link_generation": self.session_link_generation if generation is None else generation,
+        "state_updated_at": now,
+        "last_handshake_started_at": None,
+        "last_successful_handshake_at": None,
+        "handshake_duration_ms": None,
+        "peer_capabilities_fresh": False,
+    }
+    status.update(values)
+    return status
+
+  def _expire_session_handshakes_locked(
+      self,
+      now: Optional[float] = None,
+      force_message_id: Optional[str] = None,
+  ) -> None:
+    """Settle expired attempts and prune completed records; caller holds session_protocol_lock."""
+    current = time.monotonic() if now is None else now
+    for message_id, pending in list(self.session_pending_handshakes.items()):
+      if pending.get("response") is None and (
+          current >= pending.get("deadline_monotonic", current + 1.0)
+          or message_id == force_message_id
+      ):
+        response = {
+            "state": "unconfirmed",
+            "error": "peer did not answer the capability handshake",
+        }
+        pending["response"] = response
+        pending["completed_at"] = current
+        pending["event"].set()
+        operation = self.session_negotiation_operation
+        if (
+            operation
+            and operation.get("operation_id") == pending.get("operation_id")
+        ):
+          operation["phase"] = "completed"
+          operation["completed_at"] = current
+          operation["current_message_id"] = message_id
+        if (
+            self.session_peer_status.get("last_handshake_id") == message_id
+            and self.session_peer_status.get("link_generation") == pending.get("generation")
+            and self.session_peer_status.get("state") == "negotiating"
+        ):
+          previous = self.session_peer_status
+          self.session_peer_status = self._new_session_peer_status(
+              "unconfirmed",
+              generation=pending.get("generation"),
+              error=response["error"],
+              last_handshake_id=message_id,
+              last_handshake_started_at=previous.get("last_handshake_started_at"),
+              last_successful_handshake_at=previous.get("last_successful_handshake_at"),
+              handshake_duration_ms=max(
+                  0.0,
+                  (current - pending.get("started_monotonic", current)) * 1000.0,
+              ),
+          )
+      completed_at = pending.get("completed_at")
+      if completed_at is not None and current - completed_at >= self.session_pending_retention:
+        self.session_pending_handshakes.pop(message_id, None)
+
+    operation = self.session_negotiation_operation
+    if (
+        operation
+        and operation.get("phase") == "completed"
+        and current - operation.get("completed_at", current) >= self.session_pending_retention
+    ):
+      if self.session_negotiation_operation is operation:
+        self.session_negotiation_operation = None
+
+  def _settle_session_negotiation_failure_locked(
+      self,
+      operation_id: str,
+      generation: int,
+      state: str,
+      error: Optional[str],
+      message_id: Optional[str] = None,
+  ) -> None:
+    """Finish a failed attempt without leaving a stale negotiating snapshot."""
+    operation = self.session_negotiation_operation
+    if (
+        not operation
+        or operation.get("operation_id") != operation_id
+        or operation.get("generation") != generation
+    ):
+      return
+
+    operation["phase"] = "completed"
+    operation["completed_at"] = time.monotonic()
+
+    status = self.session_peer_status
+    if (
+        status.get("link_generation") != generation
+        or status.get("state") != "negotiating"
+        or (
+            message_id is not None
+            and status.get("last_handshake_id") not in (None, message_id)
+        )
+    ):
+      return
+
+    self.session_peer_status = self._new_session_peer_status(
+        "disconnected" if state == "disconnected" else "unconfirmed",
+        generation=generation,
+        error=error or state,
+        last_handshake_id=message_id or status.get("last_handshake_id"),
+        last_handshake_started_at=status.get("last_handshake_started_at"),
+        last_successful_handshake_at=status.get("last_successful_handshake_at"),
+    )
+
   def _reset_session_peer_status(self, reason: str):
     pending = []
     with self.session_protocol_lock:
       self.session_link_generation += 1
       pending = list(self.session_pending_handshakes.values())
       self.session_pending_handshakes.clear()
-      self.session_peer_status = {
-          "state": "disconnected",
-          "negotiated": False,
-          "protocol": SESSION_PROTOCOL_ID,
-          "supported_protocols": [],
-          "features": [],
-          "profiles": [],
-          "peer_build_identity": None,
-          "last_handshake_id": None,
-          "error": reason,
-      }
+      self.session_negotiation_operation = None
+      self.session_auto_negotiation_generation = None
+      self.session_last_peer_message_at = None
+      self.session_last_peer_message_monotonic = None
+      self.session_peer_status = self._new_session_peer_status(
+          "disconnected", generation=self.session_link_generation, error=reason
+      )
     for item in pending:
       item["response"] = {"state": "disconnected", "error": reason}
+      item["completed_at"] = time.monotonic()
       item["event"].set()
 
   def get_session_peer_status(self) -> Dict[str, Any]:
     with self.session_protocol_lock:
+      self._expire_session_handshakes_locked()
       status = dict(self.session_peer_status)
       status["supported_protocols"] = list(status.get("supported_protocols", []))
       status["features"] = list(status.get("features", []))
       status["profiles"] = list(status.get("profiles", []))
       identity = status.get("peer_build_identity")
       status["peer_build_identity"] = dict(identity) if isinstance(identity, dict) else None
-      status["can_create_session"] = "session.create" in status["features"]
+      status["last_peer_message_at"] = self.session_last_peer_message_at
+      if self.session_last_peer_message_monotonic is None:
+        status["peer_activity_age_ms"] = None
+      else:
+        status["peer_activity_age_ms"] = max(
+            0.0,
+            (time.monotonic() - self.session_last_peer_message_monotonic) * 1000.0,
+        )
+      status["can_create_session"] = (
+          status.get("state") == "negotiated"
+          and status.get("negotiated") is True
+          and status.get("peer_capabilities_fresh") is True
+          and "session.create" in status["features"]
+      )
       return status
 
-  def begin_session_negotiation(
-      self, expected_generation: Optional[int] = None
+  def _begin_session_negotiation_attempt(
+      self,
+      generation: int,
+      operation_id: str,
+      timeout: Optional[float] = None,
+      waiter_expected: bool = True,
   ) -> Dict[str, Any]:
     envelope = make_session_hello(CLIENT_VERSION)
     message_id = envelope["message_id"]
@@ -612,105 +754,295 @@ class SerialWorker(threading.Thread):
     except SessionProtocolError as exc:
       return {"success": False, "state": "failed", "error": str(exc)}
 
-    event = threading.Event()
+    now = time.monotonic()
+    timeout_value = self.session_handshake_timeout if timeout is None else max(0.0, timeout)
     with self.lock:
       connected = self.ser is not None and bool(getattr(self.ser, "is_open", False))
       if not connected:
         return {"success": False, "state": "disconnected", "error": "serial link is not connected"}
       with self.session_protocol_lock:
-        if (
-            expected_generation is not None
-            and expected_generation != self.session_link_generation
-        ):
+        self._expire_session_handshakes_locked(now)
+        if generation != self.session_link_generation:
           return {"success": False, "state": "stale", "error": "serial link generation changed"}
-        self.session_pending_handshakes[message_id] = {
-            "event": event,
-            "response": None,
-        }
-        self.session_peer_status = {
-            "state": "negotiating",
-            "negotiated": False,
-            "protocol": SESSION_PROTOCOL_ID,
-            "supported_protocols": [],
-            "features": [],
-            "profiles": [],
-            "peer_build_identity": None,
-            "last_handshake_id": message_id,
-            "error": None,
-        }
-      self.send_frame(FrameType.SESSION_HELLO, payload)
-    return {"success": True, "state": "negotiating", "message_id": message_id}
+        operation = self.session_negotiation_operation
+        if (
+            not operation
+            or operation.get("operation_id") != operation_id
+            or operation.get("generation") != generation
+            or operation.get("phase") not in ("retry_wait", "negotiating")
+        ):
+          return {"success": False, "state": "stale", "error": "negotiation operation is no longer active"}
+        if operation.get("phase") == "negotiating":
+          current_id = operation.get("current_message_id")
+          return {
+              "success": True,
+              "state": "negotiating",
+              "operation_id": operation_id,
+              "message_id": current_id,
+              "attached": True,
+          }
+        if len(self.session_pending_handshakes) >= self.session_pending_limit:
+          return {"success": False, "state": "busy", "error": "too many pending handshakes"}
 
-  def _wait_session_negotiation(self, message_id: str, timeout: float) -> Dict[str, Any]:
+        started_at = time.time()
+        operation["phase"] = "negotiating"
+        operation["current_message_id"] = message_id
+        operation["attempt_started_monotonic"] = now
+        self.session_pending_handshakes[message_id] = {
+            "event": threading.Event(),
+            "response": None,
+            "generation": generation,
+            "operation_id": operation_id,
+            "owner": operation.get("owner", "manual"),
+            "waiter_expected": waiter_expected,
+            "waiter_attached": False,
+            "started_monotonic": now,
+            "deadline_monotonic": now + timeout_value,
+            "completed_at": None,
+        }
+        previous_success = self.session_peer_status.get("last_successful_handshake_at")
+        self.session_peer_status = self._new_session_peer_status(
+            "negotiating",
+            generation=generation,
+            last_handshake_id=message_id,
+            last_handshake_started_at=started_at,
+            last_successful_handshake_at=previous_success,
+        )
+      try:
+        self.send_frame(FrameType.SESSION_HELLO, payload)
+      except Exception:
+        with self.session_protocol_lock:
+          pending = self.session_pending_handshakes.get(message_id)
+          if pending and pending.get("response") is None:
+            pending["response"] = {
+                "state": "unconfirmed",
+                "error": "failed to submit SESSION_HELLO",
+            }
+            pending["completed_at"] = time.monotonic()
+            pending["event"].set()
+          self._settle_session_negotiation_failure_locked(
+              operation_id,
+              generation,
+              "unconfirmed",
+              "failed to submit SESSION_HELLO",
+              message_id,
+          )
+        raise
+    return {
+        "success": True,
+        "state": "negotiating",
+        "operation_id": operation_id,
+        "message_id": message_id,
+        "attached": False,
+    }
+
+  def begin_session_negotiation(
+      self,
+      expected_generation: Optional[int] = None,
+      timeout: Optional[float] = None,
+      waiter_expected: bool = True,
+  ) -> Dict[str, Any]:
+    if not self.is_serial_connected():
+      return {"success": False, "state": "disconnected", "error": "serial link is not connected"}
     with self.session_protocol_lock:
+      self._expire_session_handshakes_locked()
+      generation = self.session_link_generation
+      if expected_generation is not None and expected_generation != generation:
+        return {"success": False, "state": "stale", "error": "serial link generation changed"}
+      operation = self.session_negotiation_operation
+      if operation and operation.get("generation") == generation and operation.get("phase") in (
+          "negotiating", "retry_wait"
+      ):
+        return {
+            "success": True,
+            "state": "negotiating",
+            "operation_id": operation["operation_id"],
+            "message_id": operation.get("current_message_id"),
+            "attached": True,
+        }
+      operation_id = str(uuid.uuid4())
+      self.session_negotiation_operation = {
+          "operation_id": operation_id,
+          "generation": generation,
+          "owner": "manual",
+          "phase": "retry_wait",
+          "current_message_id": None,
+          "started_at": time.time(),
+          "peer_hello_seen": False,
+      }
+      previous_success = self.session_peer_status.get("last_successful_handshake_at")
+      self.session_peer_status = self._new_session_peer_status(
+          "negotiating",
+          generation=generation,
+          last_successful_handshake_at=previous_success,
+          last_handshake_started_at=time.time(),
+      )
+    result = self._begin_session_negotiation_attempt(
+        generation, operation_id, timeout=timeout,
+        waiter_expected=waiter_expected,
+    )
+    if not result.get("success"):
+      with self.session_protocol_lock:
+        self._settle_session_negotiation_failure_locked(
+            operation_id,
+            generation,
+            result.get("state", "failed"),
+            result.get("error") or result.get("state", "negotiation failed"),
+            result.get("message_id"),
+        )
+    return result
+
+  def _wait_session_negotiation(
+      self, message_id: Optional[str], timeout: float
+  ) -> Dict[str, Any]:
+    if not message_id:
+      return self.get_session_peer_status()
+    with self.session_protocol_lock:
+      self._expire_session_handshakes_locked()
       pending = self.session_pending_handshakes.get(message_id)
+      if pending is not None:
+        pending["waiter_attached"] = True
     if pending is None:
       return {"success": False, "state": "unknown", "error": "handshake is no longer pending"}
 
     if not pending["event"].wait(timeout=max(0.0, timeout)):
       with self.session_protocol_lock:
-        self.session_pending_handshakes.pop(message_id, None)
-        if self.session_peer_status.get("last_handshake_id") == message_id and self.session_peer_status.get("state") == "negotiating":
-          self.session_peer_status["state"] = "unconfirmed"
-          self.session_peer_status["error"] = "peer did not answer the capability handshake"
-      return self.get_session_peer_status()
-
+        self._expire_session_handshakes_locked(force_message_id=message_id)
     with self.session_protocol_lock:
-      self.session_pending_handshakes.pop(message_id, None)
+      pending = self.session_pending_handshakes.get(message_id, pending)
       response = pending.get("response")
+      self.session_pending_handshakes.pop(message_id, None)
     if response:
       if response.get("state") == "disconnected":
         return {"success": False, **response}
       return {
           "success": response.get("state") == "negotiated",
           "state": response.get("state"),
+          "negotiated": response.get("state") == "negotiated",
           "message_id": message_id,
           "peer_capabilities": response.get("payload", {}),
+          "error": response.get("error"),
       }
     return self.get_session_peer_status()
 
   def _start_auto_session_negotiation(self):
     with self.session_protocol_lock:
       generation = self.session_link_generation
+      self._expire_session_handshakes_locked()
+      operation = self.session_negotiation_operation
+      if operation and operation.get("generation") == generation and operation.get("phase") in (
+          "negotiating", "retry_wait"
+      ):
+        return False
+      operation_id = str(uuid.uuid4())
+      self.session_negotiation_operation = {
+          "operation_id": operation_id,
+          "generation": generation,
+          "owner": "auto",
+          "phase": "retry_wait",
+          "current_message_id": None,
+          "started_at": time.time(),
+          "peer_hello_seen": False,
+      }
+      previous_success = self.session_peer_status.get("last_successful_handshake_at")
+      self.session_peer_status = self._new_session_peer_status(
+          "negotiating",
+          generation=generation,
+          last_successful_handshake_at=previous_success,
+          last_handshake_started_at=time.time(),
+      )
+      self.session_auto_negotiation_generation = generation
     threading.Thread(
         target=self._auto_negotiate_session_peer,
-        args=(generation,),
+        args=(generation, operation_id),
         name="AirBridgeSessionNegotiation",
         daemon=True,
     ).start()
+    return True
 
-  def _auto_negotiate_session_peer(self, generation: int):
-    for attempt in range(1, 4):
+  def _auto_negotiate_session_peer(
+      self, generation: int, operation_id: Optional[str] = None
+  ):
+    if operation_id is None:
       with self.session_protocol_lock:
-        if generation != self.session_link_generation:
+        operation = self.session_negotiation_operation
+        if not operation or operation.get("generation") != generation:
           return
-      submitted = self.begin_session_negotiation(expected_generation=generation)
-      if not submitted.get("success"):
-        return
-      status = self._wait_session_negotiation(submitted["message_id"], timeout=1.0)
+        operation_id = operation.get("operation_id")
+    try:
+      for attempt in range(1, 4):
+        with self.session_protocol_lock:
+          if generation != self.session_link_generation:
+            return
+          operation = self.session_negotiation_operation
+          if (
+              not operation
+              or operation.get("operation_id") != operation_id
+              or operation.get("phase") not in ("retry_wait", "negotiating")
+          ):
+            return
+          operation["phase"] = "retry_wait"
+          operation["current_message_id"] = None
+        submitted = self._begin_session_negotiation_attempt(
+            generation, operation_id, timeout=self.session_handshake_timeout
+        )
+        if not submitted.get("success"):
+          with self.session_protocol_lock:
+            self._settle_session_negotiation_failure_locked(
+                operation_id,
+                generation,
+                submitted.get("state", "failed"),
+                submitted.get("error") or submitted.get("state", "negotiation failed"),
+                submitted.get("message_id"),
+            )
+          return
+        status = self._wait_session_negotiation(
+            submitted.get("message_id"), timeout=self.session_handshake_timeout
+        )
+        with self.session_protocol_lock:
+          if generation != self.session_link_generation:
+            return
+          operation = self.session_negotiation_operation
+          if not operation or operation.get("operation_id") != operation_id:
+            return
+        if status.get("state") == "negotiated":
+          self.sig.sig_rx_log.emit(
+              "INFO",
+              "Runtime Session protocol handshake complete; features=" +
+              ",".join(status.get("peer_capabilities", {}).get("features", [])),
+          )
+          return
+        if status.get("state") in ("no_common_protocol", "handshake_not_supported"):
+          self.sig.sig_rx_log.emit(
+              "WARN", "对端未声明可用的 Runtime Session 握手能力。"
+          )
+          return
+        if status.get("state") == "disconnected":
+          return
+        if attempt < 3:
+          with self.session_protocol_lock:
+            operation = self.session_negotiation_operation
+            if operation and operation.get("operation_id") == operation_id:
+              operation["phase"] = "retry_wait"
+              operation["current_message_id"] = None
+          time.sleep(0.25)
+      self.sig.sig_rx_log.emit(
+          "WARN",
+          "Runtime Session 能力协商未得到确认；对端可能是旧版本，也可能是链路暂时无响应。",
+      )
+    finally:
       with self.session_protocol_lock:
-        if generation != self.session_link_generation:
-          return
-      if status.get("state") == "negotiated":
-        self.sig.sig_rx_log.emit(
-            "INFO",
-            "Runtime Session protocol handshake complete; features=" +
-            ",".join(status.get("peer_capabilities", {}).get("features", [])),
-        )
-        return
-      if status.get("state") in ("no_common_protocol", "handshake_not_supported"):
-        self.sig.sig_rx_log.emit(
-            "WARN", "对端未声明可用的 Runtime Session 握手能力。"
-        )
-        return
-      if status.get("state") == "disconnected":
-        return
-      if attempt < 3:
-        time.sleep(0.25)
-    self.sig.sig_rx_log.emit(
-        "WARN",
-        "Runtime Session 能力协商未得到确认；对端可能是旧版本，也可能是链路暂时无响应。",
-    )
+        operation = self.session_negotiation_operation
+        if operation and operation.get("operation_id") == operation_id:
+          operation["phase"] = "completed"
+          operation["completed_at"] = time.monotonic()
+        current_operation = self.session_negotiation_operation
+        if (
+            self.session_auto_negotiation_generation == generation
+            and current_operation
+            and current_operation.get("operation_id") == operation_id
+        ):
+          self.session_auto_negotiation_generation = None
 
   def _handle_session_hello(self, frame: ABFPFrame):
     try:
@@ -719,24 +1051,39 @@ class SerialWorker(threading.Thread):
       encoded = encode_session_message(FrameType.SESSION_CAPABILITIES, response)
       self.send_frame(FrameType.SESSION_CAPABILITIES, encoded)
 
-      # An inbound HELLO can mean the peer has just started or restarted.
-      # Replying only advertises our identity to that peer; start a correlated
-      # HELLO of our own so we can refresh the peer's build identity as well.
+      start_recovery = False
       with self.session_protocol_lock:
-        peer_can_be_refreshed = (
-            not self.session_pending_handshakes
-            and self.session_peer_status.get("state") in (
-                "unconfirmed", "negotiated"
+        operation = self.session_negotiation_operation
+        current_pending_exists = any(
+            item.get("generation") == self.session_link_generation
+            and (
+                item.get("response") is None
+                or (
+                    item.get("waiter_expected", True)
+                    and item.get("response", {}).get("state")
+                    not in ("unconfirmed", "disconnected")
+                )
             )
+            for item in self.session_pending_handshakes.values()
         )
-        if peer_can_be_refreshed:
-          # Prevent multiple inbound HELLOs from starting duplicate recovery
-          # threads in the short interval before this worker sends its HELLO.
-          self.session_peer_status["state"] = "negotiating"
-          self.session_peer_status["negotiated"] = False
-          self.session_peer_status["peer_build_identity"] = None
-          self.session_peer_status["error"] = None
-      if peer_can_be_refreshed:
+        if current_pending_exists or (
+            operation
+            and operation.get("generation") == self.session_link_generation
+            and operation.get("phase") in ("negotiating", "retry_wait")
+        ):
+          if operation and operation.get("generation") == self.session_link_generation:
+            operation["peer_hello_seen"] = True
+        elif self.session_peer_status.get("state") in (
+            "unconfirmed", "negotiated", "no_common_protocol", "handshake_not_supported"
+        ):
+          previous_success = self.session_peer_status.get("last_successful_handshake_at")
+          self.session_peer_status = self._new_session_peer_status(
+              "negotiating",
+              generation=self.session_link_generation,
+              last_successful_handshake_at=previous_success,
+          )
+          start_recovery = True
+      if start_recovery:
         self.sig.sig_rx_log.emit(
             "INFO",
             "收到对端 Runtime Session HELLO；重新发起能力协商以刷新对端构建身份。",
@@ -756,10 +1103,16 @@ class SerialWorker(threading.Thread):
 
     correlation_id = capabilities.get("correlation_id")
     with self.session_protocol_lock:
+      self._expire_session_handshakes_locked()
       pending = self.session_pending_handshakes.get(correlation_id)
-      if pending is None:
+      if (
+          pending is None
+          or pending.get("generation") != self.session_link_generation
+          or pending.get("response") is not None
+          or time.monotonic() >= pending.get("deadline_monotonic", 0.0)
+      ):
         self.sig.sig_rx_log.emit(
-            "WARN", "收到未关联到当前 HELLO 的 Runtime Session CAPABILITIES，已忽略。"
+            "WARN", "收到未关联或已过期的 Runtime Session CAPABILITIES，已忽略。"
         )
         return
       payload = capabilities["payload"]
@@ -774,21 +1127,38 @@ class SerialWorker(threading.Thread):
         state = "no_common_protocol"
       else:
         state = "handshake_not_supported"
+
+      now = time.monotonic()
+      operation = self.session_negotiation_operation
+      if (
+          operation
+          and operation.get("operation_id") == pending.get("operation_id")
+          and operation.get("generation") == pending.get("generation")
+      ):
+        operation["phase"] = "completed"
+        operation["completed_at"] = now
+      previous_success = self.session_peer_status.get("last_successful_handshake_at")
+      started_at = self.session_peer_status.get("last_handshake_started_at")
+      duration = max(0.0, (now - pending.get("started_monotonic", now)) * 1000.0)
       if self.session_peer_status.get("last_handshake_id") == correlation_id:
-        self.session_peer_status = {
-            "state": state,
-            "negotiated": common,
-            "protocol": SESSION_PROTOCOL_ID,
-            "supported_protocols": list(supported),
-            "features": features,
-            "profiles": list(payload.get("profiles", [])),
-            "max_frame_payload": payload.get("max_frame_payload"),
-            "peer_version": payload.get("server_version"),
-            "peer_build_identity": payload.get("build_identity"),
-            "last_handshake_id": correlation_id,
-            "error": None if common else state,
-        }
+        self.session_peer_status = self._new_session_peer_status(
+            state,
+            generation=pending.get("generation"),
+            error=None if common else state,
+            last_handshake_id=correlation_id,
+            supported_protocols=list(supported),
+            features=features,
+            profiles=list(payload.get("profiles", [])),
+            max_frame_payload=payload.get("max_frame_payload"),
+            peer_version=payload.get("server_version"),
+            peer_build_identity=payload.get("build_identity"),
+            last_handshake_started_at=started_at,
+            last_successful_handshake_at=time.time() if common else previous_success,
+            handshake_duration_ms=duration,
+            peer_capabilities_fresh=common,
+        )
       pending["response"] = {"state": state, "payload": payload}
+      pending["completed_at"] = now
       pending["event"].set()
 
   def send_frame(self, frame_type: int, payload: bytes = b""):
@@ -1120,6 +1490,9 @@ class SerialWorker(threading.Thread):
         time.sleep(0.003)
 
   def _handle_incoming_frame(self, frame: ABFPFrame):
+    with self.session_protocol_lock:
+      self.session_last_peer_message_at = time.time()
+      self.session_last_peer_message_monotonic = time.monotonic()
     if frame.frame_type == FrameType.SESSION_HELLO:
       self._handle_session_hello(frame)
 
@@ -2239,7 +2612,7 @@ class AntigravityIPCServer:
         self._set_payload_audit(raw_body)
 
         if self.path == "/api/v1/runtime/negotiate":
-          result = worker_ref.begin_session_negotiation()
+          result = worker_ref.begin_session_negotiation(waiter_expected=False)
           self._reply_json(202 if result.get("success") else 503, result)
 
         elif self.path in ["/api/v1/eda/execute", "/api/eda/exec"]:

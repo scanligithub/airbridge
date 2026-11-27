@@ -117,9 +117,13 @@ jobs:
           python -m unittest discover -s test -p "test_request_broker.py" -v
 
   ab-duplex-simulation:
-    name: A/B duplex handshake simulation
+    name: A/B duplex handshake simulation (Python ${{ matrix.python-version }})
     needs: protocol-unit
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
     timeout-minutes: 15
     env:
       QT_QPA_PLATFORM: offscreen
@@ -130,7 +134,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install production-module import dependencies
         shell: pwsh
