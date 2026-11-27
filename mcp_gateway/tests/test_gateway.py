@@ -82,6 +82,18 @@ class _Handler(BaseHTTPRequestHandler):
                 "state": "completed",
                 "result": {"success": True, "capture_pid": 3156},
             })
+        elif path == "/api/v1/shell/exec":
+            self._send(200, {
+                "request_id": payload["request_id"],
+                "kind": "shell.exec",
+                "state": "completed",
+                "result": {
+                    "success": True,
+                    "exit_code": 0,
+                    "stdout": "Host B current directory",
+                    "stderr": "",
+                },
+            })
         else:
             self._send(404, {"error": "not found"})
 
@@ -187,6 +199,39 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(result["state"], "not_submitted")
         self.assertEqual(result["error"]["code"], "REQUEST_TOO_LARGE")
         self.assertNotIn("request_id", result)
+        self.assertEqual(_State.requests, [])
+
+    def test_shell_execute_preserves_caller_uuid_and_uses_generic_shell_endpoint(self):
+        request_id = str(uuid.uuid4())
+        result = self.gateway.execute_shell(
+            request_id=request_id,
+            command="Get-Location | Select-Object -ExpandProperty Path",
+            shell="powershell",
+            cwd=r"E:\\_airbridge_temp",
+            timeout=30,
+            wait_timeout_ms=45_000,
+        )
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["request_id"], request_id)
+        submitted = _State.requests[-1][2]
+        self.assertEqual(_State.requests[-1][1], "/api/v1/shell/exec")
+        self.assertEqual(submitted["request_id"], request_id)
+        self.assertEqual(submitted["command"], "Get-Location | Select-Object -ExpandProperty Path")
+        self.assertEqual(submitted["shell"], "powershell")
+        self.assertEqual(submitted["cwd"], r"E:\\_airbridge_temp")
+        self.assertEqual(submitted["timeout"], 30)
+        self.assertFalse(submitted["async"])
+        self.assertEqual(submitted["wait_timeout_ms"], 45_000)
+        self.assertEqual(_State.authorization_headers, ["Bearer test-agent-token"])
+
+    def test_shell_execute_rejects_invalid_input_without_http_submission(self):
+        request_id = str(uuid.uuid4())
+        result = self.gateway.execute_shell(
+            request_id=request_id,
+            command=" ",
+        )
+        self.assertEqual(result["state"], "not_submitted")
+        self.assertEqual(result["error"]["code"], "INVALID_ARGUMENT")
         self.assertEqual(_State.requests, [])
 
     def test_request_status_requires_uuid_and_uses_existing_endpoint(self):
