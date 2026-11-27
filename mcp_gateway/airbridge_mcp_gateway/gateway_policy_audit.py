@@ -41,55 +41,58 @@ class GatewayPolicyAuditStore:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         now = time.time()
-        with closing(sqlite3.connect(
-            self.path,
-            timeout=self.timeout_seconds,
-        )) as connection:
-          with connection:
-            connection.execute(f"PRAGMA busy_timeout = {int(self.timeout_seconds * 1000)}")
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS gateway_policy_audit (
-                    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp REAL NOT NULL,
-                    agent_id TEXT NOT NULL,
-                    tool_name TEXT NOT NULL,
-                    decision TEXT NOT NULL CHECK (decision = 'DENY'),
-                    reason_code TEXT NOT NULL
+        with closing(
+            sqlite3.connect(self.path, timeout=self.timeout_seconds)
+        ) as connection:
+            with connection:
+                connection.execute(
+                    f"PRAGMA busy_timeout = {int(self.timeout_seconds * 1000)}"
                 )
-                """
-            )
-            connection.execute(
-                """
-                INSERT INTO gateway_policy_audit
-                    (timestamp, agent_id, tool_name, decision, reason_code)
-                VALUES (?, ?, ?, 'DENY', ?)
-                """,
-                (now, agent_id, tool_name, reason_code),
-            )
-            connection.execute(
-                "DELETE FROM gateway_policy_audit WHERE timestamp < ?",
-                (now - self.RETENTION_SECONDS,),
-            )
-            connection.execute(
-                """
-                DELETE FROM gateway_policy_audit
-                WHERE audit_id NOT IN (
-                    SELECT audit_id FROM gateway_policy_audit
-                    ORDER BY audit_id DESC LIMIT ?
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS gateway_policy_audit (
+                        audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp REAL NOT NULL,
+                        agent_id TEXT NOT NULL,
+                        tool_name TEXT NOT NULL,
+                        decision TEXT NOT NULL CHECK (decision = 'DENY'),
+                        reason_code TEXT NOT NULL
+                    )
+                    """
                 )
-                """,
-                (self.MAX_RECORDS,),
-            )
+                connection.execute(
+                    """
+                    INSERT INTO gateway_policy_audit
+                        (timestamp, agent_id, tool_name, decision, reason_code)
+                    VALUES (?, ?, ?, 'DENY', ?)
+                    """,
+                    (now, agent_id, tool_name, reason_code),
+                )
+                connection.execute(
+                    "DELETE FROM gateway_policy_audit WHERE timestamp < ?",
+                    (now - self.RETENTION_SECONDS,),
+                )
+                connection.execute(
+                    """
+                    DELETE FROM gateway_policy_audit
+                    WHERE audit_id NOT IN (
+                        SELECT audit_id FROM gateway_policy_audit
+                        ORDER BY audit_id DESC LIMIT ?
+                    )
+                    """,
+                    (self.MAX_RECORDS,),
+                )
 
     def list_events(self, *, limit: int = 100) -> list[dict]:
         """Read recent events for tests and local diagnostics."""
         if self.path is None:
             raise OSError("Gateway audit path is unavailable")
         limit = max(1, min(int(limit), 1000))
-        with closing(sqlite3.connect(self.path, timeout=self.timeout_seconds)) as connection:
-          connection.row_factory = sqlite3.Row
-          rows = connection.execute(
+        with closing(
+            sqlite3.connect(self.path, timeout=self.timeout_seconds)
+        ) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
                 """
                 SELECT timestamp, agent_id, tool_name, decision, reason_code
                 FROM gateway_policy_audit
