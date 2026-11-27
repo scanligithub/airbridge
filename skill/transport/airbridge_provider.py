@@ -217,7 +217,7 @@ class AirBridgeProvider:
         cwd = opts.get("cwd", "")
         if not isinstance(cwd, str):
             raise TypeError("cwd must be a string")
-        wait_timeout_ms = opts.get("wait_timeout_ms", 60_000)
+        wait_timeout_ms = opts.get("wait_timeout_ms", 0)
         if (
             isinstance(wait_timeout_ms, bool)
             or not isinstance(wait_timeout_ms, int)
