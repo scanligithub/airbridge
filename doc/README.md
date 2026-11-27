@@ -10,6 +10,19 @@ M2.5 首版已明确改为本机 **STDIO-only** MCP 接入：Antigravity / OpenC
 
 权威规范：[ADR-013：M2.5 STDIO 本机 MCP 接入与客户端托管生命周期](ADR-013_M2.5_Stdio本机MCP接入与客户端托管生命周期.md)。此前 M2.5 v0.3 的 HTTP / OAuth / CA 设计文档为历史评审资料，冲突内容以 ADR-013 为准。Host A ↔ Host B 仍使用原有 ABFP / 串口通信。
 
+## 通用架构建设主基线（2026-11-27）
+
+当前阶段以“先建设领域无关的通用底座，再扩展专业 Skill”为主线。执行顺序为 Phase 1 Core 稳定性与安全闭环、Phase 1.5 纯结构拆包、Phase 2 通用 Transport、Phase 3 轻量 Skill 权限与任务关联、Phase 4 安全治理和旧 EDA 路径渐进退役、Phase 5 transport-demo 领域无关集成验收，最后进入 Phase 6 专业 Skill 生态。
+
+| 文档 | 内容 | 状态 |
+|---|---|---|
+| [AirBridge 通用架构建设方案与实施计划 v1.0](AirBridge_通用架构建设方案与实施计划_v1.0.md) | 六阶段总体路线图、Core / Transport / Agent Host 边界、七态任务模型、可信权限裁剪、Artifact-RFS 控制面与数据面分离、分层验收 | 2026-11-27 项目阶段主基线 |
+| [AirBridge 当前架构现状报告 2026-11-27](AirBridge_当前架构现状报告_20261127.md) | 以 main 提交 ed7140f 为基线的 Core、Runtime Session、Transport、RFS、任务、安全和 EDA 兼容路径现状 | 2026-11-27 只读源码盘点 |
+| [AirBridge 通用架构差距与风险清单 2026-11-27](AirBridge_通用架构差距与风险清单_20261127.md) | 通用架构风险编号、优先级、技术边界和风险关闭标准 | 2026-11-27 规划基线 |
+| [AirBridge Phase 1 / Phase 1.5 实施任务拆分 v1.0](AirBridge_Phase1_Phase1_5_实施任务拆分_v1.0.md) | Core 稳定性与安全闭环、airbridge_app.py 纯结构拆分、测试和准出条件 | 2026-11-27 近期实施基线 |
+
+以上文档以 `ed7140fd940f5e1c3cf391cad052f94d5924e3c4` 为代码盘点基线；不代表最新 Host A/B 部署验收。串口波特率由实际配置决定，不固定为 115200。Phase 1–5 期间，现有 EDA Skill 和旧 EDA 兼容路径特性冻结，但必要安全、兼容性和 CI 维护仍允许；不提前删除旧路径。
+
 ## 当前设计基线
 
 | [ADR-006：专业软件生命周期由 Agent Skill 自主掌握](ADR-006_Skill自主掌握专业软件生命周期.md) | 修订旧 Runtime Adapter / EDA Engine 的专业软件生命周期所有权；明确双端同一 AirBridge.exe、Skill 使用通用 Shell / RFS / 文件传输 | 2026-11-18 已采纳；M3 迁移按阶段实施 |
