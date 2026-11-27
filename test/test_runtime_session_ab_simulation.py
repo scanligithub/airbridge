@@ -915,10 +915,12 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
         self.assertEqual(started, [])
         self.assertTrue(host.session_negotiation_operation["peer_hello_seen"])
 
-    def test_manual_operation_records_peer_hello_seen(self):
+    def test_manual_peer_hello_does_not_complete_attempt_and_deadline_settles_it(self):
         host = _new_worker()
         host.send_frame = lambda *_args, **_kwargs: None
-        request = host.begin_session_negotiation()
+        request = host.begin_session_negotiation(timeout=1.0)
+        pending = host.session_pending_handshakes[request["message_id"]]
+
         hello = make_session_hello()
         host._handle_incoming_frame(
             ABFPFrame(
@@ -927,12 +929,23 @@ class RuntimeSessionABSimulationTests(unittest.TestCase):
                 encode_session_message(FrameType.SESSION_HELLO, hello),
             )
         )
+
         self.assertTrue(host.session_negotiation_operation["peer_hello_seen"])
         self.assertEqual(
             host._wait_session_negotiation(None, timeout=0.0)["state"],
             "negotiating",
         )
-        self.assertTrue(host.session_pending_handshakes[request["message_id"]]["event"].is_set() is False)
+        self.assertFalse(pending["event"].is_set())
+        self.assertIsNone(pending["response"])
+
+        # A peer HELLO is not the response correlated to our HELLO. The
+        # original attempt must settle through its own deadline.
+        pending["deadline_monotonic"] = time.monotonic() - 0.001
+        status = host.get_session_peer_status()
+        self.assertEqual(status["state"], "unconfirmed", status)
+        self.assertEqual(pending["response"]["state"], "unconfirmed")
+        self.assertTrue(pending["event"].is_set())
+        self.assertEqual(host.session_negotiation_operation["phase"], "completed")
 
 
 
